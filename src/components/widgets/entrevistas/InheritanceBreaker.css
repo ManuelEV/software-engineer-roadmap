@@ -1,0 +1,171 @@
+.ihb-req {
+  margin: 0 0 var(--s-3);
+  font-family: var(--font-read);
+  color: var(--ink);
+  line-height: 1.5;
+  min-height: 3em;
+}
+.ihb-cols {
+  display: grid;
+  gap: var(--s-3);
+  grid-template-columns: minmax(0, 1fr);
+}
+@media (min-width: 720px) {
+  .ihb-cols {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    align-items: start;
+  }
+}
+.ihb-col {
+  display: grid;
+  gap: var(--s-2);
+  padding: var(--s-3);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--card);
+  min-width: 0;
+}
+.ihb-col__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s-2);
+}
+.ihb-col__head h4 {
+  margin: 0;
+  font-family: var(--font-sign);
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--ink);
+}
+.ihb-count {
+  font-size: var(--step--1);
+  color: var(--ink-2);
+  font-variant-numeric: tabular-nums;
+}
+.ihb-count b {
+  font-size: 1.35rem;
+  color: var(--ink);
+  transition: color 250ms var(--ease-out);
+}
+.ihb-count.is-bad b {
+  color: var(--bad);
+}
+.ihb-count.is-ok b {
+  color: var(--ok);
+}
+.ihb-base {
+  justify-self: start;
+  padding: 6px 12px;
+  border: 1.5px solid var(--rule-strong);
+  border-radius: 6px;
+  background: var(--paper);
+  font-family: var(--font-code);
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--ink);
+}
+.ihb-base.is-line {
+  border-color: var(--line);
+  background: var(--line-tint);
+}
+.ihb-stereo {
+  display: block;
+  font-size: 0.7rem;
+  font-weight: 500;
+  color: var(--ink-3);
+}
+.ihb-fields {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 6px 0 0;
+  border-top: 1px solid color-mix(in oklab, var(--line) 40%, var(--rule));
+  font-weight: 500;
+  font-size: 0.78rem;
+  color: var(--ink-2);
+}
+.ihb-fields li {
+  padding: 1px 4px;
+  border-radius: 4px;
+  transition: background-color 300ms var(--ease-out);
+}
+.ihb-fields li.is-new {
+  background: var(--hl-soft);
+  color: var(--ink);
+}
+.ihb-arrow {
+  font-family: var(--font-code);
+  font-size: 0.72rem;
+  color: var(--ink-3);
+  padding-left: 12px;
+}
+.ihb-chips {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.ihb-chip {
+  padding: 4px 8px;
+  border: 1.5px solid var(--rule-strong);
+  border-radius: 6px;
+  background: var(--card);
+  font-family: var(--font-code);
+  font-size: 0.76rem;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+  transition:
+    background-color 300ms var(--ease-out),
+    border-color 300ms var(--ease-out);
+}
+.ihb-chip.is-new {
+  border-color: var(--line);
+  background: var(--line-tint);
+}
+.ihb-chip.is-iface {
+  justify-self: start;
+  border-style: dashed;
+  font-weight: 700;
+}
+.ihb-groups {
+  display: grid;
+  gap: var(--s-2);
+  padding-left: 12px;
+  border-left: 2px solid var(--rule);
+}
+.ihb-group {
+  display: grid;
+  gap: 5px;
+  justify-items: start;
+}
+.ihb-warn,
+.ihb-ok {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 6px 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 0.86rem;
+  line-height: 1.45;
+}
+.ihb-warn {
+  border: 1.5px solid color-mix(in oklab, var(--bad) 60%, var(--rule));
+  background: color-mix(in oklab, var(--bad) 10%, var(--card));
+  color: var(--ink);
+}
+.ihb-warn svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+  color: var(--bad);
+}
+.ihb-warn span {
+  flex: 1 1 12rem;
+}
+.ihb-ok {
+  border: 1.5px solid var(--ok);
+  background: color-mix(in oklab, var(--ok) 12%, var(--card));
+  color: var(--ink);
+}

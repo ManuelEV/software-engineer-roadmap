@@ -1,0 +1,159 @@
+.gs-pick {
+  display: grid;
+  gap: 4px;
+}
+.gs-pick select {
+  min-height: 40px;
+  padding: 0 10px;
+  border: 1.5px solid var(--rule-strong);
+  border-radius: 8px;
+  background: var(--card);
+  color: var(--ink);
+  font-family: var(--font-sign);
+  font-size: 0.95rem;
+}
+.gs-pick select:focus-visible {
+  outline: 2px solid var(--line-ink);
+  outline-offset: 1px;
+}
+
+.gs-grid {
+  display: grid;
+  grid-template-columns: repeat(var(--gs-cols), minmax(0, 1fr));
+  gap: 3px;
+  max-width: calc(var(--gs-cols) * 54px);
+}
+.gs-cell {
+  display: grid;
+  place-items: center;
+  aspect-ratio: 1;
+  min-width: 0;
+  padding: 0;
+  border: 1.5px solid var(--rule);
+  border-radius: 4px;
+  background: var(--card);
+  color: var(--ink-2);
+  cursor: pointer;
+  transition:
+    background-color 200ms var(--ease-out),
+    border-color 200ms var(--ease-out),
+    color 200ms var(--ease-out);
+}
+.gs-cell:hover {
+  border-color: var(--ink-3);
+}
+.gs-cell:focus-visible {
+  outline: 2px solid var(--line-ink);
+  outline-offset: 1px;
+}
+.gs-cell__n {
+  font-family: var(--font-code);
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+.gs-cell.is-wall {
+  background-color: var(--rule-strong);
+  background-image: repeating-linear-gradient(
+    45deg,
+    color-mix(in oklab, var(--ink-3) 45%, transparent) 0 2px,
+    transparent 2px 7px
+  );
+  border-color: var(--ink-3);
+}
+.gs-cell.is-front {
+  background: var(--line-tint);
+  border-color: color-mix(in oklab, var(--line) 55%, var(--rule-strong));
+  border-style: dashed;
+}
+.gs-cell.is-added {
+  background: var(--line-tint-2);
+  border-color: var(--line);
+  border-style: solid;
+}
+.gs-cell.is-visited {
+  background: var(--paper-3);
+  border-color: var(--rule-strong);
+  color: var(--ink-3);
+}
+.gs-cell.is-path {
+  background: color-mix(in oklab, var(--ok) 40%, var(--card));
+  border-color: var(--ok);
+  border-width: 2px;
+  color: var(--ink);
+}
+.gs-cell.is-cur {
+  background: var(--line);
+  border-color: var(--line);
+  color: var(--line-on);
+}
+.gs-cell.is-start,
+.gs-cell.is-goal {
+  color: var(--line-ink);
+  border-color: var(--line);
+  border-width: 2.5px;
+}
+.gs-cell.is-start.is-cur,
+.gs-cell.is-goal.is-cur {
+  color: var(--line-on);
+}
+.gs-cell.is-goal.is-path,
+.gs-cell.is-start.is-path {
+  background: color-mix(in oklab, var(--ok) 40%, var(--card));
+  color: var(--ink);
+}
+
+.gs-front {
+  display: grid;
+  gap: 6px;
+}
+.gs-front__title {
+  font-family: var(--font-code);
+  font-size: 0.8rem;
+  color: var(--ink-3);
+}
+.gs-front__items {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  min-height: 30px;
+}
+.gs-front__empty {
+  font-family: var(--font-sign);
+  font-style: italic;
+  color: var(--ink-3);
+}
+.gs-chip {
+  padding: 3px 7px;
+  border: 1.5px solid var(--rule-strong);
+  border-radius: 6px;
+  background: var(--card);
+  font-family: var(--font-code);
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--ink-2);
+}
+.gs-chip.is-added {
+  background: var(--line-tint-2);
+  border-color: var(--line);
+  color: var(--ink);
+}
+.gs-chip.is-next {
+  border-width: 2.5px;
+  border-color: var(--line);
+  color: var(--line-ink);
+}
+.gs-stats {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-3) var(--s-5);
+}
+.gs-legend {
+  margin: 0;
+  font-family: var(--font-sign);
+  font-size: 0.85rem;
+  color: var(--ink-3);
+}

@@ -1,0 +1,112 @@
+.ss-actions {
+  display: flex;
+  gap: var(--s-2);
+  flex-wrap: wrap;
+}
+.ss-code {
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--code-bg);
+  overflow: hidden;
+}
+.ss-file {
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--rule);
+  font-family: var(--font-code);
+  font-size: 0.76rem;
+  color: var(--ink-3);
+}
+.ss-lines {
+  overflow-x: auto;
+  padding: 4px 0;
+}
+.ss-line {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-width: max-content;
+  min-height: 30px;
+  padding: 0 12px 0 0;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  color: var(--code-ink);
+  transition: background-color 160ms var(--ease-out);
+}
+@media (pointer: coarse) {
+  .ss-line {
+    min-height: 40px;
+  }
+}
+.ss-line--blank {
+  min-height: 14px;
+  cursor: default;
+}
+.ss-line code {
+  font-family: var(--font-code);
+  font-size: 0.8rem;
+  white-space: pre;
+  background: none;
+  padding: 0;
+  color: inherit;
+}
+.ss-ln {
+  flex: none;
+  width: 2.6rem;
+  text-align: right;
+  font-family: var(--font-code);
+  font-size: 0.72rem;
+  color: var(--code-comment);
+  user-select: none;
+}
+.ss-line--blank .ss-ln {
+  visibility: hidden;
+}
+button.ss-line:hover {
+  background: var(--paper-3);
+}
+button.ss-line:focus-visible {
+  outline: 2px solid var(--line-ink);
+  outline-offset: -2px;
+}
+.ss-line.is-found {
+  background: color-mix(in oklab, var(--warn) 14%, transparent);
+}
+.ss-line.is-found .ss-ln {
+  color: var(--warn);
+  font-weight: 700;
+}
+.ss-line.is-active {
+  background: var(--line-tint-2);
+}
+.ss-readout {
+  display: flex;
+  gap: var(--s-4);
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+.ss-card {
+  flex: 1 1 16rem;
+  min-height: 4.5rem;
+}
+.ss-card p {
+  margin: 0;
+}
+.ss-card p + p {
+  margin-top: 4px;
+}
+.ss-card__name {
+  font-weight: 700;
+  color: var(--ink);
+}
+.ss-card__fix {
+  color: var(--ink);
+}
+.ss-muted {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--ink-3);
+}

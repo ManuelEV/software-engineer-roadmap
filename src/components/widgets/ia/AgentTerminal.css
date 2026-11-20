@@ -1,0 +1,92 @@
+.at-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+}
+.at-term {
+  margin: 0;
+  padding: var(--s-3);
+  list-style: none;
+  max-height: 24rem;
+  overflow-y: auto;
+  border-radius: var(--radius);
+  border: 1px solid var(--rule);
+  background: var(--code-bg);
+  font-family: var(--font-code);
+  font-size: 0.78rem;
+  line-height: 1.55;
+  color: var(--code-ink);
+}
+.at-line {
+  display: grid;
+  grid-template-columns: 6.5rem minmax(0, 1fr);
+  gap: var(--s-2);
+  padding: 4px 0;
+  border-bottom: 1px dotted var(--rule);
+}
+@media (max-width: 520px) {
+  .at-line {
+    grid-template-columns: 1fr;
+    gap: 0;
+  }
+}
+.at-line:last-child {
+  border-bottom: 0;
+}
+.at-tag {
+  font-family: var(--font-sign);
+  font-weight: 700;
+  font-size: 0.78rem;
+  color: var(--ink-3);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.at-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.at-line--user .at-tag {
+  color: var(--l4);
+}
+.at-line--assistant .at-tag {
+  color: var(--line-ink);
+}
+.at-line--assistant .at-text {
+  font-family: var(--font-read);
+  font-size: 0.92rem;
+}
+.at-line--perm .at-tag,
+.at-line--perm .at-text {
+  color: var(--warn);
+}
+.at-line--end .at-text {
+  font-family: var(--font-sign);
+  font-weight: 700;
+  color: var(--ink);
+}
+.at-answer {
+  color: var(--ink);
+}
+.at-perm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-3);
+  margin-top: var(--s-3);
+  padding: var(--s-3);
+  border-radius: var(--radius);
+  border: 1.5px solid var(--warn);
+  background: color-mix(in oklab, var(--warn) 8%, var(--card));
+  font-family: var(--font-code);
+  font-size: 0.8rem;
+}
+.at-perm__btns {
+  display: flex;
+  gap: var(--s-2);
+}
+.at-code {
+  font-family: var(--font-code);
+  font-size: 0.8rem;
+  color: var(--ink);
+}

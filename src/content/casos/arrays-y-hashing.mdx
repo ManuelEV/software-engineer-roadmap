@@ -1,0 +1,707 @@
+import { TwoSumHash } from '../../components/widgets/entrevistas/TwoSumHash'
+import { AnagramGroups } from '../../components/widgets/entrevistas/AnagramGroups'
+import { PrefixSumMap } from '../../components/widgets/entrevistas/PrefixSumMap'
+
+Si tuvieras que aprender un solo patrón antes de una entrevista de live coding, sería este. Una cantidad enorme de problemas de arreglos y cadenas tiene una solución de fuerza bruta con dos ciclos anidados, O(n²), donde el ciclo de adentro **busca algo** en lo que ya recorriste. La mejora casi siempre es la misma: guardar lo recorrido en un diccionario o un conjunto para que esa búsqueda cueste O(1) en promedio. El ciclo de adentro desaparece y te queda O(n).
+
+El patrón tiene tres variantes que vas a ver una y otra vez: **contar** (cuántas veces aparece cada cosa), **recordar** (qué vi y dónde) y **agrupar** (qué elementos comparten una clave). Y tiene un pariente cercano, las **sumas de prefijos**, que convierte preguntas sobre subarreglos en preguntas sobre pares de prefijos, que es justo el terreno donde el diccionario brilla. Este tema recorre los ocho problemas que mejor representan la familia, con el método completo para cada uno: qué preguntar, la fuerza bruta, la idea que la mejora y el código.
+
+<Sketch
+  width={640}
+  height={300}
+  caption="La idea de todo el tema en un dibujo: el ciclo de adentro que solo busca se reemplaza por una consulta a un diccionario."
+  items={[
+    { type: 'text', x: 24, y: 30, text: 'antes: dos ciclos', size: 22, tone: 'pencil' },
+    { type: 'cells', x: 40, y: 92, values: [2, 7, 11, 15], size: 44 },
+    { type: 'arrow', from: [62, 90], to: [106, 90], bend: -26, tone: 'bad' },
+    { type: 'arrow', from: [62, 90], to: [150, 90], bend: -46, tone: 'bad', with: true },
+    { type: 'arrow', from: [62, 90], to: [194, 90], bend: -66, tone: 'bad', with: true },
+    { type: 'highlight', x: 36, y: 172, w: 66, h: 26, tone: 'bad' },
+    { type: 'text', x: 40, y: 192, text: 'O(n²)', size: 22, font: 'code', tone: 'bad', with: true },
+    { type: 'text', x: 40, y: 226, text: ['cada número contra', 'todos los demás'], size: 19, tone: 'pencil' },
+    { type: 'line', points: [[300, 24], [300, 280]], dashed: true, tone: 'muted' },
+    { type: 'text', x: 330, y: 30, text: 'después: un diccionario', size: 22, tone: 'line' },
+    { type: 'cells', x: 340, y: 92, values: [2, 7, 11, 15], size: 44, states: [null, 'line', null, null] },
+    { type: 'box', x: 400, y: 190, w: 170, h: 56, label: '{ 2: 0 }', font: 'code', size: 20 },
+    { type: 'arrow', from: [406, 140], to: [440, 186], label: '¿9 − 7 = 2 ya está?', labelAt: [520, 166], tone: 'line' },
+    { type: 'check', x: 598, y: 216, size: 26 },
+    { type: 'highlight', x: 336, y: 262, w: 58, h: 26, tone: 'ok' },
+    { type: 'text', x: 340, y: 282, text: 'O(n)', size: 22, font: 'code', tone: 'ok', with: true },
+    { type: 'text', x: 404, y: 282, text: 'una sola pasada', size: 19, tone: 'pencil' },
+  ]}
+/>
+
+## El patrón: cambiar búsquedas por consultas O(1)
+
+Una tabla hash (`dict` en Python, `Map` u objeto en TypeScript, `HashMap` en Java) guarda pares clave-valor y responde "¿está esta clave?" en tiempo constante **en promedio**. Un conjunto (`set` en Python, `Set` en TypeScript, `HashSet` en Java) es lo mismo sin valores. Cómo funciona por dentro (función hash, colisiones, factor de carga, redimensionamiento) lo ves en [estructuras de datos](/casos/estructuras-de-datos); aquí importa cuándo usarla.
+
+**Señales para reconocer el patrón:**
+
+- Si ves "¿existe un par que…?", "¿ya apareció…?" o "¿hay duplicados?", piensa en un **set** o en un **mapa de lo ya visto**.
+- Si ves "cuántas veces", "el más frecuente" o "mismas letras", piensa en un **mapa de conteo**.
+- Si ves "agrupa los que son equivalentes", piensa en una **clave canónica**: una forma normalizada que todos los equivalentes comparten.
+- Si ves "subarreglo contiguo cuya suma…" y el arreglo puede tener negativos, piensa en **suma de prefijos + mapa**.
+- Si tu fuerza bruta tiene un ciclo interno que solo **busca** (no construye nada), probablemente ese ciclo se reemplaza por un diccionario.
+
+El precio siempre es el mismo: memoria O(n) a cambio de tiempo. Dilo en voz alta cuando lo propongas; es exactamente el trade-off que el entrevistador quiere oírte nombrar.
+
+<Callout type="interview">
+
+En estos problemas el entrevistador evalúa si **llegas solo a la idea del diccionario** a partir de la fuerza bruta, si sabes **qué guardar como clave y qué como valor**, y si puedes justificar la complejidad (incluido el "en promedio"). Un candidato que salta directo al código óptimo sin mencionar la fuerza bruta pierde la oportunidad de mostrar el razonamiento.
+
+</Callout>
+
+<Callout type="tip" title="En Java">
+
+Los fragmentos de Java de este tema suponen `import java.util.*;` y tienen las firmas de LeetCode. Los mapas guardan objetos, no primitivos: un `Map<Integer, Integer>` guarda `Integer`, y Java convierte entre `int` e `Integer` solo (*autoboxing*). Esa conversión es la fuente de las dos trampas de más abajo: un `get` que devuelve `null` y un `==` entre dos `Integer`.
+
+</Callout>
+
+## Contar: Contains Duplicate y Valid Anagram
+
+Son los calentamientos del patrón. Aparecen como primera pregunta de un *phone screen* o como parte de un problema más grande.
+
+### Contains Duplicate
+
+**Enunciado.** Dado un arreglo de enteros, devuelve `true` si algún valor aparece al menos dos veces. `[1, 2, 3, 1]` → `true`; `[1, 2, 3, 4]` → `false`.
+
+**Fuerza bruta.** Comparar cada par: O(n²) tiempo, O(1) memoria. **Ordenar** primero y mirar vecinos: O(n log n) tiempo, O(1) extra si ordenas en el lugar (pero modificas la entrada; pregunta si se puede).
+
+**La idea.** Un set de lo ya visto. En cuanto un valor ya está, terminaste.
+
+<CodeTabs>
+
+```java title="Java"
+public boolean containsDuplicate(int[] nums) {
+    Set<Integer> seen = new HashSet<>();
+    for (int x : nums) {
+        if (!seen.add(x)) return true; // add devuelve false si ya estaba
+    }
+    return false;
+}
+```
+
+```python title="Python"
+def contains_duplicate(nums: list[int]) -> bool:
+    seen = set()
+    for x in nums:
+        if x in seen:
+            return True
+        seen.add(x)
+    return False
+```
+
+```ts title="TypeScript"
+function containsDuplicate(nums: number[]): boolean {
+  const seen = new Set<number>()
+  for (const x of nums) {
+    if (seen.has(x)) return true
+    seen.add(x)
+  }
+  return false
+}
+```
+
+</CodeTabs>
+
+O(n) tiempo, O(n) memoria. En Java, `seen.add(x)` devuelve `false` si el valor ya estaba, así que consultar e insertar es una sola operación. La versión de una línea, `len(set(nums)) != len(nums)`, es correcta, pero no corta temprano: siempre construye el set completo. Si la mencionas, menciona eso.
+
+### Valid Anagram
+
+**Enunciado.** ¿Es `t` un anagrama de `s`? `"anagram"`, `"nagaram"` → `true`; `"rat"`, `"car"` → `false`.
+
+**Qué preguntar.** ¿Solo minúsculas a-z o cualquier carácter Unicode? ¿Importan mayúsculas y espacios? La respuesta decide si puedes usar un arreglo de 26 contadores o necesitas un diccionario.
+
+**Fuerza bruta.** Ordenar ambas cadenas y compararlas: O(n log n). Es una respuesta perfectamente aceptable para empezar.
+
+**La idea.** Dos cadenas son anagramas si tienen el mismo **conteo** de cada carácter. Suma con `s`, resta con `t`, y verifica que todo quede en cero.
+
+<CodeTabs>
+
+```java title="Java"
+public boolean isAnagram(String s, String t) {
+    if (s.length() != t.length()) return false;
+    int[] count = new int[26]; // solo a-z; con Unicode, un HashMap<Character, Integer>
+    for (char c : s.toCharArray()) count[c - 'a']++;
+    for (char c : t.toCharArray()) {
+        if (--count[c - 'a'] < 0) return false;
+    }
+    return true;
+}
+```
+
+```python title="Python"
+from collections import Counter
+
+def is_anagram(s: str, t: str) -> bool:
+    if len(s) != len(t):
+        return False
+    count = Counter(s)
+    for c in t:
+        count[c] -= 1
+        if count[c] < 0:
+            return False
+    return True
+```
+
+```ts title="TypeScript"
+function isAnagram(s: string, t: string): boolean {
+  if (s.length !== t.length) return false
+  const count = new Map<string, number>()
+  for (const c of s) count.set(c, (count.get(c) ?? 0) + 1)
+  for (const c of t) {
+    const left = (count.get(c) ?? 0) - 1
+    if (left < 0) return false
+    count.set(c, left)
+  }
+  return true
+}
+```
+
+</CodeTabs>
+
+O(n) tiempo. Memoria O(1) si el alfabeto es fijo (26 letras), O(k) con k caracteres distintos en general. El chequeo de largo al inicio no es solo una optimización: con largos iguales, si nunca bajaste de cero, todo quedó exactamente en cero.
+
+**Repregunta típica:** "¿Y si las entradas son Unicode?". En TypeScript, `for...of` recorre por *code point*, pero un emoji compuesto o una letra con tilde combinada pueden ser varios code points. Mencionar la normalización (`s.normalize('NFC')`) suma puntos.
+
+<Callout type="tip" title="En Java">
+
+Un `char` es un número de 16 bits: `c - 'a'` da 0 para `'a'` y 25 para `'z'`, y por eso sirve como índice de un `int[26]`. Si la entrada puede traer mayúsculas o caracteres fuera de a-z, ese índice sale del arreglo con `ArrayIndexOutOfBoundsException`: pregunta el alfabeto antes de elegir `int[26]` o un `HashMap<Character, Integer>`. Para Unicode completo, recorre `s.codePoints()` en vez de `toCharArray()`, porque un emoji ocupa dos `char`.
+
+</Callout>
+
+## Two Sum: guardar lo que ya viste
+
+El problema más famoso de LeetCode, y el ejemplo perfecto del patrón.
+
+**Enunciado.** Dado `nums` y un `target`, devuelve los índices de los dos números que suman `target`. Hay exactamente una solución y no puedes usar el mismo elemento dos veces. `nums = [2, 7, 11, 15]`, `target = 9` → `[0, 1]`.
+
+**Qué preguntar.** ¿Siempre hay solución? ¿Puede haber varias, y cuál devuelvo? ¿El arreglo está ordenado? (Si lo está, cambia todo: lo ves en [two pointers](/casos/two-pointers-y-sliding-window).) ¿Índices o valores? ¿Puede haber negativos y repetidos?
+
+**Fuerza bruta.** Para cada `i`, recorrer cada `j > i` y comprobar `nums[i] + nums[j] == target`. O(n²) tiempo, O(1) memoria.
+
+**La idea.** El ciclo interno busca un valor concreto: `target - nums[i]`, el **complemento**. Buscar un valor concreto es exactamente lo que hace un diccionario en O(1). Recorremos una vez; por cada número preguntamos si su complemento ya apareció y, si no, guardamos el número con su índice.
+
+<TwoSumHash />
+
+<CodeTabs>
+
+```java title="Java"
+public int[] twoSum(int[] nums, int target) {
+    Map<Integer, Integer> seen = new HashMap<>(); // valor -> índice
+    for (int i = 0; i < nums.length; i++) {
+        int need = target - nums[i];
+        Integer j = seen.get(need); // null si no está
+        if (j != null) return new int[] { j, i };
+        seen.put(nums[i], i);
+    }
+    return new int[0];
+}
+```
+
+```python title="Python"
+def two_sum(nums: list[int], target: int) -> list[int]:
+    seen: dict[int, int] = {}  # valor -> índice
+    for i, x in enumerate(nums):
+        need = target - x
+        if need in seen:
+            return [seen[need], i]
+        seen[x] = i
+    return []
+```
+
+```ts title="TypeScript"
+function twoSum(nums: number[], target: number): number[] {
+  const seen = new Map<number, number>() // valor -> índice
+  for (let i = 0; i < nums.length; i++) {
+    const need = target - nums[i]
+    const j = seen.get(need)
+    if (j !== undefined) return [j, i]
+    seen.set(nums[i], i)
+  }
+  return []
+}
+```
+
+</CodeTabs>
+
+**Complejidad.** O(n) tiempo promedio, O(n) memoria.
+
+**Casos borde y errores típicos.**
+
+- **Consultar antes de guardar.** Si guardas `x` antes de preguntar por su complemento, con `[3, 2, 4]` y `target = 6` el 3 se encuentra a sí mismo y devuelves `[0, 0]`.
+- **Duplicados.** `[3, 3]` con `target = 6` funciona justamente porque consultas antes de guardar: el segundo 3 encuentra al primero.
+- En TypeScript, `if (seen.get(need))` falla cuando el índice guardado es 0, porque 0 es *falsy*. Compara con `undefined`.
+- En Java, `seen.get(need)` devuelve `null` si la clave no está. Guardarlo en un `int` (`int j = seen.get(need)`) lanza `NullPointerException` al desempaquetar. Usa `Integer`, o `containsKey` antes de `get`.
+
+<Callout type="tip" title="En Java">
+
+Nunca compares dos `Integer` con `==`. Java guarda en caché los valores de −128 a 127, así que `seen.get(a) == seen.get(b)` funciona en tus pruebas pequeñas y falla con 1000, porque compara referencias. Usa `equals`, o desempaqueta a `int` primero. Comparar un `Integer` con un `int` (`j >= l`) sí es seguro: Java desempaqueta el `Integer`.
+
+</Callout>
+
+**Variantes y repreguntas.** "¿Y si el arreglo está ordenado?" (dos punteros, O(1) memoria). "¿Y si quiero todos los pares sin repetir?" (contar frecuencias, cuidar el caso `x == need`). "¿Y si son tres números?" (3Sum: ordenar y dos punteros). "¿Y si los datos no caben en memoria?" (particionar por hash del valor y resolver cada partición).
+
+## Agrupar y ordenar por frecuencia
+
+### Group Anagrams: la clave canónica
+
+**Enunciado.** Agrupa las palabras que son anagramas entre sí. `["eat", "tea", "tan", "ate", "nat", "bat"]` → `[["eat", "tea", "ate"], ["tan", "nat"], ["bat"]]` (el orden no importa).
+
+**Qué preguntar.** ¿Solo minúsculas? ¿Puede haber cadenas vacías? ¿Importa el orden de los grupos o dentro de cada grupo?
+
+**Fuerza bruta.** Comparar cada palabra con un representante de cada grupo existente usando Valid Anagram: O(n² · k) con palabras de largo k.
+
+**La idea.** No compares palabras entre sí: dale a cada una una **clave canónica** que sea idéntica para todos sus anagramas, y usa esa clave en un diccionario. Dos claves posibles: las letras ordenadas (`"eat"` → `"aet"`) o el conteo de cada letra. La señal: *si ves "agrupa elementos equivalentes", busca una forma normalizada que todos compartan*.
+
+<AnagramGroups />
+
+<CodeTabs>
+
+```java title="Java"
+public List<List<String>> groupAnagrams(String[] words) {
+    Map<String, List<String>> groups = new HashMap<>();
+    for (String w : words) {
+        int[] count = new int[26];
+        for (char c : w.toCharArray()) count[c - 'a']++;
+        String key = Arrays.toString(count); // un int[] como clave compara por referencia
+        groups.computeIfAbsent(key, k -> new ArrayList<>()).add(w);
+    }
+    return new ArrayList<>(groups.values());
+}
+```
+
+```python title="Python"
+from collections import defaultdict
+
+def group_anagrams(words: list[str]) -> list[list[str]]:
+    groups: dict[tuple[int, ...], list[str]] = defaultdict(list)
+    for w in words:
+        count = [0] * 26
+        for c in w:
+            count[ord(c) - ord('a')] += 1
+        groups[tuple(count)].append(w)  # las listas no son hashables; las tuplas sí
+    return list(groups.values())
+```
+
+```ts title="TypeScript"
+function groupAnagrams(words: string[]): string[][] {
+  const groups = new Map<string, string[]>()
+  for (const w of words) {
+    const count = new Array(26).fill(0)
+    for (const c of w) count[c.charCodeAt(0) - 97]++
+    const key = count.join('#') // el separador evita que "1,11" y "11,1" choquen
+    const g = groups.get(key)
+    if (g) g.push(w)
+    else groups.set(key, [w])
+  }
+  return [...groups.values()]
+}
+```
+
+</CodeTabs>
+
+**Complejidad.** Con n palabras de largo máximo k: O(n · k log k) con la clave ordenada, O(n · k) con el conteo (más el costo de construir una clave de 26 posiciones). Memoria O(n · k).
+
+**Errores típicos.** Usar una lista como clave en Python (no es hashable: conviértela a tupla). En TypeScript, usar un arreglo como clave de `Map`, y en Java usar un `int[]` o un `char[]` como clave de `HashMap`: los dos comparan por referencia, así que cada arreglo es una clave distinta. En Java conviértelo a `String` (`Arrays.toString(count)`, o `new String(chars)` después de `Arrays.sort(chars)` para la clave ordenada). Concatenar conteos sin separador: `[1, 11]` y `[11, 1]` producirían la misma cadena `"111"`.
+
+### Top K Frequent Elements: contar y repartir en cubetas
+
+**Enunciado.** Devuelve los `k` elementos más frecuentes. `nums = [1, 1, 1, 2, 2, 3]`, `k = 2` → `[1, 2]`.
+
+**Qué preguntar.** ¿La respuesta es única (sin empates en el corte)? ¿Importa el orden de salida? ¿Qué tan grande es `k` comparado con n?
+
+**Fuerza bruta.** Contar con un diccionario y ordenar los pares por frecuencia: O(n log n). Ya es razonable; la pregunta es si puedes bajar de ahí.
+
+**La idea.** Una frecuencia está entre 1 y n. Entonces puedes crear n + 1 **cubetas**, donde la cubeta `f` guarda los valores que aparecen exactamente `f` veces, y recorrerlas de mayor a menor hasta juntar `k`. Es un *bucket sort* sobre las frecuencias: O(n) sin comparar nada.
+
+<CodeTabs>
+
+```java title="Java"
+public int[] topKFrequent(int[] nums, int k) {
+    Map<Integer, Integer> count = new HashMap<>();
+    for (int x : nums) count.merge(x, 1, Integer::sum);
+    List<List<Integer>> buckets = new ArrayList<>();
+    for (int f = 0; f <= nums.length; f++) buckets.add(new ArrayList<>());
+    for (Map.Entry<Integer, Integer> e : count.entrySet()) {
+        buckets.get(e.getValue()).add(e.getKey());
+    }
+    int[] res = new int[k];
+    int n = 0;
+    for (int freq = nums.length; freq > 0; freq--) {
+        for (int value : buckets.get(freq)) {
+            res[n++] = value;
+            if (n == k) return res;
+        }
+    }
+    return res;
+}
+```
+
+```python title="Python"
+from collections import Counter
+
+def top_k_frequent(nums: list[int], k: int) -> list[int]:
+    count = Counter(nums)
+    buckets: list[list[int]] = [[] for _ in range(len(nums) + 1)]
+    for value, freq in count.items():
+        buckets[freq].append(value)
+    res = []
+    for freq in range(len(buckets) - 1, 0, -1):
+        for value in buckets[freq]:
+            res.append(value)
+            if len(res) == k:
+                return res
+    return res
+```
+
+```ts title="TypeScript"
+function topKFrequent(nums: number[], k: number): number[] {
+  const count = new Map<number, number>()
+  for (const x of nums) count.set(x, (count.get(x) ?? 0) + 1)
+  const buckets: number[][] = Array.from({ length: nums.length + 1 }, () => [])
+  for (const [value, freq] of count) buckets[freq].push(value)
+  const res: number[] = []
+  for (let freq = buckets.length - 1; freq > 0; freq--) {
+    for (const value of buckets[freq]) {
+      res.push(value)
+      if (res.length === k) return res
+    }
+  }
+  return res
+}
+```
+
+</CodeTabs>
+
+**Complejidad.** O(n) tiempo y O(n) memoria.
+
+**Repreguntas.** La alternativa que muchos entrevistadores esperan es un **min-heap de tamaño k**: O(n log k), mejor que ordenar cuando k es pequeño, y la única que funciona cuando los datos llegan como **flujo** y no conoces n de antemano. La ves completa en [heaps y top-K](/casos/heaps-y-top-k). En Java, `PriorityQueue` es un **min-heap** por defecto, que es justo lo que necesitas aquí: el menos frecuente de los k queda arriba y sale primero. En Python, `Counter(nums).most_common(k)` usa un heap por dentro cuando le pasas k; puedes mencionarlo, pero el entrevistador casi siempre te va a pedir que lo implementes.
+
+<Quiz
+  question="En Top K Frequent Elements, ¿por qué el bucket sort necesita exactamente n + 1 cubetas?"
+  options={[
+    { text: 'Porque una frecuencia va de 1 a n, y la cubeta 0 queda sin usar para indexar directo por frecuencia.', correct: true, why: 'Ningún valor puede aparecer más de n veces ni menos de 1. Con n + 1 cubetas, la frecuencia es directamente el índice, sin ajustes.' },
+    { text: 'Porque hay que reservar una cubeta por cada valor distinto.', why: 'Las cubetas se indexan por frecuencia, no por valor. Varios valores con la misma frecuencia comparten cubeta.' },
+    { text: 'Para que el algoritmo sea estable con empates.', why: 'La cantidad de cubetas no tiene relación con la estabilidad; los empates caen en la misma cubeta en cualquier caso.' },
+  ]}
+/>
+
+## Pensar con un set: Longest Consecutive Sequence
+
+**Enunciado.** Dado un arreglo sin ordenar, devuelve el largo de la secuencia más larga de enteros consecutivos, en O(n). `[100, 4, 200, 1, 3, 2]` → `4` (la racha 1, 2, 3, 4).
+
+**Qué preguntar.** ¿Puede haber duplicados? (Sí, y no alargan la racha.) ¿Negativos? ¿Arreglo vacío? El enunciado exige O(n): eso descarta ordenar y te está diciendo que pienses en hash.
+
+**Fuerza bruta.** Para cada número, contar hacia arriba buscando `x + 1`, `x + 2`… con una búsqueda lineal: O(n³) en el peor caso. Con un set para las búsquedas baja a O(n²). Ordenar y recorrer da O(n log n), y es buena respuesta intermedia.
+
+**La idea.** Mete todo en un set. Luego, **solo empieza a contar desde el inicio de una racha**: un `x` tal que `x - 1` no está en el set. Si `x - 1` existe, `x` es parte de una racha que alguien más va a contar completa. Así cada número se visita a lo sumo dos veces: una en el for y una dentro de la racha que lo contiene.
+
+<Sketch
+  width={640}
+  height={250}
+  caption="Solo se cuenta desde el inicio de una racha: el número cuyo anterior no está en el set. Los demás se saltan, así que cada número se visita a lo sumo dos veces."
+  items={[
+    { type: 'text', x: 24, y: 30, text: 'set = {100, 4, 200, 1, 3, 2}', size: 20, font: 'code', tone: 'pencil' },
+    { type: 'circle', x: 70, y: 106, r: 26, label: '1', tone: 'line', fill: true },
+    { type: 'circle', x: 150, y: 106, r: 26, label: '2' },
+    { type: 'circle', x: 230, y: 106, r: 26, label: '3' },
+    { type: 'circle', x: 310, y: 106, r: 26, label: '4' },
+    { type: 'arrow', from: [97, 106], to: [123, 106], tone: 'line' },
+    { type: 'arrow', from: [177, 106], to: [203, 106], tone: 'line', with: true },
+    { type: 'arrow', from: [257, 106], to: [283, 106], tone: 'line', with: true },
+    { type: 'text', x: 70, y: 166, text: ['0 no está:', 'empieza'], size: 19, anchor: 'middle', tone: 'ok' },
+    { type: 'text', x: 250, y: 166, text: ['tienen su x − 1:', 'no empiezan'], size: 19, anchor: 'middle', tone: 'pencil' },
+    { type: 'circle', x: 450, y: 106, r: 30, label: '100' },
+    { type: 'circle', x: 570, y: 106, r: 30, label: '200', with: true },
+    { type: 'text', x: 510, y: 166, text: 'rachas de 1', size: 19, anchor: 'middle', tone: 'pencil' },
+    { type: 'text', x: 24, y: 232, text: 'cada número se visita a lo sumo dos veces: O(n)', size: 21, tone: 'line' },
+  ]}
+/>
+
+<CodeTabs>
+
+```java title="Java"
+public int[] productExceptSelf(int[] nums) {
+    int n = nums.length;
+    int[] answer = new int[n];
+    int prefix = 1;
+    for (int i = 0; i < n; i++) {
+        answer[i] = prefix;      // producto de nums[0..i-1]
+        prefix *= nums[i];
+    }
+    int suffix = 1;
+    for (int i = n - 1; i >= 0; i--) {
+        answer[i] *= suffix;     // por el producto de nums[i+1..n-1]
+        suffix *= nums[i];
+    }
+    return answer;
+}
+```
+
+```python title="Python"
+def longest_consecutive(nums: list[int]) -> int:
+    values = set(nums)
+    best = 0
+    for x in values:
+        if x - 1 in values:
+            continue  # no es el inicio de una racha
+        length = 1
+        while x + length in values:
+            length += 1
+        best = max(best, length)
+    return best
+```
+
+```ts title="TypeScript"
+function longestConsecutive(nums: number[]): number {
+  const values = new Set(nums)
+  let best = 0
+  for (const x of values) {
+    if (values.has(x - 1)) continue // no es el inicio de una racha
+    let length = 1
+    while (values.has(x + length)) length++
+    best = Math.max(best, length)
+  }
+  return best
+}
+```
+
+</CodeTabs>
+
+**Complejidad.** O(n) tiempo promedio, O(n) memoria. El `while` dentro del `for` asusta, pero lo que importa es el total: la suma de todas las rachas contadas es como mucho n.
+
+**Error típico.** Iterar sobre `nums` en vez de sobre el set. Con un arreglo como `[1, 1, 1, …, 2, 3, 4]` y muchos duplicados del inicio de racha, recuentas la misma racha una vez por cada duplicado y vuelves a O(n²).
+
+<Quiz
+  question="¿Qué pasa con la complejidad de Longest Consecutive Sequence si quitas el chequeo de x - 1?"
+  options={[
+    { text: 'Nada: el set ya hace que cada búsqueda sea O(1).', why: 'Las búsquedas siguen siendo O(1), pero harías muchas más. Para la racha 1..n, empezarías a contar desde cada número.' },
+    { text: 'Pasa a O(n²) en el peor caso, porque cada elemento de una racha larga vuelve a recorrerla.', correct: true, why: 'Con la racha 1..n, contar desde 1 cuesta n, desde 2 cuesta n − 1, y así: n(n + 1)/2 pasos. El chequeo garantiza que cada racha se recorre una sola vez.' },
+    { text: 'El resultado sale incorrecto porque cuenta rachas parciales.', why: 'Contaría rachas parciales, pero best se queda con el máximo, que sigue siendo la racha completa. El problema es el tiempo, no la corrección.' },
+  ]}
+/>
+
+## Prefijos: Product of Array Except Self y Subarray Sum Equals K
+
+Una **suma de prefijos** es un arreglo donde la posición `i` guarda la suma de todo lo anterior. Con ella, la suma de cualquier subarreglo es una resta: `sum(nums[i..j]) = P[j + 1] - P[i]`. La misma idea funciona con productos, con conteos y con XOR. La señal: *si te preguntan muchas veces por rangos, o por "subarreglos contiguos que cumplen algo con su suma", piensa en prefijos*.
+
+<Sketch
+  width={640}
+  height={330}
+  caption="Una suma de rango es la resta de dos prefijos. Contar subarreglos que suman k es contar pares de prefijos que difieren en k."
+  items={[
+    { type: 'text', x: 24, y: 28, text: 'una suma de rango = una resta de prefijos', size: 21, tone: 'pencil' },
+    { type: 'cells', x: 130, y: 64, values: [3, 4, 7, 2, -3, 1], size: 50, index: true, label: 'nums', states: [null, null, 'line', 'line', 'line', 'line'] },
+    { type: 'text', x: 470, y: 86, text: ['nums[2..5]', 'suma 7 = k'], size: 20, tone: 'line' },
+    { type: 'cells', x: 130, y: 170, values: [3, 7, 14, 16, 13, 14], size: 50, label: 'prefix', states: [null, 'ok', null, null, null, 'line'] },
+    { type: 'arrow', from: [155, 224], to: [405, 224], bend: 34, tone: 'line', label: '14 − 7 = 7', labelAt: [280, 268] },
+    { type: 'highlight', x: 466, y: 176, w: 150, h: 58, tone: 'ok' },
+    { type: 'text', x: 470, y: 196, text: ['P[5] − P[1]', '= 14 − 7'], size: 20, font: 'code', with: true },
+    { type: 'text', x: 24, y: 320, text: 'si prefix − k ya apareció, un subarreglo que suma k termina aquí', size: 19, tone: 'pencil' },
+  ]}
+/>
+
+### Product of Array Except Self
+
+**Enunciado.** Devuelve un arreglo donde `answer[i]` es el producto de todos los elementos menos `nums[i]`, en O(n) y **sin usar división**. `[1, 2, 3, 4]` → `[24, 12, 8, 6]`.
+
+**Qué preguntar.** ¿Puede haber ceros? (Sí: por eso prohíben dividir.) ¿El arreglo de salida cuenta como memoria extra? (En LeetCode, no.)
+
+**Fuerza bruta.** Para cada `i`, multiplicar todos los demás: O(n²). La trampa "rápida" es multiplicar todo y dividir por `nums[i]`, que se rompe con un cero y no está permitida.
+
+**La idea.** `answer[i]` = (producto de todo lo que está a la izquierda de `i`) × (producto de todo lo que está a la derecha). Primera pasada de izquierda a derecha: escribe los prefijos en `answer`. Segunda pasada de derecha a izquierda: multiplica por un sufijo acumulado en una sola variable.
+
+<CodeTabs>
+
+```java title="Java"
+public int longestConsecutive(int[] nums) {
+    Set<Integer> values = new HashSet<>();
+    for (int x : nums) values.add(x);
+    int best = 0;
+    for (int x : values) {
+        if (values.contains(x - 1)) continue; // no es el inicio de una racha
+        int length = 1;
+        while (values.contains(x + length)) length++;
+        best = Math.max(best, length);
+    }
+    return best;
+}
+```
+
+```python title="Python"
+def product_except_self(nums: list[int]) -> list[int]:
+    n = len(nums)
+    answer = [1] * n
+    prefix = 1
+    for i in range(n):
+        answer[i] = prefix      # producto de nums[0..i-1]
+        prefix *= nums[i]
+    suffix = 1
+    for i in range(n - 1, -1, -1):
+        answer[i] *= suffix     # por el producto de nums[i+1..n-1]
+        suffix *= nums[i]
+    return answer
+```
+
+```ts title="TypeScript"
+function productExceptSelf(nums: number[]): number[] {
+  const n = nums.length
+  const answer = new Array<number>(n).fill(1)
+  let prefix = 1
+  for (let i = 0; i < n; i++) {
+    answer[i] = prefix // producto de nums[0..i-1]
+    prefix *= nums[i]
+  }
+  let suffix = 1
+  for (let i = n - 1; i >= 0; i--) {
+    answer[i] *= suffix // por el producto de nums[i+1..n-1]
+    suffix *= nums[i]
+  }
+  return answer
+}
+```
+
+</CodeTabs>
+
+**Complejidad.** O(n) tiempo, O(1) memoria extra además de la salida. Los ceros se manejan solos: con un cero, todas las posiciones menos la suya quedan en 0; con dos o más, todo queda en 0. Pruébalo con `[0, 2, 3]` en voz alta.
+
+### Subarray Sum Equals K
+
+**Enunciado.** Cuenta los subarreglos contiguos cuya suma es exactamente `k`. `nums = [1, 1, 1]`, `k = 2` → `2`. `nums = [1, 2, 3]`, `k = 3` → `2` (`[1, 2]` y `[3]`).
+
+**Qué preguntar.** ¿Puede haber negativos y ceros? (Sí, y es lo que hace interesante al problema.) ¿Me piden contarlos o devolverlos? ¿Qué tan grande es n?
+
+**Fuerza bruta.** Fijar el inicio `i` y extender `j` acumulando la suma: O(n²) tiempo, O(1) memoria. Con n de hasta 2·10⁴ (el límite de LeetCode) pasa raspando o no pasa, según el lenguaje.
+
+**Por qué no sirve sliding window.** La ventana deslizante decide cuándo contraer suponiendo que agregar elementos solo hace crecer la suma. Con negativos eso es falso: una ventana que ya se pasó de `k` puede volver a `k` agregando un negativo. Con `[3, -1]` y `k = 2`, la ventana `[3]` se pasa, la contraes, y pierdes `[3, -1]`, que suma exactamente 2. Si todos los números fueran positivos, la ventana sí funcionaría; pregúntalo.
+
+**La idea.** Llama `prefix` a la suma de `nums[0..j]`. Un subarreglo `nums[i..j]` suma `k` si y solo si el prefijo que termina justo antes de `i` vale `prefix - k`. Entonces, en cada posición, la cantidad de subarreglos que **terminan aquí** y suman `k` es la cantidad de veces que ya vimos el prefijo `prefix - k`. Eso es un diccionario de frecuencias de prefijos. El mapa empieza con `{0: 1}`: el prefijo vacío, que permite contar los subarreglos que empiezan en el índice 0.
+
+<PrefixSumMap />
+
+<CodeTabs>
+
+```java title="Java"
+public int subarraySum(int[] nums, int k) {
+    int count = 0;
+    int prefix = 0;
+    Map<Integer, Integer> freq = new HashMap<>();
+    freq.put(0, 1); // el prefijo vacío
+    for (int x : nums) {
+        prefix += x;
+        count += freq.getOrDefault(prefix - k, 0); // primero consulto
+        freq.merge(prefix, 1, Integer::sum);       // después anoto
+    }
+    return count;
+}
+```
+
+```python title="Python"
+def subarray_sum(nums: list[int], k: int) -> int:
+    count = 0
+    prefix = 0
+    freq: dict[int, int] = {0: 1}  # el prefijo vacío
+    for x in nums:
+        prefix += x
+        count += freq.get(prefix - k, 0)        # primero consulto
+        freq[prefix] = freq.get(prefix, 0) + 1  # después anoto
+    return count
+```
+
+```ts title="TypeScript"
+function subarraySum(nums: number[], k: number): number {
+  let count = 0
+  let prefix = 0
+  const freq = new Map<number, number>([[0, 1]]) // el prefijo vacío
+  for (const x of nums) {
+    prefix += x
+    count += freq.get(prefix - k) ?? 0 // primero consulto
+    freq.set(prefix, (freq.get(prefix) ?? 0) + 1) // después anoto
+  }
+  return count
+}
+```
+
+</CodeTabs>
+
+**Complejidad.** O(n) tiempo promedio, O(n) memoria.
+
+**Casos borde y errores típicos.**
+
+- Olvidar `{0: 1}`: no cuentas los subarreglos que empiezan en 0. Con `[1, 1, 1]` y `k = 2` devolverías 1 en vez de 2.
+- Anotar antes de consultar: con `k = 0`, cada prefijo se encontraría a sí mismo y contarías subarreglos vacíos.
+- En Java, el prefijo es un `int`. Con n = 2·10⁴ y valores de hasta 1000 en valor absoluto (los límites de LeetCode) no se desborda, pero si el enunciado permite sumas más grandes, usa `long` para `prefix` y un `Map<Long, Integer>`.
+- Usar un set en vez de un mapa de frecuencias: con ceros o negativos, el mismo prefijo aparece varias veces y cada aparición es un subarreglo distinto (prueba `[1, -1, 0]` con `k = 0` en el widget: son 3).
+
+**Variantes.** *Continuous Subarray Sum* (¿hay un subarreglo de largo ≥ 2 cuya suma es múltiplo de k? Guarda `prefix % k` con el primer índice donde apareció). *Contiguous Array* (igual cantidad de 0 y 1: cambia los 0 por −1 y busca suma 0). *Range Sum Query* (sin mapa: solo el arreglo de prefijos para responder rangos en O(1)).
+
+## Cuándo NO usar un hash
+
+El diccionario es tan útil que se vuelve un reflejo. Estos son los casos en que conviene frenar:
+
+- **Cuando la memoria importa más que el tiempo.** Si te dicen "memoria O(1)", el hash queda descartado. En Two Sum sobre un arreglo **ordenado**, dos punteros resuelven en O(n) sin memoria extra. En Contains Duplicate, ordenar en el lugar cuesta O(n log n) pero O(1) extra.
+- **Cuando necesitas orden.** Un hash no responde "el siguiente mayor que x", "los elementos entre a y b" ni "el mínimo". Para eso están los arreglos ordenados con búsqueda binaria, los árboles balanceados (`TreeMap` y `TreeSet` en Java, con `floorKey` y `ceilingKey`; `SortedList` de la librería `sortedcontainers` en Python) o un heap. Ojo también con el orden de iteración: recorrer un `HashMap` de Java no sigue ningún orden útil (ni el de inserción ni el de las claves). Si lo necesitas, `LinkedHashMap` conserva el de inserción y `TreeMap` el de las claves.
+- **Cuando el universo de claves es pequeño y denso.** Para letras a-z o números de 0 a 1000, un arreglo indexado es más rápido (sin hashing, mejor localidad de caché) y más simple de razonar.
+- **Cuando el peor caso importa.** O(1) es un promedio. Con muchas colisiones, una tabla puede degradarse a O(n) por operación. En un servicio expuesto, alguien puede fabricar entradas que colisionen a propósito (*hash flooding*).<Sidenote>Por eso Python aleatoriza el hash de las cadenas en cada proceso desde la versión 3.3 (ver la variable `PYTHONHASHSEED` en la documentación). Los enteros no se aleatorizan: `hash(5)` es 5.</Sidenote> En una entrevista basta con decir "O(1) amortizado en promedio, O(n) en el peor caso".
+- **Cuando la clave es cara de calcular.** Si la clave es una cadena de largo k, hashearla cuesta O(k). Contarlo como O(1) es un descuido que un entrevistador atento corrige.
+
+<Details summary="Profundizar: qué es hashable y qué no">
+
+En Python solo los objetos inmutables son hashables por defecto: `int`, `str`, `tuple` (si sus elementos lo son), `frozenset`. Las listas, los dicts y los sets no. Si necesitas usar una lista como clave, conviértela a tupla; si necesitas un set como clave, usa `frozenset`.
+
+En JavaScript y TypeScript, `Map` y `Set` comparan objetos y arreglos **por referencia**: `new Set([[1, 2], [1, 2]])` tiene dos elementos. Para claves compuestas, serializa a cadena (`` `${a},${b}` ``) o anida mapas. Y cuidado con usar un objeto plano `{}` como diccionario: las claves siempre se convierten a string, así que `1` y `"1"` son la misma clave, y hay claves heredadas del prototipo como `constructor`. `Map` no tiene ninguno de esos problemas.
+
+En Java, `HashMap` usa `hashCode` y `equals` de la clave. `String`, `Integer` y los `record` los implementan por valor, así que un `record Punto(int x, int y)` es una buena clave compuesta. Los arreglos no: `new int[] {1, 2}` y otro `new int[] {1, 2}` son claves distintas. Y si modificas un objeto después de usarlo como clave, su hash cambia y el mapa ya no lo encuentra.
+
+</Details>
+
+## Problemas típicos de este patrón
+
+| Problema (LeetCode) | Técnica | Tiempo | Memoria |
+| --- | --- | --- | --- |
+| [Contains Duplicate](https://leetcode.com/problems/contains-duplicate/) | set de vistos | O(n) | O(n) |
+| [Valid Anagram](https://leetcode.com/problems/valid-anagram/) | conteo | O(n) | O(1) con alfabeto fijo |
+| [Two Sum](https://leetcode.com/problems/two-sum/) | mapa de complementos | O(n) | O(n) |
+| [Group Anagrams](https://leetcode.com/problems/group-anagrams/) | clave canónica | O(n · k) | O(n · k) |
+| [Top K Frequent Elements](https://leetcode.com/problems/top-k-frequent-elements/) | conteo + cubetas | O(n) | O(n) |
+| [Product of Array Except Self](https://leetcode.com/problems/product-of-array-except-self/) | prefijos y sufijos | O(n) | O(1) extra |
+| [Longest Consecutive Sequence](https://leetcode.com/problems/longest-consecutive-sequence/) | set + inicio de racha | O(n) | O(n) |
+| [Subarray Sum Equals K](https://leetcode.com/problems/subarray-sum-equals-k/) | prefijo + mapa de frecuencias | O(n) | O(n) |
+| [Valid Sudoku](https://leetcode.com/problems/valid-sudoku/) | sets por fila, columna y caja | O(1) (tablero fijo) | O(1) |
+| [Continuous Subarray Sum](https://leetcode.com/problems/continuous-subarray-sum/) | prefijo módulo k + primer índice | O(n) | O(min(n, k)) |
+| [Majority Element](https://leetcode.com/problems/majority-element/) | conteo (o Boyer-Moore en O(1)) | O(n) | O(n) / O(1) |
+
+Para practicar, resuelve primero los ocho de las secciones anteriores sin mirar el código y con un temporizador de 20 minutos cada uno. El método completo para hacerlo en voz alta está en [el método para live coding](/casos/metodo-live-coding).
+
+<Quiz
+  question="Te piden encontrar dos números que sumen target en un arreglo ya ordenado de 10⁸ elementos, en un equipo con poca memoria. ¿Qué propones?"
+  options={[
+    { text: 'Two Sum con diccionario, porque es O(n).', why: 'Es O(n) en tiempo, pero guardar hasta 10⁸ entradas en un diccionario puede costar varios GB. Ignora el dato más importante del enunciado: el arreglo ya está ordenado.' },
+    { text: 'Dos punteros desde los extremos: O(n) tiempo y O(1) memoria.', correct: true, why: 'El orden permite decidir qué puntero mover: si la suma es chica, avanza el izquierdo; si es grande, retrocede el derecho. Mismo tiempo, sin memoria extra.' },
+    { text: 'Búsqueda binaria del complemento para cada elemento.', why: 'Funciona en O(n log n) con O(1) memoria. Es correcta, pero dos punteros logra O(n) con la misma memoria.' },
+  ]}
+/>
+
+<Takeaways>
+
+- Si el ciclo interno de tu fuerza bruta solo **busca** algo, reemplázalo por un diccionario o un set: O(n²) se vuelve O(n) a cambio de O(n) memoria.
+- Tres usos que se repiten: **contar** (anagramas, frecuencias), **recordar lo visto** (Two Sum, duplicados) y **agrupar por clave canónica** (Group Anagrams).
+- En Two Sum y en Subarray Sum Equals K, **consulta antes de anotar**: el orden evita que un elemento se use dos veces.
+- La suma de prefijos convierte "subarreglos que suman k" en "pares de prefijos que difieren en k". Con negativos, sliding window no sirve y el mapa de frecuencias sí.
+- Empieza a contar rachas solo desde su inicio (Longest Consecutive) y reparte por frecuencia en cubetas (Top K): son trucos para que el total siga siendo O(n).
+- O(1) es un promedio. Nombra el costo en memoria, el peor caso y el costo de hashear claves largas, y descarta el hash cuando te piden orden o memoria O(1).
+
+</Takeaways>
+
+## Fuentes y lecturas
+
+- [Tech Interview Handbook: Hash table](https://www.techinterviewhandbook.org/algorithms/hash-table/) y [Array](https://www.techinterviewhandbook.org/algorithms/array/): cheatsheets con técnicas, casos borde y listas de problemas.
+- [NeetCode: roadmap](https://neetcode.io/roadmap): el bloque "Arrays & Hashing" agrupa casi los mismos problemas de este tema, con video de cada solución.
+- [USACO Guide: Prefix Sums](https://usaco.guide/silver/prefix-sums): sumas de prefijos explicadas desde cero, con variantes en dos dimensiones.
+- [Python: collections (Counter y defaultdict)](https://docs.python.org/3/library/collections.html) y [TimeComplexity en la wiki de Python](https://wiki.python.org/moin/TimeComplexity): costos promedio y de peor caso de `dict` y `set`.
+- [MDN: Map](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Map): diferencias entre `Map` y objetos planos como diccionario.
+- [Python: opciones de línea de comandos, PYTHONHASHSEED](https://docs.python.org/3/using/cmdline.html): por qué el hash de las cadenas cambia entre procesos.
+- Cormen, Leiserson, Rivest y Stein, *Introduction to Algorithms* (MIT Press), capítulo de tablas hash: el análisis formal del costo promedio.
+- Gayle Laakmann McDowell, *Cracking the Coding Interview* (CareerCup), capítulo "Arrays and Strings".
+

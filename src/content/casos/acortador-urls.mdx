@@ -1,0 +1,413 @@
+import { Base62Encoder } from '../../components/widgets/casos-a/Base62Encoder'
+
+"Diseña un acortador de URLs como bit.ly." Es la pregunta de calentamiento más común de las entrevistas de system design, y por eso mismo es peligrosa: todo el mundo cree que la sabe. La versión ingenua se dibuja en dos minutos (una tabla `código → URL` y un servidor). La versión que aprueba una entrevista senior se gana en los detalles: cómo generas millones de códigos únicos sin un cuello de botella central, por qué la redirección es un problema de caché y no de base de datos, qué código HTTP devuelves y qué pierdes con cada opción.
+
+Es un clásico porque el alcance funcional es mínimo y deja todo el tiempo para lo que importa: **generación de IDs**, **un patrón de lectura extremo** (cada link se crea una vez y se abre cientos de veces) y **trabajo asíncrono** para la analítica. Si dominas este caso, ya tienes las piezas de la mitad de los demás.
+
+<Sketch
+  width={640}
+  height={340}
+  caption="El caso en un dibujo: un link se crea una vez y se abre cientos de veces, así que la lectura se diseña como una caché."
+  items={[
+    { type: 'text', x: 24, y: 30, text: 'se escribe una vez…', size: 20, tone: 'pencil' },
+    { type: 'box', x: 24, y: 50, w: 250, h: 48, label: 'https://tienda.com/…', font: 'code', size: 18 },
+    { type: 'arrow', from: [278, 74], to: [372, 74], label: 'POST', labelAt: [325, 62] },
+    { type: 'cells', x: 380, y: 57, values: ['a', 'Z', '3', 'x', '9', 'Q', 'k'], size: 34, states: ['line', 'line', 'line', 'line', 'line', 'line', 'line'] },
+    { type: 'text', x: 24, y: 160, text: '…y se lee cien veces', size: 20, tone: 'pencil' },
+    { type: 'arrow', from: [40, 196], to: [216, 234], tone: 'line' },
+    { type: 'arrow', from: [40, 240], to: [216, 240], tone: 'line', with: true },
+    { type: 'arrow', from: [40, 284], to: [216, 246], tone: 'line', with: true },
+    { type: 'box', x: 220, y: 212, w: 130, h: 56, label: 'Redis', sub: 'cache-aside' },
+    { type: 'arrow', from: [354, 240], to: [440, 240], label: '302', labelAt: [397, 228] },
+    { type: 'box', x: 444, y: 212, w: 170, h: 56, label: 'destino' },
+    { type: 'highlight', x: 20, y: 302, w: 252, h: 28 },
+    { type: 'text', x: 24, y: 324, text: '1 escritura : 100 lecturas', size: 22, with: true },
+  ]}
+/>
+
+## Requisitos
+
+Empieza siempre acotando. En la entrevista, dilo en voz alta y escribe la lista en la pizarra.
+
+**Funcionales**
+
+1. Dada una URL larga, el sistema devuelve una URL corta única (`sho.rt/aZ3x9Qk`).
+2. Al abrir la URL corta, el usuario termina en la URL larga.
+3. Opcional: alias personalizado (`sho.rt/black-friday`) y fecha de expiración.
+4. Opcional: contar clics por link (analítica básica).
+
+**No funcionales**
+
+- **Latencia de redirección muy baja**: supongamos menos de 50 ms en p99 medido en el servidor. Cada milisegundo se suma a la carga de la página destino.
+- **Disponibilidad alta en la lectura**: si las redirecciones fallan, se rompen millones de links publicados en todas partes. La escritura puede ser algo menos disponible.
+- **Unicidad estricta**: dos URLs largas distintas nunca pueden compartir código.
+- **Códigos no enumerables** (deseable): que no se pueda recorrer `aaaaaa`, `aaaaab`… y descubrir links privados.
+- La analítica puede ser **eventualmente consistente** (un retraso de minutos es aceptable).
+
+**Fuera de alcance** (dilo explícitamente): cuentas de usuario y facturación, edición del destino de un link ya creado, paneles de analítica detallados.
+
+<Callout type="interview">
+
+Pregunta antes de asumir: "¿Los links pueden editarse o borrarse?", "¿Necesitamos analítica en tiempo real?", "¿Los links son privados o públicos?". Cada respuesta cambia una decisión importante más adelante (301 vs 302, enumeración, consistencia).
+
+</Callout>
+
+## Estimaciones
+
+Supongamos **100 millones de URLs nuevas al mes** y una relación lectura/escritura de **100 a 1**. Son supuestos razonables para un servicio grande; lo que importa es la aritmética.
+
+| Magnitud | Cálculo | Resultado |
+|---|---|---|
+| Escrituras promedio | 100 M ÷ (30 × 86.400 s) | ~39 por segundo |
+| Escrituras pico (×5) | 39 × 5 | ~200 por segundo |
+| Lecturas promedio | 39 × 100 | ~3.900 por segundo |
+| Lecturas pico (×5) | 3.900 × 5 | ~20.000 por segundo |
+| Registros en 10 años | 100 M × 12 × 10 | 12.000 millones |
+| Almacenamiento | 12.000 M × ~500 B | ~6 TB |
+
+Tres conclusiones salen de esta tabla, y conviene decirlas:
+
+1. **La escritura es trivial.** 200 escrituras por segundo las aguanta una sola base de datos modesta. El reto de escritura no es el volumen sino la **unicidad** del código.
+2. **La lectura domina**, pero 20.000 por segundo tampoco es enorme si casi todo sale de memoria. El diseño de lectura es un diseño de caché.
+3. **6 TB en diez años** ya no caben cómodos en un solo nodo con índices y réplicas. Planea particionar desde el principio, aunque empieces con pocos nodos.
+
+**¿Cuántos caracteres necesita el código?** Con un alfabeto base62 (`0-9`, `a-z`, `A-Z`), cada carácter aporta log₂(62) ≈ 5,95 bits.
+
+- 6 caracteres: 62⁶ ≈ **56.800 millones** de códigos. Alcanza para 12.000 millones de registros si los asignas sin desperdicio (con un contador).
+- 7 caracteres: 62⁷ ≈ **3,5 billones**. Con 12.000 millones ocupados, el espacio está lleno al 0,34 %: si generas códigos al azar, solo uno de cada ~290 intentos choca.
+
+**Caché.** Las lecturas siguen una ley de potencias: pocos links concentran casi todos los clics. Si mantienes en memoria los 50 millones de links más calientes a ~500 bytes cada uno, son unos 25 GB: cabe en un puñado de nodos de Redis con réplica.
+
+## Entidades y API
+
+Dos entidades bastan: **Link** (código, URL larga, dueño, fechas) y, si hay analítica, **Clic** (código, timestamp, país, referer, dispositivo).
+
+```http
+POST /v1/links
+Authorization: Bearer <api-key>
+Content-Type: application/json
+
+{ "long_url": "https://tienda.ejemplo.com/ofertas?utm_source=mail",
+  "custom_alias": "black-friday",      // opcional
+  "expires_at": "2026-12-31T23:59:59Z" // opcional }
+
+201 Created
+{ "code": "black-friday", "short_url": "https://sho.rt/black-friday" }
+```
+
+```http
+GET /aZ3x9Qk
+
+302 Found
+Location: https://tienda.ejemplo.com/ofertas?utm_source=mail
+Cache-Control: private, max-age=90
+```
+
+```http
+GET /v1/links/aZ3x9Qk/stats?from=2026-11-01&to=2026-11-19
+Authorization: Bearer <api-key>
+
+200 OK
+{ "clicks": 18234, "unique_visitors_approx": 11020, "by_country": { "MX": 7012, "CO": 3110 } }
+```
+
+Detalles que suman puntos:
+
+- **El `POST` está limitado por tasa** por API key (mira el caso del [rate limiter](/casos/rate-limiter)). Un acortador abierto es una herramienta perfecta para spammers.
+- **Errores claros**: `409 Conflict` si el alias ya existe; `404` si el código no existe; `410 Gone` si expiró (así el cliente distingue "nunca existió" de "existió y caducó").
+- **¿Deduplicar?** Si dos personas acortan la misma URL larga, ¿reciben el mismo código? Deduplicar globalmente ahorra poco espacio y filtra información (sabrías que alguien más acortó esa URL). Lo normal es deduplicar, si acaso, **por usuario**.
+
+## Modelo de datos
+
+El patrón de acceso dominante es una búsqueda puntual por clave: `código → URL larga`. Eso pide un almacén clave-valor o una tabla con clave primaria simple.
+
+```sql
+CREATE TABLE links (
+  code        VARCHAR(16) PRIMARY KEY,   -- 7 chars generados o alias personalizado
+  long_url    TEXT        NOT NULL,      -- hasta ~2 KB en la práctica
+  owner_id    BIGINT,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  expires_at  TIMESTAMPTZ
+);
+CREATE INDEX links_owner ON links (owner_id, created_at DESC);  -- "mis links"
+```
+
+**¿Qué base de datos?** Hay dos respuestas defendibles:
+
+- **Un almacén clave-valor distribuido** (DynamoDB, Cassandra, ScyllaDB). Particiona solo por la clave, escala horizontalmente sin esfuerzo y el `get` por clave es exactamente su punto fuerte. El índice secundario por dueño es menos cómodo, pero es un acceso raro.
+- **Postgres particionado** (por hash del código). Más flexible para consultas administrativas y con transacciones para los alias; exige operar el [sharding](/system-design/replicacion-y-sharding) tú mismo.
+
+Un detalle sutil: si tus códigos salen de un **contador secuencial** y la base particiona por **rango**, todos los códigos nuevos caen en la misma partición (un *hot spot* de escritura). Con particionado por **hash**, o con códigos que no son secuenciales, el problema desaparece.
+
+## Diseño de alto nivel
+
+Separa la ruta de escritura de la de lectura: tienen cargas, requisitos de disponibilidad y escalado muy distintos.
+
+<FlowDiagram
+  caption="Arquitectura del acortador. Recorre los pasos para ver la creación, la redirección con y sin caché, y la analítica asíncrona."
+  nodes={[
+    { id: 'u', label: 'Cliente', kind: 'client', x: 0, y: 1.5 },
+    { id: 'lb', label: 'Load balancer', kind: 'lb', x: 1, y: 1.5 },
+    { id: 'w', label: 'Escritura', kind: 'service', x: 2, y: 0.5, sub: 'POST /links' },
+    { id: 'r', label: 'Redirección', kind: 'service', x: 2, y: 2.5, sub: 'GET /:code' },
+    { id: 'k', label: 'Rangos de IDs', kind: 'layers', x: 3, y: 0, sub: 'bloques de 10.000' },
+    { id: 'db', label: 'Base KV', kind: 'db', x: 4, y: 1.5, sub: 'particionada' },
+    { id: 'c', label: 'Redis', kind: 'cache', x: 3, y: 2, sub: 'cache-aside' },
+    { id: 'q', label: 'Kafka', kind: 'stream', x: 3, y: 3.2, sub: 'eventos de clic' },
+    { id: 'a', label: 'Analítica', kind: 'monitor', x: 4, y: 3.2, sub: 'Flink + OLAP' },
+  ]}
+  edges={[
+    { from: 'u', to: 'lb' },
+    { from: 'lb', to: 'w' },
+    { from: 'lb', to: 'r' },
+    { from: 'w', to: 'k', label: 'pide bloque' },
+    { from: 'w', to: 'db' },
+    { from: 'r', to: 'c' },
+    { from: 'r', to: 'db', dashed: true },
+    { from: 'r', to: 'q', dashed: true },
+    { from: 'q', to: 'a' },
+  ]}
+  steps={[
+    {
+      title: 'Crear un link',
+      body: <>El cliente envía <code>POST /v1/links</code>. El servicio de escritura valida la URL (formato, lista de bloqueo de dominios maliciosos) y aplica el límite de tasa.</>,
+      active: ['u', 'lb', 'w'],
+      flow: ['u-lb', 'lb-w'],
+    },
+    {
+      title: 'Obtener un ID sin coordinar',
+      body: <>Cada instancia tiene en memoria un bloque de IDs (por ejemplo, del 4.810.000 al 4.819.999) que pidió al asignador. Toma el siguiente, lo pasa a base62 y obtiene el código. Solo vuelve al asignador cuando agota el bloque: una llamada cada 10.000 links.</>,
+      active: ['w', 'k'],
+      flow: ['w-k'],
+    },
+    {
+      title: 'Persistir',
+      body: <>Escribe <code>code → long_url</code> en la base KV. Responde <code>201</code> con la URL corta. Como el ID es único por construcción, no hace falta leer antes de escribir.</>,
+      active: ['w', 'db'],
+      flow: ['w-db'],
+    },
+    {
+      title: 'Redirección: cache hit',
+      body: <>Alguien abre <code>sho.rt/aZ3x9Qk</code>. El servicio de redirección consulta Redis con <code>GET link:aZ3x9Qk</code>. En un sistema sano, más del 90 % de las lecturas termina aquí, en un par de milisegundos.</>,
+      active: ['u', 'lb', 'r', 'c'],
+      flow: ['u-lb', 'lb-r', 'r-c'],
+    },
+    {
+      title: 'Cache miss',
+      body: <>Si no está en Redis, lee de la base, guarda el resultado en caché con un TTL (también los "no existe", para que un escaneo no golpee la base) y responde <code>302</code> con el header <code>Location</code>.</>,
+      active: ['r', 'db', 'c'],
+      flow: ['r-db', 'r-c'],
+    },
+    {
+      title: 'Analítica fuera de la ruta crítica',
+      body: <>El servicio publica un evento de clic en Kafka sin esperar confirmación (o con un buffer local) y responde. Un job de streaming agrega por código y minuto y escribe en una base analítica. Si Kafka está lento, la redirección no lo nota.</>,
+      active: ['r', 'q', 'a'],
+      flow: ['r-q', 'q-a'],
+    },
+  ]}
+/>
+
+Fíjate en que la ruta de lectura no toca el asignador de IDs ni la ruta de escritura. Puedes escalar los servicios de redirección a cientos de instancias, ponerlos en varias regiones y, si el servicio de escritura cae, los links existentes siguen funcionando. Esa separación es la primera idea que un entrevistador quiere ver.
+
+## Profundizaciones
+
+### 1. Generar el código: cuatro opciones
+
+Aquí se decide la entrevista. Hay cuatro familias de soluciones y cada una tiene un costo distinto.
+
+**Opción A: hash de la URL.** Calcula SHA-256 de la URL larga, toma los primeros 41 bits (2⁴¹ ≈ 2,2 billones, menos que 62⁷) y codifícalos en base62: caben en 7 caracteres. Ventaja: la misma URL siempre produce el mismo código, así que deduplicas gratis. Problema: **truncar un hash produce colisiones**. Tienes que leer antes de escribir para comprobar que el código está libre y, si choca, volver a hashear con una sal. Además, el código es determinista: cualquiera que conozca la URL puede calcular su link corto.
+
+**Opción B: aleatorio con escritura condicional.** Genera 7 caracteres al azar con un generador criptográfico e inserta con una condición de "solo si no existe" (`INSERT … ON CONFLICT DO NOTHING` en Postgres, `attribute_not_exists(code)` en DynamoDB). Si choca, reintentas. Con el espacio al 0,34 % de ocupación, el reintento es rarísimo. Ventaja: cero coordinación y códigos imposibles de adivinar. Costo: la probabilidad de choque crece con la ocupación, y necesitas que la base soporte la escritura condicional.
+
+**Opción C: contador + base62.** Un contador global nunca repite, así que el código es único por construcción y lo más corto posible. El problema evidente es que un contador central es un punto único de falla y de contención. La solución clásica es **asignar rangos**: cada servidor pide un bloque de 10.000 IDs al asignador (un `INCRBY` en Redis, una secuencia de base de datos o un nodo en ZooKeeper) y los consume localmente. Si un servidor muere, se pierden los IDs de su bloque: no importa, sobran.
+
+**Opción D: servicio de generación de claves (KGS).** Un proceso genera por adelantado claves aleatorias únicas y las guarda en una tabla de "claves libres". Los servidores toman lotes y los marcan como usados. Es la opción B con el chequeo de colisiones hecho fuera de línea. Costo: otro servicio que operar, y cuidado con la concurrencia (dos servidores no pueden tomar la misma clave; usa `SELECT … FOR UPDATE SKIP LOCKED` o reparte rangos de la tabla por servidor).
+
+<Base62Encoder />
+
+<Details summary="Profundizar: el contador por rangos y base62, en Java">
+
+Así se ve la opción C dentro de una instancia del servicio de escritura. El `synchronized` protege el bloque local entre hilos; la llamada al asignador ocurre una vez cada 10.000 links, así que mantener el lock durante esa llamada es aceptable. Si no lo fuera, se puede pedir el bloque siguiente en segundo plano antes de agotar el actual.
+
+```java title="IdBlockAllocator.java"
+/** Codifica un ID numérico en base62 (0-9, a-z, A-Z). */
+final class Base62 {
+    private static final char[] ALPHABET =
+        "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ".toCharArray();
+
+    static String encode(long id) {
+        if (id == 0) return "0";
+        StringBuilder sb = new StringBuilder();
+        while (id > 0) {
+            sb.append(ALPHABET[(int) (id % 62)]);
+            id /= 62;
+        }
+        return sb.reverse().toString(); // los dígitos salen al revés
+    }
+}
+
+/** Cada instancia pide bloques de IDs al asignador y los consume en memoria. */
+final class IdBlockAllocator {
+    /** Por ejemplo, INCRBY en Redis o una secuencia de la base: devuelve el total nuevo. */
+    interface Allocator {
+        long incrBy(long n);
+    }
+
+    private static final long BLOCK = 10_000;
+    private final Allocator allocator;
+    private long next = 0; // [next, end) es el bloque actual
+    private long end = 0;
+
+    IdBlockAllocator(Allocator allocator) {
+        this.allocator = allocator;
+    }
+
+    synchronized String nextCode() {
+        if (next == end) {               // una llamada de red cada 10.000 links
+            end = allocator.incrBy(BLOCK);
+            next = end - BLOCK;
+        }
+        return Base62.encode(next++);
+    }
+}
+```
+
+</Details>
+
+<Compare>
+<Option title="Hash truncado" verdict="Útil si quieres deduplicar">
+
+Determinista, deduplica solo. Pero colisiona al truncar, obliga a leer antes de escribir y el código es predecible a partir de la URL.
+
+</Option>
+<Option title="Aleatorio" verdict="Simple y no enumerable">
+
+Sin coordinación, códigos impredecibles. Exige escritura condicional y reintentos; con 7 caracteres el choque es raro durante años.
+
+</Option>
+<Option title="Contador + rangos" verdict="La respuesta más común">
+
+Único por construcción, códigos mínimos, una llamada al asignador cada miles de links. Los códigos son secuenciales: hay que ofuscarlos si importa la enumeración.
+
+</Option>
+<Option title="KGS" verdict="Bueno, pero más piezas">
+
+Mueve el chequeo de colisiones fuera de línea. Agrega un servicio con estado que operar y un problema de concurrencia propio.
+
+</Option>
+</Compare>
+
+**¿Y si los códigos secuenciales son un problema?** Con un contador, `aZ3x9Qk` y `aZ3x9Ql` son links vecinos: un atacante puede recorrerlos y encontrar documentos compartidos "en privado". La solución es aplicar una **permutación biyectiva** al ID antes de codificarlo: por ejemplo, multiplicar por un número grande coprimo con 62⁷ y tomar el módulo, o una pequeña red de Feistel. La función sigue siendo uno a uno (no hay colisiones), pero IDs consecutivos producen códigos que parecen aleatorios.
+
+<Sidenote>¿Por qué no usar un ID tipo Snowflake de 64 bits? Porque en base62 ocupa 11 caracteres. Para un acortador, la longitud es el producto: un contador compacto gana.</Sidenote>
+
+<Quiz
+  question="Tu servicio de escritura corre en 40 instancias y usa un contador central en Redis con INCR por cada link. ¿Cuál es la mejor mejora?"
+  options={[
+    { text: 'Reemplazar Redis por una base SQL con una secuencia, que es más durable.', why: 'Sigue siendo una llamada de red a un punto central por cada link; cambias de tecnología, no de diseño.' },
+    { text: 'Que cada instancia pida bloques de miles de IDs con INCRBY y los consuma en memoria.', correct: true, why: 'Reduce las llamadas al asignador en tres o cuatro órdenes de magnitud y el sistema tolera que el asignador esté caído mientras queden IDs en el bloque. Perder un bloque al reiniciar es irrelevante.' },
+    { text: 'Generar el ID con el timestamp en milisegundos de cada instancia.', why: 'Dos instancias pueden generar el mismo milisegundo; sin un componente de máquina y secuencia, colisionan.' },
+    { text: 'Usar UUID v4 y codificarlo en base62.', why: 'Es único sin coordinación, pero 122 bits aleatorios son 21 caracteres en base62: ya no es un link corto.' },
+  ]}
+/>
+
+### 2. ¿301 o 302? Una decisión de producto disfrazada de detalle técnico
+
+Ambos códigos redirigen. La diferencia está en el **caché del navegador**:
+
+- **301 Moved Permanently** es cacheable por defecto según HTTP (RFC 9110). El navegador puede recordar la redirección y, la próxima vez, ir directo al destino sin pasar por tu servidor. Ahorras carga y latencia.
+- **302 Found** (o **307**, que además conserva el método) no se cachea salvo que lo indiques con headers. Cada clic pasa por tu servidor.
+
+¿Qué pierdes con 301? **Visibilidad y control.** Los clics repetidos del mismo navegador no llegan a ti, así que la analítica subestima. Y si descubres que un link apunta a phishing, no puedes desactivarlo para quien ya lo tiene en caché. Tampoco puedes hacer expirar el link de forma confiable.
+
+La respuesta madura: **302 con un `Cache-Control` corto** (por ejemplo, `private, max-age=90`). Tienes control y analítica, y aun así absorbes los dobles clics y recargas. Si el producto no tiene analítica ni moderación (un acortador interno, por ejemplo), un 301 es razonable.
+
+<Quiz
+  question="El equipo de confianza y seguridad necesita poder desactivar en minutos un link que distribuye malware. ¿Qué implica para la redirección?"
+  options={[
+    { text: 'Usar 301, porque el navegador respeta la expiración del link.', why: 'Un 301 cacheado puede no volver a consultar tu servidor; el navegador seguiría yendo al destino malicioso.' },
+    { text: 'Usar 302 o 307 con un max-age corto, e invalidar la entrada en Redis al desactivar.', correct: true, why: 'Cada clic (o cada pocos minutos, como mucho) vuelve a tu servidor, que ya no encuentra el link en caché ni en la base y responde 410 o una página de advertencia.' },
+    { text: 'Da igual el código; basta con borrar la fila de la base de datos.', why: 'Si el navegador o Redis tienen la redirección cacheada, borrar la fila no tiene efecto inmediato.' },
+  ]}
+/>
+
+### 3. La ruta de lectura es un problema de caché
+
+Con 20.000 lecturas por segundo en pico y un hot set de 25 GB, el diseño es *cache-aside* clásico (repásalo en [caching](/system-design/caching)):
+
+1. Busca en Redis. Si está, responde.
+2. Si no, lee de la base, guarda en Redis con TTL (por ejemplo, 24 h con una variación aleatoria para que no expiren todos a la vez) y responde.
+
+Tres refinamientos separan una respuesta buena de una excelente:
+
+- **Caché negativo.** Guarda también los códigos inexistentes (con un TTL corto). Sin esto, un bot que prueba códigos al azar convierte cada intento en una lectura a la base.
+- **Claves calientes.** Un link viral (un tuit de una celebridad) puede recibir decenas de miles de clics por segundo en una sola clave de Redis, que vive en un solo nodo. Mitigaciones: un caché **en el proceso** (L1) de cada instancia con TTL de segundos, o réplicas de lectura de Redis. Con 200 instancias y un L1 de 5 segundos, Redis ve como mucho 40 lecturas por segundo de esa clave.
+- **El borde.** Puedes resolver redirecciones en el CDN o en funciones *edge* con un almacén replicado globalmente. La latencia baja a lo que tarda el PoP más cercano. El costo: el origen deja de ver los clics, así que la analítica tiene que salir de los logs del borde.
+
+### 4. Analítica sin frenar la redirección
+
+La regla: **la redirección nunca espera a la analítica**. El servicio emite un evento (`code`, timestamp, IP truncada, user-agent, referer) a un buffer local que se vacía hacia Kafka, y responde de inmediato. Si Kafka tiene un mal día, pierdes algunos eventos; no pierdes redirecciones.
+
+Del lado del consumo, un job de streaming (Flink, Kafka Streams) agrega por `(code, minuto)` y escribe en una base analítica columnar (ClickHouse, Druid). Para visitantes únicos no guardes conjuntos de IPs: usa **HyperLogLog**, que en Redis estima cardinalidades con un error estándar de 0,81 % usando como máximo 12 KB por clave, sin importar si son mil o mil millones de visitantes.
+
+<Details summary="Profundizar: alias personalizados y expiración">
+
+**Alias.** Viven en el mismo espacio de claves que los códigos generados, así que un alias puede chocar con un código futuro. Dos salidas: reservar un formato distinto (los generados tienen exactamente 7 caracteres; los alias, otra longitud o un guion obligatorio) o insertar siempre con escritura condicional y devolver `409` al perdedor. Mantén una lista de palabras reservadas (`api`, `login`, `admin`).
+
+**Expiración.** Comprueba `expires_at` al leer (responde `410`) y limpia en lote con un job nocturno. **No recicles códigos expirados**: los links viejos siguen impresos en carteles, PDFs y correos, y reciclarlos mandaría a esas personas a un destino que nadie eligió.
+
+</Details>
+
+## Cuellos de botella y trade-offs
+
+| Riesgo | Síntoma | Mitigación |
+|---|---|---|
+| Asignador de IDs central | Latencia o caída al crear links | Bloques de IDs por instancia; asignador replicado (Redis con réplica, ZooKeeper, secuencia en una base con failover) |
+| Clave caliente | Un nodo de Redis saturado por un link viral | Caché L1 en proceso, réplicas de lectura, resolución en el borde |
+| Escaneo de códigos | Picos de lecturas a la base con 404 | Caché negativo, rate limiting por IP, códigos no secuenciales |
+| Abuso (phishing, malware) | Reportes, dominio bloqueado por navegadores | Escaneo asíncrono contra listas como Google Safe Browsing, 302 para poder desactivar, límites de creación |
+| Multi-región | Latencia alta lejos de la región principal | Lecturas desde réplicas regionales; cada región con su propio rango de IDs para que nunca choquen |
+
+El trade-off de fondo de todo el caso: **mover trabajo fuera de la ruta crítica**. Generar IDs en bloques, agregar clics de forma asíncrona y limpiar expirados en lote son la misma idea aplicada tres veces.
+
+## Qué espera el entrevistador
+
+<Callout type="interview" title="Por nivel">
+
+**Mid-level.** Requisitos claros, API correcta, estimaciones razonables, base62 sobre un contador o aleatorio con chequeo, una caché delante de la base. Que el diseño funcione de punta a punta.
+
+**Senior.** Comparar las opciones de generación con sus costos (colisiones, coordinación, enumeración), calcular el espacio de códigos, separar lectura y escritura, justificar 301 vs 302, caché negativo y claves calientes, analítica asíncrona. Detectar los cuellos de botella sin que te los señalen.
+
+**Staff.** Llevar la conversación hacia la operación y el producto: multi-región y asignación de rangos por región, abuso y moderación, qué pasa cuando el asignador cae, costo de la infraestructura, privacidad de los datos de clics (IPs, retención), y cómo evolucionaría el sistema si mañana piden editar destinos o links con contraseña.
+
+</Callout>
+
+<Quiz
+  question="Generas códigos aleatorios de 6 caracteres base62 y ya guardaste 5.000 millones de links. ¿Qué pasa con el siguiente link?"
+  options={[
+    { text: 'La probabilidad de chocar es despreciable, como con un UUID.', why: '62⁶ es ~56.800 millones; con 5.000 millones ocupados ya usaste casi el 9 % del espacio.' },
+    { text: 'Cada intento choca con probabilidad cercana al 9 %, así que los reintentos se vuelven frecuentes y la latencia de escritura crece.', correct: true, why: 'La probabilidad de que un código nuevo al azar esté ocupado es ocupados ÷ total ≈ 5.000 M ÷ 56.800 M. Pasar a 7 caracteres la baja a ~0,14 %.' },
+    { text: 'Es imposible generar más links: el espacio está lleno.', why: 'Queda más del 90 % libre; el problema es la tasa de reintentos, no el agotamiento.' },
+  ]}
+/>
+
+<Takeaways>
+
+- La escritura es poca; el reto es la **unicidad sin coordinación**. Bloques de IDs por instancia o códigos aleatorios con escritura condicional resuelven lo mismo con costos distintos.
+- Haz la cuenta del espacio: 62⁶ ≈ 56.800 millones, 62⁷ ≈ 3,5 billones. Con códigos aleatorios importa la **ocupación**, no solo el total.
+- La ruta de lectura es un diseño de **caché**: cache-aside, caché negativo, L1 para claves calientes y, si hace falta, el borde.
+- **301 ahorra carga, 302 conserva el control.** Analítica, moderación y expiración piden 302 con un `max-age` corto.
+- La analítica va **fuera de la ruta crítica**: evento asíncrono, agregación en streaming, HyperLogLog para únicos.
+- Los códigos secuenciales son enumerables: aplica una permutación biyectiva si los links pueden ser privados.
+
+</Takeaways>
+
+## Fuentes y lecturas
+
+- Alex Xu, *System Design Interview – An Insider's Guide*, vol. 1, cap. 8: [Design a URL Shortener](https://bytebytego.com/courses/system-design-interview/design-a-url-shortener).
+- Hello Interview, [Design a URL Shortener Like Bit.ly](https://www.hellointerview.com/learn/system-design/problem-breakdowns/bitly).
+- Donne Martin, [system-design-primer: Pastebin / Bit.ly](https://github.com/donnemartin/system-design-primer/blob/master/solutions/system_design/pastebin/README.md).
+- IETF, [RFC 9110 – HTTP Semantics](https://datatracker.ietf.org/doc/html/rfc9110) (secciones 15.4.2 y 15.4.3 sobre 301 y 302, y 15.4.8 sobre 307).
+- Redis, [HyperLogLog](https://redis.io/docs/latest/develop/data-types/probabilistic/hyperloglogs/) (error estándar de 0,81 % y 12 KB por clave).
+- Instagram Engineering, [Sharding & IDs at Instagram](https://instagram-engineering.com/sharding-ids-at-instagram-1cf5a71e5a5c): otra forma de generar IDs únicos sin un coordinador central.
+- High Scalability, [Bitly: Lessons Learned Building a Distributed System that Handles 6 Billion Clicks a Month](https://highscalability.com/bitly-lessons-learned-building-a-distributed-system-that-han/).

@@ -1,0 +1,308 @@
+import { ModuleBoundaries } from '../../components/widgets/arquitectura/ModuleBoundaries'
+
+"Monolito" se volvió casi un insulto, y es injusto. Un monolito es simplemente un sistema que se despliega como una sola unidad. Eso dice muy poco sobre su calidad interna: hay monolitos impecables y hay microservicios que son un desastre. Lo que la gente odia no es el monolito, es la **bola de barro** (*big ball of mud*): un sistema sin fronteras internas donde todo depende de todo.
+
+Este tema recorre las dos formas clásicas de organizar un monolito por dentro, la arquitectura en capas y el monolito modular, y por qué la segunda es hoy el punto de partida que recomiendan desde Martin Fowler hasta Sam Newman. Lo más importante que te vas a llevar no es un diagrama, sino una idea: **las fronteras que no se verifican automáticamente se erosionan**.
+
+## La arquitectura en capas
+
+Es el estilo más común del mundo, en parte porque muchos frameworks lo traen de fábrica. El código se organiza en capas horizontales, cada una con una responsabilidad técnica:
+
+- **Presentación**: controladores HTTP, vistas, serialización.
+- **Aplicación o negocio**: servicios que implementan los casos de uso y las reglas.
+- **Persistencia**: repositorios, ORM, consultas SQL.
+- **Base de datos**: el almacenamiento en sí.
+
+La regla central: cada capa solo habla con la que tiene inmediatamente abajo. Recorre una petición:
+
+<FlowDiagram
+  caption="Una petición atravesando un monolito en capas cerradas. Cada capa solo conoce a la de abajo."
+  nodes={[
+    { id: 'c', label: 'Cliente', kind: 'client', x: 0, y: 0, mx: 0, my: 0 },
+    { id: 'p', label: 'Presentación', kind: 'gateway', x: 1, y: 0, mx: 1, my: 0, sub: 'OrderController' },
+    { id: 'b', label: 'Negocio', kind: 'service', x: 2, y: 0, mx: 1, my: 1, sub: 'OrderService' },
+    { id: 'r', label: 'Persistencia', kind: 'layers', x: 3, y: 0, mx: 1, my: 2, sub: 'OrderRepository' },
+    { id: 'db', label: 'Base de datos', kind: 'db', x: 4, y: 0, mx: 1, my: 3 },
+  ]}
+  edges={[
+    { from: 'c', to: 'p', label: 'POST /orders' },
+    { from: 'p', to: 'b' },
+    { from: 'b', to: 'r' },
+    { from: 'r', to: 'db' },
+  ]}
+  steps={[
+    { title: 'Entra la petición', body: 'El controlador valida el formato del JSON y lo convierte en un DTO. No sabe nada de reglas de negocio.', active: ['c', 'p'], flow: ['c-p'] },
+    { title: 'Reglas de negocio', body: 'OrderService aplica las reglas: hay stock, el cliente no está bloqueado, el total supera el mínimo. Aquí debería vivir toda la lógica.', active: ['b'], flow: ['p-b'] },
+    { title: 'Persistencia', body: 'El repositorio traduce el pedido a filas y ejecuta el INSERT dentro de una transacción.', active: ['r', 'db'], flow: ['b-r', 'r-db'] },
+    { title: 'Capas cerradas', body: 'El controlador nunca llama al repositorio directamente. Esa es la "capa de aislamiento": puedes cambiar cómo se persiste sin tocar la presentación.', active: ['p', 'b', 'r'] },
+  ]}
+/>
+
+En código, un endpoint típico se ve así:
+
+```ts title="src/orders/order.service.ts"
+export class OrderService {
+  constructor(
+    private readonly orders: OrderRepository, // capa de persistencia
+    private readonly products: ProductRepository,
+  ) {}
+
+  async placeOrder(dto: PlaceOrderDto): Promise<OrderDto> {
+    const items = await this.products.findByIds(dto.items.map((i) => i.productId))
+    if (items.length !== dto.items.length) throw new NotFoundError('Producto inexistente')
+
+    const total = dto.items.reduce((sum, i) => {
+      const p = items.find((x) => x.id === i.productId)!
+      return sum + p.priceCents * i.quantity
+    }, 0)
+    if (total < 1_000) throw new ValidationError('El pedido mínimo es $10')
+
+    const row = await this.orders.insert({ customerId: dto.customerId, totalCents: total, status: 'PLACED' })
+    return toDto(row)
+  }
+}
+```
+
+### Capas cerradas y abiertas
+
+Una capa **cerrada** obliga a pasar por ella. Una capa **abierta** se puede saltar: por ejemplo, una capa de "servicios compartidos" (logging, fechas) que cualquiera puede usar. Las capas abiertas son útiles, pero cada una que abres reduce el aislamiento. Si la presentación empieza a llamar al repositorio "porque solo es una lectura", ya no puedes cambiar la persistencia sin revisar los controladores.
+
+### El antipatrón del sumidero
+
+Mark Richards describe el *architecture sinkhole*: peticiones que atraviesan todas las capas sin que ninguna haga nada útil. El controlador llama al servicio, que llama al repositorio, que hace un `SELECT`. Tres archivos para una consulta. Algo de esto es inevitable; su regla práctica es preocuparse cuando la gran mayoría de las peticiones son de paso. En ese caso, probablemente tu dominio es un CRUD y una arquitectura más liviana (o capas abiertas para lecturas) te va a servir mejor.
+
+## Dónde duelen las capas
+
+Las capas resuelven bien un problema: separar responsabilidades técnicas. Pero crean otros tres, y los vas a sentir apenas el sistema crece.
+
+**Un cambio de negocio toca todas las capas.** Agregar cupones de descuento significa tocar el controlador, el servicio, el repositorio y el esquema. En un equipo pequeño no importa. Con varios equipos, cada funcionalidad cruza el código de todos.
+
+**El dominio depende de la base de datos.** Fíjate en la dirección de las flechas: negocio → persistencia → base de datos. La lógica más importante del sistema depende de la más volátil. Por eso es difícil probar `OrderService` sin levantar una base, y por eso los modelos tienden a ser filas de tabla con *getters* y *setters*: el **modelo de dominio anémico** que Fowler describe como un antipatrón, donde toda la lógica vive en servicios procedurales. Hexagonal y Clean Architecture nacen exactamente para invertir esa flecha.
+
+**La partición es técnica, no de negocio.** Richards y Ford distinguen dos formas de partir un sistema en el primer nivel: por **capa técnica** o por **dominio**. Compara las carpetas:
+
+<Compare>
+<Option title="Partición técnica" verdict="Lo que te da el framework">
+
+```text
+src/
+  controllers/
+    order.controller.ts
+    payment.controller.ts
+    product.controller.ts
+  services/
+    order.service.ts
+    payment.service.ts
+  repositories/
+    order.repository.ts
+    payment.repository.ts
+  models/
+```
+
+Para entender "pagos" abres cuatro carpetas. Nada impide que `order.service` use `payment.repository`.
+
+</Option>
+<Option title="Partición por dominio" verdict="Lo que te conviene al crecer">
+
+```text
+src/modules/
+  orders/
+    api/        ← lo único público
+    domain/
+    infra/
+  payments/
+    api/
+    domain/
+    infra/
+  catalog/
+    ...
+```
+
+Cada módulo es una capacidad de negocio con sus propias capas adentro. La frontera entre módulos es explícita.
+
+</Option>
+</Compare>
+
+La ley de Conway da la razón de fondo: si tus equipos se organizan por capacidad de negocio (y deberían), el código también debería hacerlo. Las capas no desaparecen: se mueven **adentro** de cada módulo.
+
+<Quiz
+  question="En tu monolito en capas, el 85 % de los endpoints son: controlador → servicio que solo delega → repositorio → SELECT. ¿Qué indica?"
+  options={[
+    { text: 'Que la arquitectura en capas está bien aplicada, porque todas las capas se respetan.', why: 'Respetar las capas no es el objetivo. Si casi ninguna capa agrega valor, estás pagando indirección sin beneficio.' },
+    { text: 'El antipatrón del sumidero: la mayoría de las peticiones atraviesan capas que no hacen nada. Considera capas abiertas para lecturas o un estilo más liviano.', correct: true, why: 'Exacto. Es la señal de que gran parte del sistema es CRUD. Puedes abrir la capa de negocio para consultas simples (o usar un modelo de lectura separado) y reservar la ceremonia para donde hay reglas.' },
+    { text: 'Que hay que pasar a microservicios para reducir capas.', why: 'Los microservicios agregan red y operación; no resuelven capas que no aportan. Es un problema de estructura interna.' },
+    { text: 'Que falta una capa de fachada entre controlador y servicio.', why: 'Agregar otra capa de paso empeora exactamente el problema.' },
+  ]}
+/>
+
+## El monolito modular
+
+Un **monolito modular** es un sistema que se despliega como una unidad pero está dividido por dentro en módulos con fronteras fuertes, cada uno alineado a una capacidad de negocio. Kamil Grzybek, que mantiene uno de los ejemplos de referencia en GitHub, lo resume en tres propiedades: cada módulo es **independiente e intercambiable**, tiene **todo lo necesario** para cumplir su función (sus capas, su lógica, sus datos) y expone una **interfaz bien definida** hacia los demás.
+
+En la práctica, eso se traduce en cuatro reglas:
+
+1. **Una API pública por módulo.** Un archivo o paquete (`modules/payments/index.ts`) que exporta lo que los demás pueden usar. Todo lo demás es privado.
+2. **Datos propios.** Cada módulo es dueño de sus tablas, idealmente en un esquema separado de la misma base. Ningún módulo lee ni escribe tablas de otro.
+3. **Comunicación explícita.** Por llamadas a la API pública (síncronas, en proceso) o por eventos de dominio publicados en un bus en memoria.
+4. **Dependencias sin ciclos.** Si Pedidos depende de Catálogo, Catálogo no puede depender de Pedidos. Cuando lo necesita, invierte la dependencia con un evento.
+
+<FlowDiagram
+  caption="Un monolito modular: un solo proceso y una sola base, pero cada módulo con API pública, internals privados y su propio esquema."
+  nodes={[
+    { id: 'http', label: 'HTTP / jobs', kind: 'gateway', x: 0, y: 1, mx: 0, my: 0 },
+    { id: 'orders', label: 'Pedidos', kind: 'layers', x: 1.5, y: 0, mx: 1, my: 1, sub: 'api · domain · infra' },
+    { id: 'pay', label: 'Pagos', kind: 'payment', x: 1.5, y: 1, mx: 0, my: 2, sub: 'api · domain · infra' },
+    { id: 'ship', label: 'Envíos', kind: 'layers', x: 1.5, y: 2, mx: 1, my: 3, sub: 'api · domain · infra' },
+    { id: 'bus', label: 'Bus en memoria', kind: 'stream', x: 3, y: 1, mx: 0, my: 4, sub: 'eventos de dominio' },
+    { id: 'db', label: 'PostgreSQL', kind: 'db', x: 4, y: 1, mx: 1, my: 5, sub: 'orders · payments · shipping' },
+  ]}
+  edges={[
+    { from: 'http', to: 'orders' },
+    { from: 'orders', to: 'pay', label: 'payments.charge()' },
+    { from: 'orders', to: 'bus', label: 'OrderPlaced' },
+    { from: 'bus', to: 'ship' },
+    { from: 'orders', to: 'db', dashed: true },
+    { from: 'pay', to: 'db', dashed: true },
+    { from: 'ship', to: 'db', dashed: true },
+  ]}
+  groups={[{ label: 'Un solo desplegable', x1: 1.5, y1: 0, x2: 3, y2: 2 }]}
+  steps={[
+    { title: 'Un proceso, varios módulos', body: 'La petición entra al módulo de Pedidos. Para el sistema operativo es un solo proceso; para el código, son tres módulos con fronteras.', active: ['http', 'orders'], flow: ['http-orders'] },
+    { title: 'Llamada síncrona por API pública', body: <>Pedidos cobra llamando a <code>payments.charge()</code>, exportado desde <code>modules/payments/index.ts</code>. Nunca importa archivos internos de Pagos.</>, active: ['orders', 'pay'], flow: ['orders-pay'] },
+    { title: 'Evento en proceso', body: 'Pedidos publica OrderPlaced en un bus en memoria. Envíos se suscribe. Pedidos no sabe que Envíos existe: la dependencia apunta de Envíos hacia el contrato del evento.', active: ['orders', 'bus', 'ship'], flow: ['orders-bus', 'bus-ship'] },
+    { title: 'Un esquema por módulo', body: 'Una sola base de datos, pero cada módulo solo toca su esquema. Esto es lo que más adelante permite extraer un módulo a servicio sin desenredar JOINs.', active: ['db', 'orders', 'pay', 'ship'], flow: ['orders-db', 'pay-db', 'ship-db'] },
+  ]}
+/>
+
+### Por qué es el punto de partida sensato
+
+Martin Fowler, en *MonolithFirst* (2015), observó que casi todas las historias exitosas de microservicios empezaron con un monolito que creció demasiado, y que los sistemas que empezaron como microservicios desde cero solían terminar en problemas. La razón principal: **las fronteras correctas son difíciles de acertar al principio**. En un monolito, mover una responsabilidad de un módulo a otro es un refactor. Entre servicios, es una migración de datos, de contratos y de equipos.
+
+El monolito modular te da casi todos los beneficios de diseño de los microservicios (fronteras, autonomía de código, propiedad clara) sin pagar el costo de la distribución: no hay red entre módulos, las transacciones son locales, hay un solo pipeline y una sola cosa que monitorear. Y deja la puerta abierta: cuando un módulo de verdad necesita escalar o desplegarse aparte, ya tiene una API definida y datos propios.
+
+<Callout type="example" title="Shopify: un monolito de millones de líneas">
+
+Shopify documentó en su blog de ingeniería cómo convirtió su monolito Rails en un monolito modular. En 2020 reportaban más de 2,8 millones de líneas de Ruby y unos 500.000 commits, organizados en 37 componentes. Consideraron microservicios y los descartaron por la complejidad de un sistema distribuido. Dos lecciones de ese post valen oro: **encapsular sin simplificar el grafo de dependencias solo agrega indirección**, y conviene agrupar por **cohesión funcional** (código que realiza una tarea) en lugar de por tabla de base de datos. Para verificar fronteras crearon Packwerk, una herramienta de análisis estático que luego publicaron como código abierto.
+
+</Callout>
+
+## Hacer cumplir las fronteras
+
+Aquí está la diferencia entre un monolito modular y un monolito con carpetas bonitas. Una frontera que solo existe en un diagrama dura hasta el primer viernes con prisa. Prueba fusionar los PRs de abajo con y sin reglas en CI.
+
+<ModuleBoundaries />
+
+Cada PR del ejemplo tenía una justificación razonable ("solo necesito leer la dirección"). Ese es el punto: la erosión nunca viene de una mala decisión grande, sino de muchas pequeñas y comprensibles. La única defensa que escala es **automatizar la regla**.
+
+### En el código
+
+En TypeScript, la primera línea de defensa es que cada módulo exporte solo su API pública:
+
+```ts title="src/modules/payments/index.ts"
+// La única puerta de entrada al módulo de Pagos.
+export { chargeOrder, refundPayment } from './api/payments-api'
+export type { ChargeResult, PaymentId } from './api/types'
+export { PaymentCaptured, PaymentFailed } from './api/events'
+// Nada de domain/ ni infra/ se exporta.
+```
+
+Pero un `index.ts` no impide que alguien escriba `import { PaymentRow } from '../payments/infra/payment-row'`. Para eso necesitas una herramienta que falle el build. Con dependency-cruiser:
+
+```js title=".dependency-cruiser.cjs" {4-11}
+module.exports = {
+  forbidden: [
+    {
+      name: 'no-cross-module-internals',
+      comment: 'Un módulo solo puede importar el index.ts de otro módulo.',
+      severity: 'error',
+      from: { path: '^src/modules/([^/]+)/' },
+      to: {
+        path: '^src/modules/([^/]+)/.+',
+        pathNot: '^src/modules/($1/|[^/]+/index\\.ts$)',
+      },
+    },
+    {
+      name: 'no-circular',
+      severity: 'error',
+      from: {},
+      to: { circular: true },
+    },
+  ],
+}
+```
+
+La regla usa un grupo de captura: `$1` en `pathNot` se reemplaza por el módulo de origen, así que un módulo puede importar sus propios archivos y el `index.ts` de los demás, pero nada más. Se corre en CI con `npx depcruise src --config .dependency-cruiser.cjs`.
+
+Otras herramientas cumplen el mismo rol en cada ecosistema: **ArchUnit** en Java, **Spring Modulith** para aplicaciones Spring, **NetArchTest** en .NET, **Packwerk** en Ruby, `import-linter` en Python. Las verás con más detalle en el tema sobre cómo elegir una arquitectura, como ejemplos de *fitness functions*.
+
+### En la base de datos
+
+Las fronteras de código no sirven si los módulos se acoplan por las tablas. Las dos técnicas más efectivas:
+
+```sql title="migrations/0001_schemas.sql"
+-- Un esquema y un rol por módulo.
+CREATE SCHEMA orders;
+CREATE SCHEMA payments;
+
+CREATE ROLE orders_module LOGIN;
+CREATE ROLE payments_module LOGIN;
+
+GRANT USAGE ON SCHEMA orders TO orders_module;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA orders TO orders_module;
+GRANT USAGE ON SCHEMA payments TO payments_module;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA payments TO payments_module;
+-- payments_module no tiene permisos sobre el esquema orders:
+-- un JOIN entre módulos falla en desarrollo, no en la migración a servicios.
+```
+
+Con un esquema por módulo y, si quieres ser estricto, un usuario de base por módulo, el acoplamiento por datos se vuelve imposible en lugar de solo desaconsejado. Si un reporte necesita datos de varios módulos, constrúyelo con un modelo de lectura alimentado por eventos, o acepta explícitamente (y documenta en un ADR) que el módulo de reportes lee de varias fuentes.
+
+<Callout type="warn" title="El atajo más caro">
+
+El JOIN entre tablas de distintos módulos es el acoplamiento más difícil de deshacer. El código acoplado se puede refactorizar en una tarde; un reporte que depende de cinco tablas de tres módulos te obliga a rediseñar la consulta, el modelo de datos y probablemente el producto cuando quieras separar esos módulos.
+
+</Callout>
+
+<Quiz
+  question="En un monolito modular, el módulo de Envíos necesita la dirección de entrega de un pedido. ¿Cuál es la opción que preserva mejor las fronteras?"
+  options={[
+    { text: 'Hacer un SELECT a orders.orders desde el repositorio de Envíos.', why: 'Es acoplamiento por datos: Envíos queda atado al esquema interno de Pedidos y cualquier cambio de columnas lo rompe.' },
+    { text: 'Importar OrderRepository desde modules/orders/infra.', why: 'Rompe el encapsulamiento del módulo. Es el import que las reglas de CI deberían rechazar.' },
+    { text: 'Que Pedidos incluya la dirección en el evento OrderPlaced, y que Envíos guarde su propia copia de lo que necesita.', correct: true, why: 'Exacto. Envíos depende solo del contrato del evento, tiene los datos cuando los necesita y Pedidos ni siquiera sabe que Envíos existe. Si además existe una consulta puntual, una función en la API pública de Pedidos también es válida.' },
+    { text: 'Mover la dirección a una tabla compartida "common" que ambos módulos usan.', why: 'Una tabla compartida es un shared kernel implícito: dos módulos acoplados por un esquema que nadie es dueño de cambiar.' },
+  ]}
+/>
+
+## Cuándo el monolito deja de alcanzar
+
+El monolito modular no es para siempre, pero suele durar más de lo que la gente cree. Las señales legítimas para extraer un módulo a un servicio son concretas:
+
+- **Perfil de escalado distinto.** Un módulo necesita 40 réplicas y el resto 3. O necesita GPU. O tiene picos que el resto no tiene.
+- **Ritmo de despliegue distinto.** Un equipo quiere desplegar diez veces por día y el resto del monolito tiene un ciclo de pruebas de una hora.
+- **Aislamiento de fallas o de seguridad.** Un módulo procesa datos de tarjetas (PCI) y quieres reducir el alcance de la auditoría. O un módulo con fugas de memoria tumba todo.
+- **Tecnología distinta.** El módulo de recomendaciones necesita Python y sus librerías de ML.
+- **Demasiados equipos en un mismo desplegable.** Cuando el tren de despliegue coordina a muchos equipos y se vuelve el cuello de botella.
+
+Ninguna de estas señales es "el código es feo". Si el monolito es una bola de barro, partirlo en servicios te da una bola de barro distribuida. Primero modulariza, después extrae. El tema de microservicios cubre cómo hacerlo con el patrón *strangler fig*.
+
+<Takeaways>
+
+- Monolito significa una unidad de despliegue, no código desordenado; el enemigo es la bola de barro.
+- Las capas separan responsabilidades técnicas, pero hacen que el dominio dependa de la persistencia y que cada cambio de negocio cruce todo el código.
+- Parte primero por dominio (módulos por capacidad de negocio) y usa capas dentro de cada módulo.
+- Un monolito modular tiene API pública por módulo, datos propios, comunicación explícita y cero ciclos.
+- Las fronteras que no se verifican en CI se erosionan PR a PR: usa dependency-cruiser, ArchUnit, Packwerk o equivalentes, y un esquema por módulo en la base.
+- Extrae servicios por razones concretas (escalado, ritmo de despliegue, aislamiento, tecnología), nunca para arreglar código desordenado.
+
+</Takeaways>
+
+## Fuentes y lecturas
+
+- Martin Fowler, [*MonolithFirst*](https://martinfowler.com/bliki/MonolithFirst.html) (2015) y Stefan Tilkov, [*Don't start with a monolith*](https://martinfowler.com/articles/dont-start-monolith.html), el contrapunto.
+- Kirsten Westeinde, [*Deconstructing the Monolith*](https://shopify.engineering/deconstructing-monolith-designing-software-maximizes-developer-productivity) (Shopify Engineering, 2019).
+- Philip Müller, [*Under Deconstruction: The State of Shopify's Monolith*](https://shopify.engineering/shopify-monolith) (Shopify Engineering, 2020).
+- [Packwerk](https://github.com/Shopify/packwerk), la herramienta de fronteras de Shopify.
+- Kamil Grzybek, [*Modular Monolith: A Primer*](https://www.kamilgrzybek.com/blog/posts/modular-monolith-primer) y el repositorio [modular-monolith-with-ddd](https://github.com/kgrzybek/modular-monolith-with-ddd).
+- Mark Richards y Neal Ford, *Fundamentals of Software Architecture*: capítulos sobre arquitectura en capas, partición técnica vs por dominio y el antipatrón del sumidero.
+- Martin Fowler, [*Anemic Domain Model*](https://martinfowler.com/bliki/AnemicDomainModel.html).
+- [dependency-cruiser](https://github.com/sverweij/dependency-cruiser) y [ArchUnit](https://www.archunit.org/).

@@ -1,0 +1,117 @@
+.dag-btns {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.dag-stage {
+  display: grid;
+  gap: var(--s-4);
+  grid-template-columns: minmax(0, 1fr);
+}
+@media (min-width: 900px) {
+  .dag-stage {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr);
+    align-items: start;
+  }
+}
+.dag-title {
+  margin-bottom: var(--s-2);
+  font-family: var(--font-code);
+  font-size: 0.82rem;
+  color: var(--ink-2);
+}
+.dag-slots {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(20px, 1fr));
+  gap: 3px;
+}
+.dag-slot {
+  display: block;
+  aspect-ratio: 1;
+  min-height: 16px;
+  border: 1.5px dashed var(--rule-strong);
+  border-radius: 3px;
+  background: transparent;
+  transition:
+    background-color 260ms var(--ease-out),
+    border-color 260ms var(--ease-out);
+}
+.dag-slot.is-full {
+  border-style: solid;
+  border-color: color-mix(in oklab, var(--line) 70%, var(--rule-strong));
+  background: color-mix(in oklab, var(--line) 32%, var(--card));
+}
+.dag-slot.is-copied {
+  border-color: var(--warn);
+  background: color-mix(in oklab, var(--warn) 55%, var(--card));
+}
+.dag-slot.is-new {
+  border-color: var(--line);
+  background: var(--line);
+}
+.dag-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin-top: var(--s-2);
+  font-family: var(--font-sign);
+  font-size: 0.78rem;
+  color: var(--ink-3);
+}
+.dag-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.dag-legend .dag-slot {
+  width: 14px;
+  min-height: 14px;
+}
+
+.dag-chart {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.dag-axis {
+  stroke: var(--rule-strong);
+  stroke-width: 1.5;
+}
+.dag-tick {
+  font-size: 13px;
+  font-weight: 600;
+  fill: var(--ink-3);
+}
+.dag-bar {
+  fill: var(--rule-strong);
+}
+.dag-bar.is-copy {
+  fill: var(--warn);
+}
+.dag-bar.is-last {
+  fill: var(--line);
+}
+.dag-avg {
+  fill: none;
+  stroke: var(--ok);
+  stroke-width: 2;
+  stroke-linejoin: round;
+}
+.dag-avg-lbl {
+  font-family: var(--font-code);
+  font-size: 13px;
+  font-weight: 700;
+  fill: var(--ok);
+}
+
+.dag-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-3) var(--s-5);
+  margin-bottom: var(--s-3);
+}
+.dag-note {
+  min-height: 2.9em;
+  color: var(--ink);
+}

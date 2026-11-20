@@ -1,0 +1,213 @@
+import { AutonomySlider } from '../../components/widgets/ia/AutonomySlider'
+
+Hace pocos años, "programar con IA" significaba aceptar sugerencias grises en el editor. Hoy significa darle una tarea a un programa que lee tu repositorio, ejecuta comandos, corre los tests, se equivoca, lee el error y lo vuelve a intentar hasta terminar. Ese programa es un **agente de código**, y entender cómo funciona por dentro es lo que separa a quien lo usa bien de quien pelea con él.
+
+Este tema arma el modelo mental que usaremos en toda la unidad: qué piezas tiene un agente, qué niveles de autonomía existen, en qué es bueno, en qué falla, y qué dice la evidencia (no el marketing) sobre su impacto. Si te quedas con una sola idea: **el modelo propone, el sistema que lo rodea dispone**. Casi todo lo que hace confiable a un agente vive fuera del modelo.
+
+## Qué es (y qué no es) un agente de código
+
+Un agente de código es la combinación de cuatro cosas:
+
+1. Un **modelo de lenguaje** (LLM) que recibe texto y devuelve texto o pedidos de herramientas.
+2. Una **ventana de contexto**: todo lo que el modelo "ve" en cada llamada. No tiene otra memoria.
+3. Un conjunto de **herramientas**: leer archivos, buscar, editar, ejecutar comandos, consultar APIs.
+4. Un **loop**: un programa que llama al modelo, ejecuta las herramientas que pidió, le devuelve los resultados y repite hasta que el modelo responde sin pedir nada más.
+
+Anthropic, en su artículo *Building effective agents*, separa dos categorías que conviene tener claras. Los *workflows* son sistemas donde los LLM y las herramientas se orquestan por caminos de código predefinidos. Los **agentes** son sistemas donde el LLM dirige dinámicamente su propio proceso y el uso de herramientas.<Sidenote>La distinción importa en la práctica: si puedes escribir el flujo como un pipeline fijo (traducir, luego resumir, luego clasificar), un workflow es más barato, predecible y fácil de testear. El agente se justifica cuando no sabes de antemano cuántos pasos hará falta.</Sidenote> Arreglar un bug en un repo desconocido es el caso de manual: no sabes cuántos archivos habrá que leer ni cuántas veces fallarán los tests.
+
+Lo que un agente **no** es: no es un modelo "más inteligente" que entiende tu proyecto por arte de magia. El modelo no ejecuta nada, no ve tu disco y no recuerda la sesión de ayer. Todo eso lo hace el programa que lo envuelve, al que en esta unidad llamamos **harness** (arnés).
+
+<FlowDiagram
+  caption="Arquitectura de un agente de código. El modelo vive detrás de una API; el harness corre en tu máquina (o en un contenedor) y es el único que toca el repo."
+  nodes={[
+    { id: 'u', label: 'Tú', kind: 'user', x: 0, y: 1, sub: 'la tarea', mx: 0, my: 0 },
+    { id: 'h', label: 'Harness', kind: 'agent', x: 1, y: 1, sub: 'loop + permisos', mx: 1, my: 0 },
+    { id: 'm', label: 'Modelo', kind: 'llm', x: 2, y: 0, sub: 'API del LLM', mx: 1, my: 1 },
+    { id: 't', label: 'Herramientas', kind: 'tool', x: 2, y: 2, sub: 'read · edit · bash', mx: 0, my: 2 },
+    { id: 'e', label: 'Repo y terminal', kind: 'terminal', x: 3, y: 2, mx: 0, my: 3 },
+    { id: 'v', label: 'Tests y tipos', kind: 'check', x: 4, y: 2, sub: 'feedback', mx: 1, my: 3 },
+  ]}
+  edges={[
+    { from: 'u', to: 'h', label: 'prompt' },
+    { from: 'h', to: 'm', bidir: true, label: 'contexto / tool_use' },
+    { from: 'h', to: 't', label: 'ejecuta' },
+    { from: 't', to: 'e' },
+    { from: 'e', to: 'v', label: 'npm test' },
+  ]}
+  groups={[{ label: 'Tu máquina o un contenedor', x1: 1, y1: 1, x2: 4, y2: 2 }]}
+  steps={[
+    { title: 'Pides una tarea', body: 'Escribes “el test de cupones falla, arréglalo”. El harness lo guarda como primer mensaje de la conversación.', active: ['u', 'h'], flow: ['u-h'] },
+    { title: 'El harness arma el contexto', body: 'Junta el system prompt, las definiciones de herramientas, tu CLAUDE.md o AGENTS.md y tu pedido, y lo manda al modelo.', active: ['h', 'm'], flow: ['h-m'] },
+    { title: 'El modelo pide una herramienta', body: <>El modelo no ejecuta nada: responde con un bloque <code>tool_use</code>, por ejemplo <code>bash: npm test</code>.</>, active: ['m', 'h'] },
+    { title: 'El harness ejecuta', body: 'Verifica permisos y corre el comando en tu repo. Aquí viven los controles: reglas, hooks, sandbox.', active: ['h', 't', 'e'], flow: ['h-t', 't-e'] },
+    { title: 'El entorno responde', body: 'Los tests fallan con un mensaje concreto. Ese texto es la señal de feedback más valiosa del sistema.', active: ['e', 'v'], flow: ['e-v'] },
+    { title: 'Vuelta al modelo', body: <>El resultado vuelve como <code>tool_result</code> y el ciclo se repite hasta que el modelo responde sin pedir herramientas.</>, active: ['h', 'm'], flow: ['h-m'] },
+  ]}
+/>
+
+## De autocompletar a flotas de agentes
+
+La forma de trabajar con IA cambió en pocos saltos, y cada salto movió al humano a otro lugar:
+
+- **Autocompletado.** El modelo predice las siguientes líneas en el editor. Tú sigues escribiendo el programa; la IA ahorra tecleo.
+- **Chat.** Le describes un problema a un asistente y copias su respuesta. Tú haces de "herramienta" del modelo: pegas contexto, corres el código, reportas el error.
+- **Agentes en el IDE y la terminal.** El modelo obtiene herramientas: lee archivos, edita, ejecuta. Tú pasas de copiar y pegar a aprobar acciones y revisar diffs. Claude Code, Codex CLI, Cursor, Copilot agent mode y muchos otros viven aquí.
+- **Agentes en segundo plano.** El agente trabaja en un entorno aislado (en la nube o en CI) sobre una rama y te entrega un pull request. Tú escribes la tarea y haces code review.
+- **Loops y flotas.** Varias sesiones en paralelo, cada una en su propio *worktree*, o loops autónomos que toman tareas de una lista durante horas. Tú diseñas el entorno, los criterios de terminado y la revisión por lotes.
+
+Ninguno reemplaza al anterior. Un ingeniero senior en 2026 usa autocompletado para escribir un test, un agente supervisado para un refactor delicado y un agente en segundo plano para actualizar dependencias, a veces en la misma tarde.
+
+## Niveles de autonomía
+
+Pensar en niveles evita dos errores simétricos: darle a un agente más autonomía de la que tu entorno puede verificar, o microgestionar a un agente que podría trabajar solo si le dieras tests y permisos razonables.
+
+<AutonomySlider />
+
+Fíjate en la última fila de cada nivel. La autonomía no es una propiedad del modelo; es una propiedad del **sistema**. El mismo modelo puede ser un asistente supervisado o un agente que trabaja toda la noche: la diferencia la ponen los tests, los permisos, el sandbox y la claridad de la tarea.
+
+<Callout type="idea" title="La regla de oro de la autonomía">
+
+Delega una unidad de trabajo solo si existe una forma **automática** de saber si quedó bien. Si la única verificación posible eres tú leyendo el código línea por línea, el nivel correcto es el supervisado, por mucho que el agente pueda hacer más.
+
+</Callout>
+
+## Las cuatro piezas, una por una
+
+### El modelo
+
+Es una función: tokens de entrada, tokens de salida. Cuando el harness le declara herramientas (con nombre, descripción y un JSON Schema de parámetros), el modelo puede responder con un pedido estructurado en lugar de texto libre. En la API de Anthropic, ese pedido es un bloque `tool_use` y la respuesta trae `stop_reason: "tool_use"`. El harness lo ejecuta y responde con un bloque `tool_result`.
+
+Dos propiedades del modelo condicionan todo lo demás. Primero, es **sin estado**: cada llamada recibe la conversación completa; si algo no está en el contexto, para el modelo no existe. Segundo, es **probabilístico**: con el mismo contexto puede tomar caminos distintos. Por eso las reglas que *no pueden fallar* no se escriben en el prompt, se programan en el harness.
+
+### El contexto
+
+La ventana de contexto es la memoria de trabajo del agente. Los modelos actuales aceptan cientos de miles o un millón de tokens, pero más no es gratis: cuesta dinero, latencia y, sobre todo, atención. A medida que el contexto crece, el modelo recuerda peor lo que hay adentro, un fenómeno que se conoce como *context rot*. Lo vemos en detalle en [Ingeniería de contexto](/ia/ingenieria-de-contexto).
+
+### Las herramientas
+
+Las herramientas son la interfaz entre el modelo y el mundo. Un agente de código típico tiene unas pocas genéricas (leer, buscar, editar, ejecutar shell) y se extiende con servidores <Term def="Model Context Protocol: estándar abierto para conectar modelos con herramientas y datos externos.">MCP</Term> para hablar con tu gestor de issues, tu base de datos o un navegador. Su diseño importa tanto como el del modelo: Anthropic recomienda invertir en la "interfaz agente-computadora" tanto esfuerzo como en una interfaz humana.
+
+### El loop
+
+El loop es sorprendentemente simple: mientras el modelo pida herramientas, ejecútalas y devuélvele el resultado. En [Construye tu propio agente](/ia/construir-agente) escribimos uno completo en menos de 200 líneas. Lo difícil no es el loop; es todo lo que lo rodea: cuándo parar, qué permitir, cómo resumir cuando el contexto se llena, cómo saber si el trabajo está bien.
+
+<Quiz
+  question="Un agente acaba de borrar un directorio que no debía. ¿Dónde estaba el control que faltó?"
+  options={[
+    { text: 'En el modelo: hay que usar uno más inteligente que no cometa ese error.', why: 'Un modelo mejor reduce la frecuencia, pero sigue siendo probabilístico. Las acciones irreversibles se controlan fuera del modelo.' },
+    { text: 'En el harness: permisos, reglas deny, hooks o un sandbox que impidieran ese comando.', correct: true, why: 'Exacto. El modelo solo pidió el comando; quien lo ejecutó fue el harness. Ahí viven los controles deterministas.' },
+    { text: 'En el prompt: faltó escribir “NUNCA borres directorios” en mayúsculas.', why: 'Una instrucción en el prompt se cumple casi siempre, no siempre. Para reglas sin excepciones se usan hooks, reglas deny o el sandbox.' },
+  ]}
+/>
+
+## En qué son buenos y en qué fallan
+
+Después de un par de años de uso masivo, el patrón es bastante claro. Los agentes rinden mejor cuanto más se parece la tarea a "hay un objetivo verificable y el contexto necesario está en el repo".
+
+<Compare>
+<Option title="Donde brillan" verdict="Tarea clara + verificación automática">
+
+- Arreglar bugs con un test que los reproduce.
+- Explorar un código desconocido y explicarlo.
+- Migraciones mecánicas en muchos archivos (cambiar una API, renombrar, actualizar dependencias).
+- Escribir tests para código existente.
+- Prototipos y herramientas internas descartables.
+- Tareas repetitivas con un patrón ya presente en el repo.
+
+</Option>
+<Option title="Donde tropiezan" verdict="Ambigüedad o feedback débil">
+
+- Requisitos vagos: implementan *algo*, con confianza.
+- Decisiones de producto o de arquitectura de largo plazo.
+- Código sin tests, donde nada les dice que rompieron algo.
+- Conocimiento tácito ("eso no se toca porque el cliente X…").
+- Tareas muy largas sin notas de progreso ni puntos de control.
+- Entornos que no pueden levantar o probar por sí mismos.
+
+</Option>
+</Compare>
+
+Y hay modos de falla que conviene reconocer en cuanto aparecen:
+
+- **Declarar victoria antes de tiempo.** El código "parece" terminado y el agente lo reporta como hecho. Anthropic lo documenta explícitamente en sus experimentos con agentes de larga duración.
+- **Hacer pasar los tests a la fuerza.** Ante un test rojo, debilitar la aserción o agregar un caso especial con el dato exacto del test. Lo practicarás en [Verificación](/ia/verificacion).
+- **Salirse del alcance.** "Ya que estaba" refactoriza tres archivos más o desactiva algo que molestaba.
+- **Reinventar lo que existe.** No encuentra el helper que ya tenías y escribe otro.
+- **Alucinar APIs.** Inventa un método plausible de una librería que no lo tiene. Un typecheck lo atrapa en segundos; por eso los tipos son parte del harness.
+
+<Callout type="tip" title="El primer minuto">
+
+La mayoría de las sesiones que salen mal se tuercen temprano: el agente entendió otra cosa o eligió un camino raro. Mira el primer minuto, corrige rápido y, si después de dos correcciones sigue mal, empieza una sesión nueva con un prompt mejor en vez de una tercera corrección.
+
+</Callout>
+
+## Qué dice la evidencia sobre productividad
+
+Aquí hay más opinión que datos, así que conviene ser preciso con lo que sí sabemos.
+
+**METR (julio de 2025).** Un ensayo controlado aleatorizado con 16 desarrolladores experimentados trabajando en 246 issues reales de sus propios repositorios open source. Con IA permitida (principalmente Cursor con modelos Claude 3.5/3.7 Sonnet) tardaron **19 % más**. Lo llamativo: antes esperaban acelerar un 24 %, y después del estudio seguían creyendo que habían acelerado un 20 %. Los autores lo presentan como una foto de las capacidades de principios de 2025 en un contexto específico, no como prueba de que la IA no sirve.
+
+**METR (febrero de 2026).** Al intentar repetir el estudio con herramientas de fines de 2025, METR encontró que muchos desarrolladores ya no querían trabajar sin IA, y que entre 30 % y 50 % evitaba enviar tareas que no querían hacer sin ella. Sus nuevas estimaciones apuntan a una aceleración, pero con intervalos de confianza que incluyen el cero y sesgos de selección que el propio METR considera graves: lo describe como evidencia muy débil y está rediseñando la metodología.<Sidenote>Es una lección metodológica en sí misma: medir productividad con IA es difícil incluso para quienes se dedican a eso. Desconfía de cualquier cifra redonda y espectacular.</Sidenote>
+
+**DORA (2025).** El reporte *State of AI-assisted Software Development* de Google Cloud encontró adopción de alrededor del 90 % entre profesionales y, por primera vez, una relación positiva entre adopción de IA y *throughput* de entrega. Su tesis central es que la IA es un **amplificador**: potencia a las organizaciones que ya tienen buenas prácticas (lotes pequeños, buenas pruebas, plataformas internas sólidas) y expone las debilidades de las que no.
+
+La lectura honesta: la herramienta sola no garantiza nada. Lo que mueve la aguja es el *encaje* entre tarea y agente, y la calidad del entorno de verificación. Que es exactamente de lo que trata esta unidad.
+
+<Quiz
+  question="Tu equipo dice sentirse “mucho más rápido” desde que usa agentes. ¿Qué te enseña el estudio de METR de 2025 sobre esa afirmación?"
+  options={[
+    { text: 'Que es falsa: la IA hace más lentos a los desarrolladores.', why: 'El estudio midió un contexto específico (devs expertos en repos que conocían bien, herramientas de principios de 2025). No generaliza a “siempre más lentos”.' },
+    { text: 'Que la percepción de velocidad no es una medición: hay que medir resultados reales.', correct: true, why: 'Exacto. Los participantes creían haber acelerado un 20 % cuando en realidad tardaron 19 % más. La sensación de fluidez no equivale a throughput.' },
+    { text: 'Que hay que esperar a modelos mejores antes de adoptar agentes.', why: 'El propio METR aclara que es una foto de un momento y un contexto. La conclusión práctica es medir bien, no esperar.' },
+  ]}
+/>
+
+## El rol del ingeniero cambia, no desaparece
+
+En febrero de 2025, Andrej Karpathy acuñó el término *vibe coding*: entregarse a las vibras, aceptar todo lo que propone el modelo y olvidarse de que el código existe. Sirve para un prototipo de fin de semana. Para software que otros van a mantener, es una receta de deuda técnica.
+
+Simon Willison propuso en octubre de 2025 el contrapunto, *vibe engineering*: profesionales que aceleran su trabajo con LLMs **sin dejar de ser responsables** del resultado. Y en febrero de 2026, el propio Karpathy dijo que su nombre favorito para el trabajo profesional con agentes era *agentic engineering*: casi nunca escribes el código directamente, orquestas agentes que lo hacen, pero la ingeniería (arquitectura, calidad, corrección) sigue siendo tuya.
+
+Las prácticas que Willison asocia a hacerlo bien son, casi todas, ingeniería de software clásica: tests automatizados, planificar antes, documentación, control de versiones, CI, cultura de code review, QA manual. Los agentes no las vuelven obsoletas; **las vuelven más rentables**. Un buen test suite antes ahorraba bugs; ahora además le permite a un agente trabajar solo.
+
+El recorrido de esta unidad sigue esa lógica:
+
+<Steps>
+<Step title="Fundamentos">
+
+Cómo funciona el [loop agéntico](/ia/agent-loop) y cómo administrar su recurso más escaso, el [contexto](/ia/ingenieria-de-contexto).
+
+</Step>
+<Step title="Métodos">
+
+[Especificar antes de generar](/ia/spec-driven), diseñar el [harness](/ia/harness), extender el agente con [skills, MCP, subagentes y hooks](/ia/herramientas), y [verificar](/ia/verificacion) lo que produce.
+
+</Step>
+<Step title="Práctica">
+
+[Flujos de trabajo](/ia/flujos) reales, [construir un agente](/ia/construir-agente) desde cero y las [buenas prácticas](/ia/buenas-practicas) de seguridad, costo y adopción en equipo.
+
+</Step>
+</Steps>
+
+<Takeaways>
+
+- Un agente de código es **modelo + contexto + herramientas + loop**. El modelo solo propone; el harness ejecuta.
+- La autonomía es una propiedad del **sistema**, no del modelo: depende de tests, permisos, sandbox y claridad de la tarea.
+- Delega una unidad de trabajo solo si hay una forma automática de verificarla.
+- Los agentes brillan con objetivos verificables y contexto en el repo; tropiezan con ambigüedad, conocimiento tácito y feedback débil.
+- Reconoce los modos de falla: declarar victoria, forzar tests, salirse del alcance, reinventar, alucinar APIs.
+- La evidencia de productividad es mixta y difícil de medir; la percepción de velocidad no es una medición.
+- La IA amplifica prácticas existentes: tests, CI, review y lotes pequeños valen más que nunca.
+
+</Takeaways>
+
+## Fuentes y lecturas
+
+- Anthropic, [Building effective agents](https://www.anthropic.com/engineering/building-effective-agents) (diciembre de 2024).
+- Anthropic, [Best practices for Claude Code](https://code.claude.com/docs/en/best-practices) (documentación oficial).
+- METR, [Measuring the Impact of Early-2025 AI on Experienced Open-Source Developer Productivity](https://metr.org/blog/2025-07-10-early-2025-ai-experienced-os-dev-study/) (julio de 2025).
+- METR, [We are Changing our Developer Productivity Experiment Design](https://metr.org/blog/2026-02-24-uplift-update/) (febrero de 2026).
+- Google Cloud, [2025 State of AI-assisted Software Development (DORA)](https://services.google.com/fh/files/misc/2025_state_of_ai_assisted_software_development.pdf) y [resumen en el blog de Google](https://blog.google/technology/developers/dora-report-2025/).
+- Simon Willison, [Vibe engineering](https://simonwillison.net/2025/Oct/7/vibe-engineering/) (octubre de 2025).
+- Andrej Karpathy, [el post original sobre vibe coding](https://x.com/karpathy/status/1886192184808149383) (febrero de 2025).

@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>Apuntes de ingeniería de software</title>
+    <meta
+      name="description"
+      content="Apuntes interactivos de arquitectura de software, system design, patrones de diseño, desarrollo con IA y entrevistas técnicas. Diagramas y algoritmos animados, casos de entrevista y preguntas de repaso."
+    />
+    <meta name="theme-color" content="#14161d" />
+    <meta property="og:title" content="Apuntes de ingeniería de software" />
+    <meta
+      property="og:description"
+      content="Arquitectura, system design, patrones y desarrollo con IA, con diagramas interactivos."
+    />
+    <script>
+      try {
+        // Study progress is no longer kept: clear what older versions saved.
+        ;['apuntes:progress', 'apuntes:last', 'anden:progress', 'anden:last', 'anden:theme', 'anden:codetab'].forEach(function (k) {
+          localStorage.removeItem(k)
+        })
+        // Dark is the default; apply a chosen light theme before first paint.
+        if (localStorage.getItem('apuntes:theme') === 'light') document.documentElement.dataset.theme = 'light'
+      } catch (e) {}
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

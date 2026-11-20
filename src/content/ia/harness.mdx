@@ -1,0 +1,277 @@
+import { HarnessDiagram } from '../../components/widgets/ia/HarnessDiagram'
+import { HookSimulator } from '../../components/widgets/ia/HookSimulator'
+
+En febrero de 2026, OpenAI publicó cómo un equipo pequeño construyó un producto interno de alrededor de un millón de líneas en unos cinco meses sin escribir código a mano: todo lo generó Codex. Lo interesante del artículo no era el modelo. Era todo lo demás: un `AGENTS.md` de unas cien líneas que funciona como índice, documentación tratada como fuente de verdad, linters a medida cuyos mensajes de error le dicen al agente cómo arreglar el problema, una arquitectura en capas verificada mecánicamente y tareas de limpieza periódicas. Lo llamaron **harness engineering**.
+
+El harness (arnés) es el sistema que rodea al modelo: herramientas, permisos, sandbox, hooks, señales de feedback, entorno. Si la [ingeniería de contexto](/ia/ingenieria-de-contexto) pregunta *qué debe ver el agente*, la ingeniería del harness pregunta *qué debe impedir, medir y corregir el sistema*. Es la disciplina que convierte un modelo capaz en un agente confiable, y es, cada vez más, el trabajo del ingeniero que trabaja con agentes.
+
+## Qué es el harness
+
+Imagínalo como capas alrededor del modelo. Cuanto más hacia afuera, más determinista: el modelo propone, y cada capa decide qué parte de esa propuesta llega al mundo real.
+
+<HarnessDiagram />
+
+La guía oficial de buenas prácticas de Claude Code organiza esta idea con una distinción que vale la pena memorizar:
+
+| | No determinista (decide el modelo) | Determinista (lo impone el harness) |
+| --- | --- | --- |
+| Qué hacer | Tu prompt, `CLAUDE.md`, skills | Hooks |
+| Qué puede tocar | Clasificador del modo auto | Reglas deny, sandbox, configuración administrada |
+| Cuándo terminó | Pedir evidencia, una revisión | Tests, typecheck, hook `Stop`, CI |
+| Cuánto gasta | Nivel de esfuerzo | Tope de turnos o de presupuesto |
+| Quién decide al final | El resumen del agente | Protección de ramas, una persona que aprueba el merge |
+
+La mayor parte del tiempo quieres que el modelo decida: casi toda guía tiene excepciones, y el modelo, con el código delante, suele juzgar mejor que una regla escrita de antemano. Lo determinista es para lo que **siempre** (o **nunca**) tiene que pasar. La señal para mover una regla de un lado al otro es práctica: si sigues agregando énfasis a una línea de `CLAUDE.md` y el agente igual la ignora a veces, esa línea quiere ser un hook.
+
+## Herramientas diseñadas para un agente
+
+Las herramientas son la interfaz del modelo con el mundo, y se diseñan para él, no para humanos. Anthropic resume su experiencia en *Writing effective tools for agents*; los principios más útiles:
+
+- **No envuelvas cada endpoint.** Una herramienta `schedule_event` que busca disponibilidad y agenda es mejor que `list_users` + `list_events` + `create_event`. El agente tiene contexto limitado; cada paso intermedio es una oportunidad de error.
+- **Nombres con espacio de nombres.** `github_search_issues` y `jira_search_issues` delimitan mejor que dos `search`.
+- **Devuelve contexto significativo.** Nombres legibles antes que UUIDs; un parámetro `response_format` (`concise` o `detailed`) para que el agente elija cuánto detalle quiere.
+- **Cuida los tokens.** Paginación, filtros y truncado con valores por defecto sensatos. Claude Code, por ejemplo, limita por defecto las respuestas de herramientas a 25.000 tokens.
+- **Errores que guían.** Un error debe decir qué estuvo mal y qué intentar.
+- **A prueba de errores** (*poka-yoke*). En *Building effective agents*, Anthropic cuenta que su agente de SWE-bench se equivocaba con rutas relativas después de cambiar de directorio; cambiaron la herramienta para exigir rutas absolutas y el problema desapareció.
+
+```json title="Mal: genérica, ambigua y verborrágica"
+{ "name": "query", "description": "Runs a query", "input_schema": { "type": "object", "properties": { "q": { "type": "string" } } } }
+```
+
+```json title="Mejor: específica, acotada y explícita"
+{
+  "name": "orders_find",
+  "description": "Busca pedidos por cliente o estado. Devuelve como máximo 20 resultados, ordenados por fecha descendente. Para un pedido específico usa orders_get.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "customer_email": { "type": "string", "description": "Email exacto del cliente" },
+      "status": { "type": "string", "enum": ["pending", "paid", "refunded", "cancelled"] },
+      "response_format": { "type": "string", "enum": ["concise", "detailed"], "default": "concise" }
+    },
+    "additionalProperties": false
+  }
+}
+```
+
+## Permisos y sandbox: qué puede tocar
+
+### Reglas de permisos
+
+Un harness maduro decide, para cada llamada, si se **permite**, se **pregunta** o se **niega**. En Claude Code, eso se configura con reglas en `settings.json` que se pueden versionar en el repo:
+
+```json title=".claude/settings.json"
+{
+  "permissions": {
+    "allow": ["Bash(pnpm test *)", "Bash(pnpm tsc --noEmit)", "Bash(git commit *)"],
+    "ask": ["Bash(git push *)"],
+    "deny": ["Read(./.env)", "Read(./.env.*)", "Read(./secrets/**)", "Bash(curl *)"]
+  }
+}
+```
+
+Tres detalles que suelen sorprender:
+
+- **El orden es deny, luego ask, luego allow**, y la primera coincidencia gana sin importar qué tan específica sea. Un `deny` amplio no admite excepciones vía `allow`.
+- **Las reglas matchean llamadas, no intenciones.** `Bash(curl *)` en deny no detiene un script de Python que abre una conexión. Para un límite real necesitas el sandbox.
+- **Leer archivos dentro del proyecto no pide permiso** por defecto. Si un archivo no debe entrar al contexto, necesita una regla deny explícita.
+
+Sobre las reglas, el **modo de permisos** fija el comportamiento por defecto. Claude Code tiene, entre otros, `default` (pregunta en el primer uso de cada herramienta), `acceptEdits` (acepta ediciones y comandos de archivos comunes), `plan` (solo lee y explora), `auto` (un clasificador revisa las acciones en lugar de preguntarte), `dontAsk` (niega todo lo que habría preguntado, útil para ejecuciones desatendidas) y `bypassPermissions`, que la propia documentación recomienda solo dentro de contenedores o VMs aislados.
+
+<Callout type="warn" title="El modo auto no es una regla">
+
+Un clasificador que juzga cada acción es muy útil para reducir interrupciones, pero sigue siendo un juicio y puede equivocarse. Tus "nunca" van en reglas deny o hooks, que valen en todos los modos, incluido `bypassPermissions`.
+
+</Callout>
+
+### Sandbox
+
+El sandbox es el límite que no depende de nadie: ni del modelo, ni de tus reglas, ni de que leas el diálogo número cuarenta de la tarde. Claude Code usa primitivas del sistema operativo (Seatbelt en macOS, bubblewrap en Linux y WSL2) para que los comandos solo puedan escribir en el directorio de trabajo, y enruta la red por un proxy que solo deja pasar los dominios permitidos:
+
+```json title=".claude/settings.json"
+{
+  "sandbox": {
+    "enabled": true,
+    "network": { "allowedDomains": ["registry.npmjs.org", "github.com"] }
+  }
+}
+```
+
+Además de seguridad, el sandbox compra autonomía: dentro de él, los comandos pueden aprobarse automáticamente porque su alcance está acotado. Anthropic reportó que, en su uso interno, el sandboxing redujo un 84 % los pedidos de permiso. Codex CLI tiene un esquema análogo con modos como `read-only`, `workspace-write` y `danger-full-access`, combinados con una política de aprobación aparte.
+
+## Hooks: el lado determinista del loop
+
+Los **hooks** son comandos (o requests HTTP, o incluso otro modelo) que el harness ejecuta en puntos fijos del ciclo de vida del agente. En Claude Code los más usados son:
+
+| Evento | Cuándo corre | Uso típico |
+| --- | --- | --- |
+| `SessionStart` | Al iniciar o retomar una sesión | Inyectar contexto dinámico (rama, tareas abiertas) |
+| `UserPromptSubmit` | Antes de procesar tu mensaje | Validar o enriquecer el prompt |
+| `PreToolUse` | Antes de ejecutar una herramienta | Bloquear acciones (exit 2) o decidir allow/ask/deny |
+| `PostToolUse` | Después de una herramienta exitosa | Formatear, lintear, correr tests rápidos |
+| `Stop` | Cuando el agente intenta terminar | Exigir typecheck o tests antes de dar por terminado |
+| `PreCompact` | Antes de compactar | Guardar estado importante |
+
+El protocolo es simple: el hook recibe un JSON por stdin (`tool_name`, `tool_input`, sesión, directorio) y comunica su decisión con el código de salida. **Exit 0** deja seguir; **exit 2** bloquea la acción y su stderr vuelve al modelo como feedback. Ojo: exit 1 es un error *no bloqueante*, la acción sigue. Si tu hook impone una política, usa exit 2.
+
+```bash title=".claude/hooks/proteger-migraciones.sh"
+#!/usr/bin/env bash
+# PreToolUse para Edit|Write: las migraciones aplicadas son inmutables.
+file=$(jq -r '.tool_input.file_path // empty')
+if [[ "$file" == *"/migrations/"* ]]; then
+  echo "Las migraciones aplicadas son inmutables. Crea una nueva con: pnpm db:new <nombre>" >&2
+  exit 2
+fi
+exit 0
+```
+
+```json title=".claude/settings.json"
+{
+  "hooks": {
+    "PreToolUse": [
+      { "matcher": "Edit|Write", "hooks": [{ "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/proteger-migraciones.sh" }] }
+    ],
+    "PostToolUse": [
+      { "matcher": "Edit|Write", "hooks": [{ "type": "command", "command": "f=$(jq -r '.tool_input.file_path') && npx prettier --write --ignore-unknown \"$f\"" }] }
+    ],
+    "Stop": [
+      { "hooks": [{ "type": "command", "command": "pnpm tsc --noEmit 1>&2 || exit 2" }] }
+    ]
+  }
+}
+```
+
+Fíjate en el mensaje del hook de migraciones: no dice solo "prohibido", dice qué hacer en su lugar. El modelo lo lee y corrige el rumbo. Es el mismo principio que los mensajes de error de las herramientas.
+
+Ahora junta todo. Elige una llamada que el modelo propone, configura el harness y sigue su recorrido:
+
+<HookSimulator />
+
+Prueba en particular `Read(.env)` sin la regla deny (pasa sin preguntar, porque leer no requiere permiso) y la exfiltración con `curl` con y sin sandbox (aunque apruebes el comando por costumbre, el proxy lo corta). Son las dos lecciones más caras de aprender en producción.
+
+<Quiz
+  question="Quieres que el agente nunca termine una tarea con errores de tipos. ¿Cuál es la implementación más robusta?"
+  options={[
+    { text: 'Agregar “Siempre corre tsc antes de terminar” al CLAUDE.md.', why: 'Funciona casi siempre, no siempre. Es una instrucción que el modelo puede decidir no aplicar en un turno dado.' },
+    { text: 'Un hook Stop que corre tsc y sale con código 2 si falla, devolviendo los errores al agente.', correct: true, why: 'Exacto: el harness lo ejecuta cada vez que el agente intenta terminar, y el stderr del compilador vuelve como feedback para que siga trabajando.' },
+    { text: 'Un hook Stop que corre tsc y sale con código 1 si falla.', why: 'Exit 1 es un error no bloqueante: la acción sigue igual. Para bloquear hay que usar exit 2.' },
+  ]}
+/>
+
+## Linters, tipos y tests como sensores
+
+Para un agente, cada herramienta de calidad es un **sensor**: una forma barata y rápida de saber si va bien. Cuanto más rápido y más específico el sensor, más se autocorrige el agente sin ti.
+
+- **Tipos.** Un typecheck atrapa en segundos la API alucinada, el parámetro olvidado, el `null` sin manejar. En proyectos con agentes, el tipado estricto rinde el doble.
+- **Linters con mensajes de remediación.** Según el post de OpenAI, el equipo de Codex escribió linters a medida (generados por el propio agente) que verifican la dirección de dependencias entre capas, y cuyos mensajes de error incluyen instrucciones para arreglar la violación. El error deja de ser un "no" y se convierte en un "haz esto".
+- **Tests estructurales.** Tests que verifican la arquitectura, no el comportamiento: "nada en `domain/` importa de `infra/`". Impiden que la entropía se acumule un PR a la vez.
+- **Tests de comportamiento.** El sensor principal. Rápidos de correr de a uno (el agente necesita el comando para un solo archivo) y con mensajes de fallo legibles.
+
+```js title="eslint.config.js (fragmento)"
+{
+  rules: {
+    'no-restricted-imports': ['error', {
+      patterns: [{
+        group: ['**/infra/**'],
+        message: 'domain/ no puede depender de infra/. Define un puerto en domain/ports y su adaptador en infra/.'
+      }]
+    }]
+  }
+}
+```
+
+### Un repo legible para agentes
+
+El artículo de OpenAI usa una idea que conviene adoptar: el repositorio tiene que ser **legible para un agente**. En la práctica:
+
+- **El conocimiento vive en el repo.** Decisiones, flujos y convenciones en `docs/` (o ADRs), versionados con el código. Lo que está en un Slack o en la cabeza de alguien no existe para el agente.
+- **`AGENTS.md` como mapa.** Corto, apuntando a esa documentación.
+- **Patrones consistentes.** Si hay tres formas de hacer lo mismo, el agente copiará cualquiera. Elimina o aísla las viejas.
+- **Entorno reproducible.** Un comando para levantar todo (`pnpm dev`, `init.sh`, un devcontainer). Un agente que no puede correr la app no puede verificarla.
+- **Observabilidad accesible.** Logs y métricas que el agente pueda consultar por sí mismo, y herramientas para ver la UI (un navegador controlable, capturas).
+- **Limpieza continua.** El equipo de OpenAI corre tareas periódicas de "recolección de basura" que buscan desvíos de sus principios y abren PRs de arreglo. La entropía es el estado natural de un código escrito a gran velocidad.
+
+## Agentes de larga duración
+
+Hay tareas que no caben en una sesión: construir una aplicación entera, migrar un sistema grande. En *Effective harnesses for long-running agents* (noviembre de 2025), Anthropic describe cómo lo resolvieron, y la solución es pura ingeniería de harness.
+
+Identificaron dos fallas típicas. El **one-shotting**: el agente intenta construir demasiado de una vez, se queda sin contexto a mitad de camino y deja a la siguiente sesión una feature a medio hacer. Y la **victoria prematura**: una sesión nueva ve progreso y concluye, erróneamente, que el proyecto está terminado.
+
+La solución usa dos roles con el mismo harness y prompts distintos:
+
+- Un **agente inicializador**, que corre solo la primera vez: crea un `init.sh` para levantar el entorno, un archivo de progreso (`claude-progress.txt`), un commit inicial y una **lista de features** exhaustiva, todas marcadas como fallidas.
+- Un **agente de código**, que corre en cada sesión siguiente: avanza **una feature por vez** y deja el estado listo para la próxima.
+
+```json title="feature_list.json (fragmento)"
+[
+  {
+    "category": "functional",
+    "description": "El botón Nuevo chat crea una conversación vacía",
+    "steps": ["Abrir la interfaz principal", "Hacer clic en Nuevo chat", "Verificar que aparece una conversación vacía"],
+    "passes": false
+  }
+]
+```
+
+El agente solo puede cambiar el campo `passes`. Eligieron JSON en lugar de Markdown porque el modelo tiende menos a reescribirlo indebidamente. Cada sesión arranca con una rutina fija:
+
+<Steps>
+<Step title="Orientarse">
+
+`pwd`, leer el log de git y el archivo de progreso.
+
+</Step>
+<Step title="Elegir">
+
+Leer la lista de features y tomar la de mayor prioridad que todavía no pasa.
+
+</Step>
+<Step title="Verificar que el punto de partida funciona">
+
+Levantar el entorno con `init.sh` y correr una prueba end-to-end básica, para atrapar lo que la sesión anterior dejó roto.
+
+</Step>
+<Step title="Implementar y probar como un usuario">
+
+Una feature. Verificarla de punta a punta; en su caso, con automatización de navegador (Puppeteer vía MCP), porque los tests unitarios solos no alcanzaban.
+
+</Step>
+<Step title="Dejar el campo limpio">
+
+Commit descriptivo, actualizar el archivo de progreso, marcar `passes: true` solo si se verificó.
+
+</Step>
+</Steps>
+
+El patrón se generaliza: **estado externo** (lista de tareas, notas de progreso, git) + **una unidad de trabajo por sesión** + **verificación al inicio y al final**. Es lo mismo que hace un buen equipo humano con turnos: nadie confía en la memoria del turno anterior, todo queda escrito.
+
+<Quiz
+  question="En el harness de larga duración de Anthropic, ¿por qué cada sesión empieza levantando el entorno y corriendo una prueba básica antes de tocar código?"
+  options={[
+    { text: 'Para calentar la caché del modelo y bajar la latencia.', why: 'No tiene relación con la caché. Es una verificación del estado del proyecto.' },
+    { text: 'Para detectar si la sesión anterior dejó algo roto antes de construir encima.', correct: true, why: 'Exacto: sin esa verificación, el agente agregaría una feature sobre una base rota y confundiría bugs viejos con nuevos.' },
+    { text: 'Porque el modelo no puede leer código sin que la aplicación esté corriendo.', why: 'El modelo lee código sin problema. La prueba sirve para conocer el estado real, no para poder leer.' },
+  ]}
+/>
+
+<Takeaways>
+
+- El harness es todo lo que rodea al modelo: contexto, herramientas, permisos, hooks, sandbox, entorno y feedback.
+- Lo que siempre o nunca debe pasar va en el lado determinista (hooks, deny, sandbox, CI); el resto, que lo decida el modelo.
+- Diseña herramientas para agentes: consolidadas, con nombres claros, salidas concisas y errores que guían.
+- Permisos: deny → ask → allow, la primera coincidencia gana; las reglas matchean llamadas, el sandbox limita procesos.
+- Hooks: exit 2 bloquea y devuelve feedback; `PostToolUse` para formatear, `Stop` para exigir verificación.
+- Tipos, linters con mensajes de remediación y tests son sensores; un repo legible (docs versionadas, patrones consistentes, entorno reproducible) multiplica la autonomía.
+- Para tareas largas: estado externo, una unidad de trabajo por sesión y verificación al inicio y al final.
+
+</Takeaways>
+
+## Fuentes y lecturas
+
+- OpenAI, [Harness engineering: leveraging Codex in an agent-first world](https://openai.com/index/harness-engineering/) (febrero de 2026).
+- Anthropic, [Effective harnesses for long-running agents](https://www.anthropic.com/engineering/effective-harnesses-for-long-running-agents) (noviembre de 2025).
+- Anthropic, [Writing effective tools for agents — with agents](https://www.anthropic.com/engineering/writing-tools-for-agents) (septiembre de 2025).
+- Anthropic, [Beyond permission prompts: making Claude Code more secure and autonomous](https://www.anthropic.com/engineering/claude-code-sandboxing) (octubre de 2025).
+- Anthropic, documentación de Claude Code: [permisos](https://code.claude.com/docs/en/permissions), [sandboxing](https://code.claude.com/docs/en/sandboxing), [hooks](https://code.claude.com/docs/en/hooks) y [buenas prácticas](https://code.claude.com/docs/en/best-practices).
+- OpenAI, [Sandboxing en Codex](https://developers.openai.com/codex/concepts/sandboxing).
+- Anthropic, [Building effective agents](https://www.anthropic.com/engineering/building-effective-agents): la sección sobre la interfaz agente-computadora.

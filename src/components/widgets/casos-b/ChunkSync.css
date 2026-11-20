@@ -1,0 +1,152 @@
+.cs-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+}
+
+.cs-stage {
+  display: grid;
+  gap: var(--s-4);
+}
+
+.cs-label,
+.cs-row__title {
+  font-family: var(--font-sign);
+  font-weight: 700;
+  font-size: 0.74rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.cs-label {
+  display: block;
+  margin-bottom: var(--s-1);
+}
+
+.cs-text {
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 6.5rem;
+  resize: vertical;
+  padding: var(--s-3);
+  border: 1.5px solid var(--rule-strong);
+  border-radius: var(--radius);
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-code);
+  font-size: 0.85rem;
+  line-height: 1.55;
+}
+.cs-text:focus-visible {
+  outline: 2px solid var(--line-ink);
+  outline-offset: 1px;
+  border-color: var(--line);
+}
+
+.cs-row {
+  display: grid;
+  gap: var(--s-2);
+}
+
+.cs-row__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s-2) var(--s-4);
+}
+
+.cs-row__meta,
+.cs-legend {
+  font-family: var(--font-sign);
+  font-size: 0.85rem;
+  color: var(--ink-3);
+}
+
+.cs-legend {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--s-3);
+}
+.cs-legend__item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.cs-ok {
+  color: var(--ok);
+}
+.cs-up {
+  color: var(--line-ink);
+}
+
+.cs-chunks {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.cs-chunk {
+  display: grid;
+  gap: 2px;
+  max-width: 100%;
+  padding: 5px 9px 6px;
+  border-radius: var(--radius);
+  border: 2px solid var(--rule-strong);
+  background: var(--paper);
+  transition:
+    border-color 200ms var(--ease-out),
+    background-color 200ms var(--ease-out);
+}
+
+.cs-chunk__hash {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--font-code);
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--ink-3);
+}
+
+.cs-chunk__text {
+  font-family: var(--font-code);
+  font-size: 0.78rem;
+  line-height: 1.35;
+  color: var(--ink-2);
+  word-break: break-all;
+}
+
+.cs-chunk--server {
+  border-style: dashed;
+  background: transparent;
+}
+.cs-chunk--server .cs-chunk__text {
+  color: var(--ink-3);
+}
+
+.cs-chunk.is-known .cs-chunk__hash {
+  color: var(--ok);
+}
+
+.cs-chunk.is-new {
+  border-color: var(--line);
+  background: var(--line-tint);
+}
+.cs-chunk.is-new .cs-chunk__hash {
+  color: var(--line-ink);
+}
+.cs-chunk.is-new .cs-chunk__text {
+  color: var(--ink);
+}
+
+.cs-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-3) var(--s-5);
+  margin-bottom: var(--s-3);
+}

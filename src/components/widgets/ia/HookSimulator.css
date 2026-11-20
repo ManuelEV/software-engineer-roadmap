@@ -1,0 +1,201 @@
+.hs-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--s-4);
+}
+@media (max-width: 720px) {
+  .hs-grid {
+    grid-template-columns: 1fr;
+  }
+}
+.hs-box {
+  margin: 0;
+  padding: var(--s-3);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--card);
+  min-width: 0;
+}
+.hs-box legend {
+  padding: 0 6px;
+  font-size: 0.74rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.hs-call {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  min-height: 40px;
+  padding: 4px 8px;
+  border-radius: var(--radius);
+  border: 1.5px solid transparent;
+  cursor: pointer;
+}
+.hs-call:hover {
+  background: var(--paper-2);
+}
+.hs-call.is-on {
+  border-color: var(--line);
+  background: var(--line-tint);
+}
+.hs-call:has(input:focus-visible) {
+  outline: 2px solid var(--line-ink);
+  outline-offset: 1px;
+}
+.hs-call__tool {
+  flex: none;
+  min-width: 3.4rem;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--paper-3);
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-align: center;
+  color: var(--ink-2);
+}
+.hs-call__arg {
+  font-family: var(--font-code);
+  font-size: 0.74rem;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.hs-why {
+  margin: var(--s-2) 0 0;
+  font-family: var(--font-read);
+  font-style: italic;
+  font-size: 0.9rem;
+  color: var(--ink-2);
+}
+.hs-rules {
+  display: grid;
+  gap: 4px;
+}
+.hs-rule {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  align-items: center;
+  gap: var(--s-2);
+  min-height: 40px;
+  padding: 4px 8px;
+  border: 1.5px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--paper);
+  font-family: var(--font-sign);
+  text-align: left;
+  color: var(--ink-3);
+  cursor: pointer;
+  transition:
+    border-color 160ms var(--ease-out),
+    background-color 160ms var(--ease-out);
+}
+.hs-rule:hover {
+  border-color: var(--ink-3);
+}
+.hs-rule.is-on {
+  border-color: var(--line);
+  background: var(--line-tint);
+  color: var(--ink);
+}
+.hs-rule:focus-visible {
+  outline: 2px solid var(--line-ink);
+  outline-offset: 1px;
+}
+.hs-rule__check {
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  border: 2px solid var(--rule-strong);
+  background: var(--paper);
+}
+.hs-rule.is-on .hs-rule__check {
+  border-color: var(--line);
+  background: var(--line);
+  box-shadow: inset 0 0 0 2px var(--paper);
+}
+.hs-rule__label {
+  font-size: 0.78rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.hs-rule code {
+  font-family: var(--font-code);
+  font-size: 0.72rem;
+  overflow-wrap: anywhere;
+}
+.hs-run {
+  margin: var(--s-4) 0 var(--s-3);
+}
+.hs-log {
+  display: grid;
+  gap: 6px;
+  margin: var(--s-3) 0 0;
+  padding: 0;
+  list-style: none;
+}
+.hs-log__item {
+  position: relative;
+  padding: 6px 10px 6px 30px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--paper);
+  font-family: var(--font-read);
+  font-size: 0.92rem;
+  line-height: 1.45;
+  color: var(--ink-2);
+}
+.hs-log__item::before {
+  content: '';
+  position: absolute;
+  left: 10px;
+  top: 11px;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  border: 3px solid var(--rule-strong);
+  background: var(--paper);
+}
+.hs-log__item b {
+  font-family: var(--font-sign);
+  color: var(--ink);
+}
+.hs-log__item.is-pass::before,
+.hs-log__item.is-ok::before {
+  border-color: var(--ok);
+}
+.hs-log__item.is-ask::before,
+.hs-log__item.is-warn::before {
+  border-color: var(--warn);
+}
+.hs-log__item.is-block::before,
+.hs-log__item.is-bad::before {
+  border-color: var(--bad);
+  background: var(--bad);
+}
+.hs-prompt {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-3);
+  margin-top: var(--s-3);
+  padding: var(--s-3);
+  border: 1.5px solid var(--warn);
+  border-radius: var(--radius);
+  background: color-mix(in oklab, var(--warn) 8%, var(--card));
+}
+.hs-prompt p {
+  margin: 0;
+  font-weight: 600;
+}
+.hs-prompt code {
+  font-family: var(--font-code);
+  font-size: 0.78rem;
+  overflow-wrap: anywhere;
+}
+.hs-prompt__btns {
+  display: flex;
+  gap: var(--s-2);
+}

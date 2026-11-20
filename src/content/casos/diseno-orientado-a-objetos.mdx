@@ -1,0 +1,849 @@
+import { UmlDiagram } from '../../components/widgets/patrones/UmlDiagram'
+import { LldBuilder } from '../../components/widgets/entrevistas/LldBuilder'
+import { QuestionDeck } from '../../components/widgets/entrevistas/QuestionDeck'
+
+"Diseña el sistema de un estacionamiento." Si lo escuchas en una entrevista de system design, piensas en servicios, bases de datos y colas. Si te lo dicen en una entrevista de **low-level design** (LLD), te están pidiendo otra cosa: clases, interfaces, relaciones y el código del núcleo, todo dentro de un mismo proceso. Nadie te va a preguntar por sharding; te van a preguntar qué pasa cuando dos autos llegan al mismo lugar libre al mismo tiempo.
+
+Este formato aparece con distintos nombres: *object-oriented design*, *low-level design*, *machine coding* o, a veces, simplemente "una entrevista de diseño de clases". Es frecuente en procesos para backend y en empresas que quieren ver cómo modelas un dominio antes de escribir código. Lo bueno es que tiene un método repetible: el mismo recorrido sirve para un estacionamiento, una máquina expendedora o un ascensor. Este tema te da ese método y lo aplica completo a un caso.
+
+<Sketch
+  width={640}
+  height={300}
+  speed={1.25}
+  caption="Dos altitudes del mismo problema: system design dibuja procesos y datos; low-level design hace zoom dentro de un proceso y dibuja clases."
+  items={[
+    { type: 'text', x: 24, y: 32, text: 'system design: entre procesos', size: 20, tone: 'pencil' },
+    { type: 'box', x: 40, y: 62, w: 120, h: 46, label: 'API' },
+    { type: 'box', x: 40, y: 180, w: 120, h: 46, label: 'Postgres' },
+    { type: 'box', x: 180, y: 180, w: 100, h: 46, label: 'Redis' },
+    { type: 'arrow', from: [100, 110], to: [100, 176] },
+    { type: 'arrow', from: [150, 110], to: [220, 176], with: true },
+    { type: 'text', x: 40, y: 272, text: 'servicios, datos, escala', size: 19, tone: 'pencil' },
+    { type: 'line', points: [[312, 20], [312, 290]], dashed: true, tone: 'muted' },
+    { type: 'arrow', from: [164, 84], to: [344, 84], dashed: true, tone: 'line', label: 'zoom', labelAt: [250, 74] },
+    { type: 'text', x: 340, y: 32, text: 'low-level design: adentro', size: 20, tone: 'line' },
+    { type: 'box', x: 350, y: 62, w: 180, h: 46, label: 'Estacionamiento', fill: true, tone: 'line' },
+    { type: 'box', x: 350, y: 150, w: 110, h: 44, label: 'Nivel' },
+    { type: 'box', x: 350, y: 236, w: 110, h: 44, label: 'Lugar' },
+    { type: 'arrow', from: [405, 108], to: [405, 148] },
+    { type: 'arrow', from: [405, 194], to: [405, 234], with: true },
+    { type: 'box', x: 500, y: 150, w: 124, h: 44, label: 'Tarifa' },
+    { type: 'arrow', from: [500, 108], to: [552, 148], dashed: true, tone: 'line' },
+    { type: 'text', x: 486, y: 250, text: ['clases y', 'código'], size: 19, tone: 'pencil' },
+  ]}
+/>
+
+## Qué es una entrevista de LLD y qué evalúan
+
+Te dan un enunciado corto y vago ("diseña una biblioteca", "diseña Splitwise") y entre 45 y 60 minutos. Se espera que salgas con tres cosas: un conjunto de requisitos acordados, un diagrama de clases (dibujado o descrito) y el código de las piezas centrales. En la variante *machine coding*, que suele ser más larga, el código tiene que compilar y correr, a veces con tests.
+
+La diferencia con [system design](/system-design/metodo-entrevista) es de altitud:
+
+<Compare>
+<Option title="System design (HLD)">
+
+Servicios, bases de datos, cachés, colas, réplicas. Las preguntas son de **escala y disponibilidad**: cuántas peticiones por segundo, qué pasa si se cae una región. El entregable es un diagrama de cajas y flechas entre procesos.
+
+</Option>
+<Option title="Low-level design (LLD)">
+
+Clases, interfaces, métodos y relaciones dentro de **un proceso**. Las preguntas son de **modelado y cambio**: qué responsabilidad tiene cada clase, qué pasa si mañana cambia la tarifa. El entregable es un diagrama de clases y código.
+
+</Option>
+</Compare>
+
+Lo que el entrevistador mira, en orden aproximado de importancia:
+
+1. **Que aclares antes de diseñar.** El enunciado es vago a propósito.
+2. **Que el modelo sea razonable**: responsabilidades claras, nada de una clase `Sistema` que hace todo, nombres del dominio.
+3. **Que uses bien las relaciones**: composición contra asociación, herencia solo cuando hay un "es un" real.
+4. **Que el diseño absorba cambios**: la repregunta "¿y si ahora…?" llega siempre.
+5. **Que el código del núcleo funcione** y se lea bien.
+6. **Que veas la concurrencia** cuando el dominio la tiene.
+
+<Callout type="interview">
+
+El entrevistador no busca el diagrama "correcto": hay muchos diseños válidos. Busca que **justifiques cada decisión** con un requisito ("separo la tarifa porque me dijiste que cambia los fines de semana") y que reconozcas los trade-offs de lo que no hiciste. Un diseño simple bien defendido gana a uno lleno de patrones que no sabes explicar.
+
+</Callout>
+
+## El método en seis pasos
+
+Este es el recorrido. Úsalo como guion y dilo en voz alta: el entrevistador evalúa el proceso tanto como el resultado.
+
+<Steps>
+<Step title="Requisitos y casos de uso (5 minutos)">
+
+Pregunta qué entra y qué no. Para un estacionamiento: ¿cuántos niveles?, ¿qué tipos de vehículo y de lugar?, ¿cómo se cobra?, ¿hay varias entradas?, ¿se reserva por app? Escribe los casos de uso como verbos: *entrar*, *salir*, *pagar*, *consultar lugares libres*. Y escribe lo que queda **fuera de alcance**.
+
+</Step>
+<Step title="Entidades (sustantivos) y comportamientos (verbos)">
+
+Subraya los sustantivos de los requisitos: son candidatos a clase. Los verbos son candidatos a método. Descarta los sustantivos que son solo atributos ("color del auto") o detalles de interfaz ("pantalla").
+
+</Step>
+<Step title="Relaciones">
+
+Decide quién contiene a quién (composición: el nivel no existe sin el estacionamiento), quién conoce a quién (asociación: el lugar apunta al vehículo, pero el vehículo existe solo) y dónde hay un "es un" de verdad (herencia).
+
+</Step>
+<Step title="Interfaces y patrones, solo donde ayudan">
+
+Busca los **ejes de cambio** que aparecieron en los requisitos. Si la tarifa varía, va detrás de una interfaz (Strategy). Si un objeto se comporta distinto según su estado, State. Si crear objetos tiene lógica, una Factory. Si otros tienen que enterarse de cambios, Observer.
+
+</Step>
+<Step title="Código del núcleo">
+
+No escribas todo. Escribe las dos o tres clases donde está la lógica interesante y los métodos de los casos de uso principales. Firma de métodos, invariantes, errores.
+
+</Step>
+<Step title="Extensibilidad y concurrencia">
+
+Anticipa las repreguntas: "¿y si ahora hay motos eléctricas?" (debería entrar como clase nueva, sin tocar lo existente) y "¿qué pasa si dos autos van al mismo lugar?" (sección crítica, atomicidad).
+
+</Step>
+</Steps>
+
+Recorre ahora el método aplicado a un estacionamiento. Fíjate en que cada etapa agrega algo al diagrama y en que lo que dices justifica lo que agregas:
+
+<LldBuilder />
+
+Un detalle sobre los patrones. Los que más aparecen en LLD son cuatro, y todos están explicados con su estructura en la unidad de patrones: [Strategy, Observer y State](/patrones/comportamiento-1) (con la diferencia entre Strategy y State, que es una repregunta clásica) y [Factory Method](/patrones/creacionales). Si te piden justificar por qué no metiste más, la respuesta está en [Qué es un patrón (y SOLID)](/patrones/introduccion): un patrón tiene costo y solo se paga cuando hay un eje de cambio concreto. Y si el entrevistador quiere hablar de principios, repasa [POO y SOLID en la entrevista](/casos/poo-y-solid).
+
+## Caso completo: el estacionamiento
+
+### Requisitos acordados
+
+Supongamos que, tras las preguntas, acordaste esto con el entrevistador:
+
+- El estacionamiento tiene **varios niveles**; cada nivel tiene lugares **chicos, medianos y grandes**.
+- Llegan **motos, autos y camionetas**. Una moto cabe en cualquier lugar, un auto en uno mediano o grande, una camioneta solo en uno grande.
+- Al **entrar**, el sistema asigna un lugar libre y entrega un **ticket**. Si no hay lugar, rechaza la entrada.
+- Al **salir**, se cobra por hora o fracción, con un precio distinto por tipo de vehículo, y se libera el lugar.
+- Hay **dos barreras de entrada** que funcionan a la vez.
+- Fuera de alcance: reservas, abonos mensuales, medios de pago (el cobro devuelve un monto).
+
+### Diagrama de clases
+
+Este es el diseño completo, con los campos y métodos principales. Toca una clase para ver su responsabilidad:
+
+<UmlDiagram
+  wide
+  title="Diagrama"
+  caption="Diseño del estacionamiento. Estacionamiento es la fachada; la regla de asignación y la tarifa están detrás de interfaces para poder cambiarlas sin tocar el resto."
+  classes={[
+    { id: 'est', name: 'Estacionamiento', w: 1.25, fields: ['activos: Map<placa, Ticket>'], methods: ['entrar(v): Ticket', 'salir(placa): number'], x: 1, y: 0, tone: 'line', desc: 'Fachada de los casos de uso. Orquesta: pide un lugar al asignador, emite el ticket y al salir delega el cálculo en la tarifa.' },
+    { id: 'ticket', name: 'Ticket', fields: ['id', 'vehiculo', 'lugar', 'entrada: Date'], x: 2.3, y: 0, desc: 'Registro inmutable de una estadía. Se crea al entrar y se usa para cobrar al salir.' },
+    { id: 'nivel', name: 'Nivel', fields: ['numero', 'lugares: Lugar[]'], methods: ['buscarLibre(v)'], x: 0, y: 1.3, desc: 'Agrupa lugares. Sabe buscar uno libre que admita el vehículo.' },
+    { id: 'asig', name: 'AsignadorLugar', kind: 'interface', methods: ['buscar(niveles, v)'], x: 1, y: 1.3, desc: 'Strategy: la regla para elegir lugar. Hoy el primero libre; mañana uno cerca del ascensor o por tipo.' },
+    { id: 'tarifa', name: 'EstrategiaTarifa', kind: 'interface', methods: ['calcular(ticket, salida)'], x: 2.15, y: 1.3, desc: 'Strategy: cómo se cobra. Por hora, nocturna, plana de fin de semana.' },
+    { id: 'lugar', name: 'Lugar', fields: ['id', 'tamano', 'ocupante?'], methods: ['admite(v)', 'ocupar(v)', 'liberar()'], x: 0, y: 2.6, desc: 'Protege su invariante: un lugar tiene como máximo un ocupante, y solo uno que quepa.' },
+    { id: 'cerca', name: 'MasCercano', methods: ['buscar(niveles, v)'], x: 1, y: 2.6, desc: 'Recorre los niveles en orden y devuelve el primer lugar libre que admita el vehículo.' },
+    { id: 'hora', name: 'TarifaPorHora', fields: ['centavosPorHora'], methods: ['calcular(ticket, salida)'], x: 2.15, y: 2.6, desc: 'Hora o fracción, con precio por tipo de vehículo. Trabaja en centavos enteros.' },
+    { id: 'veh', name: 'Vehiculo', fields: ['placa', 'tipo'], x: 0, y: 3.85, desc: 'Valor simple: placa y tipo. No sabe nada del estacionamiento.' },
+    { id: 'carga', name: 'LugarConCarga', fields: ['kwhEntregados'], x: 1, y: 3.85, tone: 'muted', desc: 'Extensión para vehículos eléctricos: hereda de Lugar sin cambiar el resto del diseño.' },
+  ]}
+  relations={[
+    { from: 'est', to: 'nivel', kind: 'composes', label: '1..*' },
+    { from: 'nivel', to: 'lugar', kind: 'composes', label: '1..*' },
+    { from: 'lugar', to: 'veh', kind: 'uses', label: '0..1' },
+    { from: 'est', to: 'ticket', kind: 'uses', label: 'emite' },
+    { from: 'est', to: 'asig', kind: 'depends' },
+    { from: 'est', to: 'tarifa', kind: 'depends' },
+    { from: 'cerca', to: 'asig', kind: 'implements' },
+    { from: 'hora', to: 'tarifa', kind: 'implements' },
+    { from: 'carga', to: 'lugar', kind: 'inherits' },
+  ]}
+/>
+
+Tres decisiones que conviene decir en voz alta:
+
+- **`Lugar` no es una jerarquía por tamaño.** Podría haber `LugarChico`, `LugarMediano` y `LugarGrande`, pero no se comportan distinto: solo cambia un dato. Un campo `tamano` y una tabla de compatibilidad bastan. La herencia se reserva para cuando cambia el **comportamiento**, como en `LugarConCarga`.
+- **`Vehiculo` tampoco necesita subclases** por la misma razón. Si el entrevistador insiste en `Moto extends Vehiculo`, discútelo: ¿qué método se comporta distinto?
+- **`Estacionamiento` es una fachada delgada.** No calcula tarifas ni elige lugares; orquesta. Así cada regla que cambia vive en una sola clase.
+
+### El código del núcleo
+
+Este es el código que escribirías en la entrevista. Java es el lenguaje más común en este formato, así que va primero; la versión en TypeScript es la misma idea. Montos en centavos enteros (nunca dinero en coma flotante) y el reloj inyectado (`java.time.Clock` en Java) para poder testear el cobro sin esperar horas:
+
+<CodeTabs>
+
+```java title="Java"
+// import java.time.*; import java.util.*;
+enum TipoVehiculo { MOTO, AUTO, CAMIONETA }
+enum Tamano { CHICO, MEDIANO, GRANDE }
+
+record Vehiculo(String placa, TipoVehiculo tipo) {}
+
+class Lugar {
+    private static final Map<TipoVehiculo, Set<Tamano>> CABE_EN = Map.of(
+            TipoVehiculo.MOTO, EnumSet.allOf(Tamano.class),
+            TipoVehiculo.AUTO, EnumSet.of(Tamano.MEDIANO, Tamano.GRANDE),
+            TipoVehiculo.CAMIONETA, EnumSet.of(Tamano.GRANDE));
+
+    private final String id;
+    private final Tamano tamano;
+    private Vehiculo ocupante; // null = libre
+
+    Lugar(String id, Tamano tamano) {
+        this.id = id;
+        this.tamano = tamano;
+    }
+
+    String id() { return id; }
+    boolean libre() { return ocupante == null; }
+    boolean admite(Vehiculo v) { return CABE_EN.get(v.tipo()).contains(tamano); }
+
+    void ocupar(Vehiculo v) {
+        if (!libre()) throw new IllegalStateException("Lugar " + id + " ocupado");
+        if (!admite(v)) throw new IllegalArgumentException(v.tipo() + " no cabe en " + id);
+        ocupante = v;
+    }
+
+    void liberar() { ocupante = null; }
+}
+
+class Nivel {
+    private final int numero;
+    private final List<Lugar> lugares;
+
+    Nivel(int numero, List<Lugar> lugares) {
+        this.numero = numero;
+        this.lugares = List.copyOf(lugares);
+    }
+
+    List<Lugar> lugares() { return lugares; }
+
+    Optional<Lugar> buscarLibre(Vehiculo v) {
+        return lugares.stream().filter(l -> l.libre() && l.admite(v)).findFirst();
+    }
+}
+
+record Ticket(String id, Vehiculo vehiculo, Lugar lugar, Instant entrada) {}
+
+interface AsignadorLugar {
+    Optional<Lugar> buscar(List<Nivel> niveles, Vehiculo v);
+}
+
+interface EstrategiaTarifa {
+    long calcular(Ticket ticket, Instant salida); // centavos
+}
+
+class MasCercano implements AsignadorLugar {
+    @Override
+    public Optional<Lugar> buscar(List<Nivel> niveles, Vehiculo v) {
+        for (Nivel n : niveles) {
+            Optional<Lugar> lugar = n.buscarLibre(v);
+            if (lugar.isPresent()) return lugar;
+        }
+        return Optional.empty();
+    }
+}
+
+class Estacionamiento {
+    private final Map<String, Ticket> activos = new HashMap<>(); // placa → ticket
+    private final List<Nivel> niveles;
+    private final AsignadorLugar asignador;
+    private final EstrategiaTarifa tarifa;
+    private final Clock reloj; // inyectado: en los tests, Clock.fixed(...)
+
+    Estacionamiento(List<Nivel> niveles, AsignadorLugar asignador, EstrategiaTarifa tarifa, Clock reloj) {
+        this.niveles = List.copyOf(niveles);
+        this.asignador = asignador;
+        this.tarifa = tarifa;
+        this.reloj = reloj;
+    }
+
+    Ticket entrar(Vehiculo v) {
+        if (activos.containsKey(v.placa())) throw new IllegalStateException("El vehículo ya está adentro");
+        Lugar lugar = asignador.buscar(niveles, v)
+                .orElseThrow(() -> new IllegalStateException("Sin lugar disponible"));
+        lugar.ocupar(v);
+        Ticket ticket = new Ticket(UUID.randomUUID().toString(), v, lugar, reloj.instant());
+        activos.put(v.placa(), ticket);
+        return ticket;
+    }
+
+    long salir(String placa) {
+        Ticket ticket = activos.remove(placa);
+        if (ticket == null) throw new IllegalStateException("No hay ticket activo para esa placa");
+        long monto = tarifa.calcular(ticket, reloj.instant());
+        ticket.lugar().liberar();
+        return monto;
+    }
+}
+```
+
+```ts title="TypeScript"
+type TipoVehiculo = 'moto' | 'auto' | 'camioneta'
+type Tamano = 'chico' | 'mediano' | 'grande'
+
+const CABE_EN: Record<TipoVehiculo, Tamano[]> = {
+  moto: ['chico', 'mediano', 'grande'],
+  auto: ['mediano', 'grande'],
+  camioneta: ['grande'],
+}
+
+export class Vehiculo {
+  constructor(readonly placa: string, readonly tipo: TipoVehiculo) {}
+}
+
+export class Lugar {
+  private ocupante: Vehiculo | null = null
+  constructor(readonly id: string, readonly tamano: Tamano) {}
+
+  get libre() { return this.ocupante === null }
+  admite(v: Vehiculo) { return CABE_EN[v.tipo].includes(this.tamano) }
+
+  ocupar(v: Vehiculo) {
+    if (!this.libre) throw new Error(`Lugar ${this.id} ocupado`)
+    if (!this.admite(v)) throw new Error(`${v.tipo} no cabe en ${this.id}`)
+    this.ocupante = v
+  }
+  liberar() { this.ocupante = null }
+}
+
+export class Nivel {
+  constructor(readonly numero: number, readonly lugares: Lugar[]) {}
+  buscarLibre(v: Vehiculo) { return this.lugares.find((l) => l.libre && l.admite(v)) }
+}
+
+export class Ticket {
+  constructor(readonly id: string, readonly vehiculo: Vehiculo, readonly lugar: Lugar, readonly entrada: Date) {}
+}
+
+export interface AsignadorLugar { buscar(niveles: Nivel[], v: Vehiculo): Lugar | undefined }
+export interface EstrategiaTarifa { calcular(t: Ticket, salida: Date): number } // centavos
+
+export class MasCercano implements AsignadorLugar {
+  buscar(niveles: Nivel[], v: Vehiculo) {
+    for (const n of niveles) {
+      const lugar = n.buscarLibre(v)
+      if (lugar) return lugar
+    }
+    return undefined
+  }
+}
+
+export class Estacionamiento {
+  private activos = new Map<string, Ticket>() // placa → ticket
+
+  constructor(
+    private niveles: Nivel[],
+    private asignador: AsignadorLugar,
+    private tarifa: EstrategiaTarifa,
+    private ahora: () => Date = () => new Date(),
+  ) {}
+
+  entrar(v: Vehiculo): Ticket {
+    if (this.activos.has(v.placa)) throw new Error('El vehículo ya está adentro')
+    const lugar = this.asignador.buscar(this.niveles, v)
+    if (!lugar) throw new Error('Sin lugar disponible')
+    lugar.ocupar(v)
+    const ticket = new Ticket(crypto.randomUUID(), v, lugar, this.ahora())
+    this.activos.set(v.placa, ticket)
+    return ticket
+  }
+
+  salir(placa: string): number {
+    const ticket = this.activos.get(placa)
+    if (!ticket) throw new Error('No hay ticket activo para esa placa')
+    const monto = this.tarifa.calcular(ticket, this.ahora())
+    ticket.lugar.liberar()
+    this.activos.delete(placa)
+    return monto
+  }
+}
+```
+
+</CodeTabs>
+
+Fíjate en dónde vive cada regla: "un lugar tiene un solo ocupante" está en `Lugar.ocupar`, no en el estacionamiento. Si mañana alguien ocupa un lugar desde otro camino, la regla se sigue cumpliendo. Eso es encapsular una invariante, y es la diferencia entre un modelo con comportamiento y un [modelo anémico](/patrones/antipatrones).
+
+<Callout type="tip" title="En Java">
+
+`Vehiculo` y `Ticket` son `record`: inmutables y con `equals`/`hashCode` por valor, justo lo que quieres para usarlos como claves o compararlos. Compara placas con `equals`, nunca con `==` (eso compara referencias de `String`). `Map.of` y `List.copyOf` devuelven colecciones inmutables: si alguien intenta modificar los lugares de un nivel desde afuera, falla en vez de romper la invariante en silencio. Y la división entera trunca: "hora o fracción" se escribe `(ms + MS_POR_HORA - 1) / MS_POR_HORA`.
+
+</Callout>
+
+### La tarifa con Strategy
+
+La tarifa es el eje de cambio más obvio: hoy es por hora, el mes que viene habrá una nocturna y otra plana para el fin de semana. Por eso va detrás de una interfaz. Así se ve en los tres lenguajes:
+
+<CodeTabs>
+
+```java title="Java"
+class TarifaPorHora implements EstrategiaTarifa {
+    private static final long MS_POR_HORA = 3_600_000L;
+    private final Map<TipoVehiculo, Long> centavosPorHora;
+
+    TarifaPorHora(Map<TipoVehiculo, Long> centavosPorHora) {
+        this.centavosPorHora = Map.copyOf(centavosPorHora);
+    }
+
+    @Override
+    public long calcular(Ticket ticket, Instant salida) {
+        long ms = Duration.between(ticket.entrada(), salida).toMillis();
+        long horas = Math.max(1, (ms + MS_POR_HORA - 1) / MS_POR_HORA); // hora o fracción, mínimo una
+        return horas * centavosPorHora.get(ticket.vehiculo().tipo());
+    }
+}
+
+class TarifaPlana implements EstrategiaTarifa {
+    private final long centavos;
+
+    TarifaPlana(long centavos) { this.centavos = centavos; }
+
+    @Override
+    public long calcular(Ticket ticket, Instant salida) { return centavos; }
+}
+
+final class Tarifas {
+    private Tarifas() {}
+
+    // Factory simple: elige la estrategia según una regla de negocio
+    static EstrategiaTarifa para(LocalDate dia) {
+        DayOfWeek d = dia.getDayOfWeek();
+        if (d == DayOfWeek.SATURDAY || d == DayOfWeek.SUNDAY) return new TarifaPlana(3000);
+        return new TarifaPorHora(Map.of(
+                TipoVehiculo.MOTO, 500L,
+                TipoVehiculo.AUTO, 1000L,
+                TipoVehiculo.CAMIONETA, 1500L));
+    }
+}
+```
+
+```python title="Python"
+from dataclasses import dataclass
+from datetime import datetime
+from math import ceil
+from typing import Protocol
+
+MS_POR_HORA = 3_600_000
+
+class EstrategiaTarifa(Protocol):
+    def calcular(self, ticket: "Ticket", salida: datetime) -> int: ...  # centavos
+
+@dataclass(frozen=True)
+class TarifaPorHora:
+    centavos_por_hora: dict[str, int]  # tipo de vehículo -> precio
+
+    def calcular(self, ticket, salida):
+        ms = (salida - ticket.entrada).total_seconds() * 1000
+        horas = max(1, ceil(ms / MS_POR_HORA))  # hora o fracción, mínimo una
+        return horas * self.centavos_por_hora[ticket.vehiculo.tipo]
+
+@dataclass(frozen=True)
+class TarifaPlana:
+    centavos: int
+
+    def calcular(self, ticket, salida):
+        return self.centavos
+
+def tarifa_para(dia: datetime) -> EstrategiaTarifa:
+    # Factory simple: elige la estrategia según una regla de negocio
+    if dia.weekday() >= 5:
+        return TarifaPlana(centavos=3000)
+    return TarifaPorHora({"moto": 500, "auto": 1000, "camioneta": 1500})
+```
+
+```ts title="TypeScript"
+const MS_POR_HORA = 3_600_000
+
+export interface EstrategiaTarifa {
+  calcular(ticket: Ticket, salida: Date): number // centavos
+}
+
+export class TarifaPorHora implements EstrategiaTarifa {
+  constructor(private centavosPorHora: Record<TipoVehiculo, number>) {}
+
+  calcular(ticket: Ticket, salida: Date) {
+    const ms = salida.getTime() - ticket.entrada.getTime()
+    const horas = Math.max(1, Math.ceil(ms / MS_POR_HORA)) // hora o fracción, mínimo una
+    return horas * this.centavosPorHora[ticket.vehiculo.tipo]
+  }
+}
+
+export class TarifaPlana implements EstrategiaTarifa {
+  constructor(private centavos: number) {}
+  calcular() { return this.centavos }
+}
+
+export function tarifaPara(dia: Date): EstrategiaTarifa {
+  // Factory simple: elige la estrategia según una regla de negocio
+  const finDeSemana = dia.getDay() === 0 || dia.getDay() === 6
+  return finDeSemana ? new TarifaPlana(3000) : new TarifaPorHora({ moto: 500, auto: 1000, camioneta: 1500 })
+}
+```
+
+</CodeTabs>
+
+En Java la interfaz es nominal: `TarifaPorHora` tiene que declarar `implements EstrategiaTarifa`. En Python, `Protocol` da tipado estructural: cualquier clase con un método `calcular` compatible sirve, sin heredar. En TypeScript pasa lo mismo con las interfaces: el `implements` es documentación y chequeo, no un requisito. Si el entrevistador te pregunta por qué no un `if` con el tipo de tarifa dentro de `salir()`, la respuesta es Open/Closed: cada tarifa nueva sería editar (y volver a probar) el método más crítico del sistema.
+
+<Quiz
+  question="El entrevistador pregunta: '¿Por qué Lugar no tiene subclases LugarChico, LugarMediano y LugarGrande?'. ¿Cuál es la mejor respuesta?"
+  options={[
+    { text: 'Porque la herencia está prohibida en los diseños modernos; siempre hay que usar composición.', why: 'Es dogma, no un argumento. La herencia sirve cuando hay un "es un" con comportamiento distinto, como LugarConCarga.' },
+    { text: 'Porque los tres tamaños se comportan igual; solo cambia un dato, y un campo con una tabla de compatibilidad lo expresa sin multiplicar clases.', correct: true, why: 'Exacto. Las subclases se justifican cuando sobrescriben comportamiento. Si solo difieren en un valor, son un campo. Además, agregar un tamaño nuevo es agregar una entrada, no una clase.' },
+    { text: 'Para ahorrar memoria: cada clase ocupa espacio en el programa.', why: 'El costo en memoria es irrelevante aquí. El argumento es de modelado.' },
+    { text: 'Porque TypeScript no permite clases abstractas.', why: 'TypeScript sí permite clases abstractas (abstract class).' },
+  ]}
+/>
+
+### Extensibilidad: "¿y si ahora hay motos eléctricas?"
+
+Esta repregunta llega casi siempre en alguna forma. La buena respuesta agrega clases y no edita las existentes:
+
+<CodeTabs>
+
+```java title="Java"
+class LugarConCarga extends Lugar {
+    private double kwhEntregados;
+
+    LugarConCarga(String id, Tamano tamano) { super(id, tamano); }
+
+    void registrarCarga(double kwh) { kwhEntregados += kwh; }
+    double kwhEntregados() { return kwhEntregados; }
+
+    @Override
+    void liberar() {
+        super.liberar();
+        kwhEntregados = 0;
+    }
+}
+
+// Decorator sobre cualquier tarifa: suma la energía consumida
+class ConCargaElectrica implements EstrategiaTarifa {
+    private final EstrategiaTarifa base;
+    private final long centavosPorKwh;
+
+    ConCargaElectrica(EstrategiaTarifa base, long centavosPorKwh) {
+        this.base = base;
+        this.centavosPorKwh = centavosPorKwh;
+    }
+
+    @Override
+    public long calcular(Ticket ticket, Instant salida) {
+        long extra = ticket.lugar() instanceof LugarConCarga c
+                ? Math.round(c.kwhEntregados() * centavosPorKwh)
+                : 0;
+        return base.calcular(ticket, salida) + extra;
+    }
+}
+```
+
+```ts title="TypeScript"
+export class LugarConCarga extends Lugar {
+  kwhEntregados = 0
+  registrarCarga(kwh: number) { this.kwhEntregados += kwh }
+  override liberar() {
+    super.liberar()
+    this.kwhEntregados = 0
+  }
+}
+
+// Decorator sobre cualquier tarifa: suma la energía consumida
+export class ConCargaElectrica implements EstrategiaTarifa {
+  constructor(private base: EstrategiaTarifa, private centavosPorKwh: number) {}
+  calcular(ticket: Ticket, salida: Date) {
+    const extra = ticket.lugar instanceof LugarConCarga ? ticket.lugar.kwhEntregados * this.centavosPorKwh : 0
+    return this.base.calcular(ticket, salida) + extra
+  }
+}
+```
+
+</CodeTabs>
+
+Y para que los eléctricos prefieran los lugares con cargador, una nueva implementación de `AsignadorLugar` que busca primero entre los `LugarConCarga`. `Estacionamiento`, `Nivel` y `MasCercano` no cambian. Si el entrevistador sigue ("¿y si el cargador también lo pueden usar autos a combustión cuando no hay eléctricos?"), es una regla del asignador, no del lugar: ves que el diseño aguanta.
+
+Otras extensiones típicas y dónde caen: un **tablero de lugares libres por nivel** es Observer (el nivel avisa cuando un lugar cambia de estado y el tablero se actualiza); **reservas por app** agregan un estado intermedio al lugar (`libre → reservado → ocupado`) y ahí State empieza a pagar; **varias formas de pago** son otra Strategy al salir.
+
+### Concurrencia: "dos autos por el mismo lugar"
+
+Hay dos barreras. Las dos llaman a `asignador.buscar()` casi al mismo tiempo, las dos reciben el lugar `N1-07` (está libre para ambas) y las dos llaman a `ocupar`. Es la clásica carrera de *check-then-act*: entre que compruebas y que actúas, el mundo cambió. Repasa los fundamentos en [concurrencia y paralelismo](/casos/concurrencia).
+
+<Sketch
+  width={640}
+  height={310}
+  caption="La carrera check-then-act: las dos barreras ven el lugar libre antes de que alguna lo ocupe. Con compare-and-set, comprobar y ocupar es un solo paso y solo una gana."
+  items={[
+    { type: 'text', x: 40, y: 34, text: 'barrera A', size: 22 },
+    { type: 'text', x: 250, y: 34, text: 'barrera B', size: 22, with: true },
+    { type: 'arrow', from: [20, 52], to: [20, 286], tone: 'pencil' },
+    { type: 'text', x: 40, y: 84, text: '¿N1-07 libre? sí', size: 20 },
+    { type: 'text', x: 40, y: 130, text: '… mientras tanto', size: 18, tone: 'pencil' },
+    { type: 'text', x: 250, y: 124, text: '¿N1-07 libre? sí', size: 20 },
+    { type: 'text', x: 40, y: 176, text: 'ocupar(N1-07)', size: 20, font: 'code' },
+    { type: 'text', x: 250, y: 216, text: 'ocupar(N1-07)', size: 20, font: 'code', tone: 'bad' },
+    { type: 'cross', x: 428, y: 208, size: 22 },
+    { type: 'highlight', x: 36, y: 250, w: 214, h: 30, tone: 'bad' },
+    { type: 'text', x: 40, y: 272, text: 'dos autos, un lugar', size: 22, tone: 'bad', with: true },
+    { type: 'line', points: [[458, 20], [458, 296]], dashed: true, tone: 'muted' },
+    { type: 'text', x: 476, y: 34, text: 'con CAS', size: 22, tone: 'line' },
+    { type: 'text', x: 476, y: 84, text: ['ocupa solo si', 'sigue libre'], size: 20 },
+    { type: 'check', x: 496, y: 160, size: 26 },
+    { type: 'text', x: 476, y: 214, text: ['A gana;', 'B prueba', 'otro lugar'], size: 20, tone: 'ok' },
+  ]}
+/>
+
+La solución es que **comprobar y ocupar sean una sola operación atómica**, y que el asignador reintente con otro lugar si pierde:
+
+<CodeTabs>
+
+```java title="Java"
+// import java.util.concurrent.atomic.AtomicReference;
+class Lugar {
+    private final String id;
+    private final Tamano tamano;
+    private final AtomicReference<Vehiculo> ocupante = new AtomicReference<>(); // null = libre
+
+    Lugar(String id, Tamano tamano) {
+        this.id = id;
+        this.tamano = tamano;
+    }
+
+    boolean libre() { return ocupante.get() == null; }
+    boolean admite(Vehiculo v) { return CompatibilidadTamano.cabe(v.tipo(), tamano); } // la tabla CABE_EN
+
+    // compare-and-set: ocupa solo si sigue libre, en una única operación atómica
+    boolean intentarOcupar(Vehiculo v) {
+        return admite(v) && ocupante.compareAndSet(null, v);
+    }
+
+    void liberar() { ocupante.set(null); }
+}
+
+final class Asignacion {
+    private Asignacion() {}
+
+    static Optional<Lugar> asignar(List<Nivel> niveles, Vehiculo v) {
+        for (Nivel nivel : niveles) {
+            for (Lugar lugar : nivel.lugares()) {
+                // libre() es solo un filtro barato; la garantía la da intentarOcupar()
+                if (lugar.libre() && lugar.intentarOcupar(v)) return Optional.of(lugar);
+            }
+        }
+        return Optional.empty(); // sin lugar
+    }
+}
+```
+
+```python title="Python"
+import threading
+
+class Lugar:
+    def __init__(self, id: str, tamano: str):
+        self.id, self.tamano = id, tamano
+        self._ocupante = None
+        self._lock = threading.Lock()   # un lock por lugar: grano fino
+
+    def intentar_ocupar(self, v) -> bool:
+        # check-then-act dentro de la sección crítica: atómico
+        with self._lock:
+            if self._ocupante is not None or not self.admite(v):
+                return False
+            self._ocupante = v
+            return True
+
+def asignar(niveles, v):
+    for nivel in niveles:
+        for lugar in nivel.lugares:
+            if lugar.libre and lugar.intentar_ocupar(v):  # el primer chequeo es solo un filtro barato
+                return lugar
+    return None  # sin lugar
+```
+
+```ts title="TypeScript"
+// En Node, un solo proceso no tiene esta carrera en memoria: entre el chequeo y la
+// asignación no hay un await. Aparece cuando el estado vive en una base compartida
+// por varios procesos (las dos barreras). La operación atómica es un UPDATE condicional.
+
+async function intentarOcupar(lugarId: string, placa: string): Promise<boolean> {
+  const r = await db.query(
+    `UPDATE lugares SET ocupado_por = $1
+      WHERE id = $2 AND ocupado_por IS NULL`, // compare-and-set en la base
+    [placa, lugarId],
+  )
+  return r.rowCount === 1 // 0 filas: otra barrera ganó, probar el siguiente
+}
+
+async function asignar(candidatos: string[], placa: string) {
+  for (const id of candidatos) {
+    if (await intentarOcupar(id, placa)) return id
+  }
+  return null
+}
+```
+
+</CodeTabs>
+
+<Callout type="tip" title="En Java">
+
+`AtomicReference.compareAndSet(null, v)` es el compare-and-set sin locks; `synchronized` o un `ReentrantLock` por lugar sirven igual si la sección crítica crece. Ojo con el resto del estado compartido: el `HashMap` de tickets activos no es seguro entre hilos, así que pasa a `ConcurrentHashMap` y usa `putIfAbsent` para que "ya está adentro" también sea atómico.
+
+</Callout>
+
+Lo que suma puntos aquí no es el código, sino la discusión de **granularidad**: un lock global para todo el estacionamiento es correcto pero serializa las dos barreras; un lock por nivel es un punto medio; un lock por lugar (o un compare-and-set) da la máxima concurrencia. También vale mencionar el orden: si alguna operación toma dos locks (por ejemplo, mover un auto de un lugar a otro), tómalos siempre en el mismo orden para evitar *deadlocks*.
+
+<Quiz
+  question="Dos barreras llaman a buscar() y reciben el mismo lugar libre. ¿Qué solución es correcta y escala mejor?"
+  options={[
+    { text: 'Poner un lock global alrededor de todo entrar().', why: 'Es correcto, pero serializa todas las entradas aunque vayan a niveles distintos. Es una buena primera respuesta si dices que es mejorable.' },
+    { text: 'Hacer que ocupar() sea un compare-and-set atómico (lock por lugar o UPDATE condicional) y que el asignador reintente con otro lugar si falla.', correct: true, why: 'La sección crítica es mínima (un lugar) y las barreras solo compiten cuando eligen exactamente el mismo lugar. El reintento resuelve el caso de perder la carrera.' },
+    { text: 'Volver a comprobar si el lugar está libre justo antes de ocuparlo.', why: 'Sigue siendo check-then-act: entre la segunda comprobación y la asignación puede entrar la otra barrera. Achica la ventana, no la cierra.' },
+    { text: 'Agregar un sleep aleatorio en una de las barreras.', why: 'Esconde la carrera en las pruebas y la deja intacta en producción.' },
+  ]}
+/>
+
+## Otros enunciados típicos
+
+El método es el mismo; lo que cambia es dónde está la dificultad. Estos son los enunciados más comunes y lo que el entrevistador quiere ver en cada uno.
+
+**Máquina expendedora.** Es el ejemplo canónico de **State**: la máquina se comporta distinto si está esperando dinero, si tiene saldo, si está dispensando o si está sin stock. Sin State terminas con `if (estado === …)` en cada método. Entidades: `Maquina`, `Producto`, `Inventario`, `Moneda`. Puntos finos: dar el vuelto con las monedas disponibles (un problema greedy que no siempre funciona con cualquier sistema de monedas) y qué pasa si cancelas a mitad de la compra.
+
+**Ascensor.** Entidades: `Ascensor`, `Solicitud` (desde un piso o desde la cabina), `Controlador`. El estado de cada ascensor (subiendo, bajando, detenido, puertas abiertas) pide State. El corazón es la **política de despacho**: qué ascensor atiende cada llamada y en qué orden visita los pisos (el algoritmo SCAN, que sigue en una dirección hasta agotar solicitudes, como el brazo de un disco). Ponla detrás de una interfaz: es Strategy.
+
+**Sistema de biblioteca.** La trampa es distinguir `Libro` (el título, con su ISBN) de `Ejemplar` (la copia física que se presta). Luego `Socio`, `Prestamo` y `Reserva`. Reglas: límite de préstamos por socio, multa por atraso (Strategy si hay tipos de socio), cola de reservas por libro y aviso cuando vuelve un ejemplar (Observer).
+
+**LRU cache como diseño de clase.** Aquí el diseño es pequeño y lo que importa es la estructura de datos: un diccionario de clave a nodo más una **lista doblemente enlazada** para el orden de uso, con `get` y `put` en O(1). Está resuelta paso a paso en [listas enlazadas](/casos/listas-enlazadas). Repreguntas: hacerla genérica (`LruCache<K, V>`), segura para hilos (un lock alrededor de cada operación, porque hasta `get` modifica la lista) y con TTL por entrada.
+
+**Rate limiter en memoria.** Una interfaz `RateLimiter` con `permitir(clave): boolean` y varias implementaciones (token bucket, ventana deslizante): Strategy otra vez. Un mapa de clave a estado del balde, con un reloj inyectado para testear. Repreguntas: concurrencia sobre el mismo balde, limpiar claves inactivas para no fugar memoria, y qué cambia cuando hay varias instancias (ahí pasas a system design: mira el [rate limiter distribuido](/casos/rate-limiter)).
+
+**Ajedrez o tres en raya.** `Tablero`, `Pieza`, `Jugador`, `Partida`, `Movimiento`. En ajedrez, cada pieza calcula sus movimientos válidos: polimorfismo genuino, un buen lugar para herencia o Strategy. Guardar los movimientos como objetos (Command) da deshacer y rehacer gratis. En tres en raya, la repregunta es detectar el ganador en O(1) por jugada: contadores por fila, columna y diagonal en lugar de recorrer el tablero.
+
+**Splitwise (dividir gastos).** `Usuario`, `Grupo`, `Gasto` y `Division`. El gasto puede dividirse en partes iguales, por montos exactos o por porcentaje: Strategy, con validación (los porcentajes suman 100, los montos suman el total). Los saldos se guardan como un mapa de "quién le debe a quién". Repregunta clásica: **simplificar deudas** para minimizar las transferencias, que se resuelve calculando el saldo neto de cada persona y emparejando deudores con acreedores.
+
+<Callout type="tip" title="Cuando no reconoces el enunciado">
+
+No hace falta haber visto el problema. Aplica el método: requisitos, sustantivos, verbos, relaciones, ejes de cambio. El entrevistador prefiere ver ese razonamiento sobre un dominio nuevo antes que un diseño memorizado que no sabes adaptar cuando cambia un requisito.
+
+</Callout>
+
+## Errores comunes
+
+- **Empezar por las clases.** Sin requisitos, diseñas para un problema que nadie te pidió. Cinco minutos de preguntas ahorran veinte de rediseño.
+- **La clase Dios.** Un `SistemaEstacionamiento` con todos los métodos. Reparte responsabilidades: cada clase debería tener una razón para cambiar.
+- **Herencia por taxonomía.** `Auto extends Vehiculo` porque "un auto es un vehículo", aunque nada se comporte distinto. La pregunta correcta es qué método sobrescribes.
+- **Patrones de catálogo.** Meter Singleton, Builder y Visitor para impresionar. Cada patrón que no puedas justificar con un requisito te resta.
+- **Getters y setters para todo.** Un `setOcupante()` público rompe la invariante que `ocupar()` protegía. Expón comportamiento, no estado.
+- **Ignorar la concurrencia** cuando el enunciado la tiene (varias barreras, varios ascensores, varios cajeros). Si no la mencionas tú, te la van a preguntar.
+- **Dinero en coma flotante.** `0.1 + 0.2` no da `0.3`. Centavos enteros o un tipo decimal.
+
+<Quiz
+  question="Estás diseñando una máquina expendedora y cada método (insertarMoneda, elegirProducto, cancelar) empieza con un switch sobre el estado actual. ¿Qué patrón ataca ese olor y por qué?"
+  options={[
+    { text: 'Strategy, porque hay varias formas de cobrar.', why: 'Strategy encapsula un algoritmo intercambiable que elige el cliente. Aquí lo que cambia es el comportamiento según el estado interno, y las transiciones las decide el propio objeto.' },
+    { text: 'State: cada estado es una clase con su versión de cada método, y la máquina delega en su estado actual, que decide la transición siguiente.', correct: true, why: 'Exacto. Desaparecen los switch repetidos, cada estado se lee completo en un solo lugar y agregar uno nuevo (por ejemplo, "en mantenimiento") no toca los demás.' },
+    { text: 'Singleton, para que haya una sola máquina.', why: 'No resuelve el switch y agrega estado global, que complica los tests.' },
+    { text: 'Observer, para avisar al proveedor cuando falta stock.', why: 'Puede ser útil para esa notificación, pero no elimina los switch sobre el estado.' },
+  ]}
+/>
+
+## Práctica: las repreguntas de LLD
+
+<QuestionDeck
+  title="Repreguntas"
+  cards={[
+    {
+      q: '¿Cuál es la diferencia entre composición y agregación? Dame un ejemplo de tu diseño.',
+      checks: 'Que entiendas ciclo de vida y propiedad, no solo el dibujo del rombo.',
+      level: 'junior',
+      answer: <>En las dos, un objeto contiene a otros. En la <b>composición</b>, las partes no existen sin el todo: si destruyo el estacionamiento, sus niveles y lugares desaparecen con él. En la <b>agregación</b>, las partes tienen vida propia: un grupo de Splitwise agrega usuarios, pero si borro el grupo los usuarios siguen existiendo. En el código se nota en quién crea y quién destruye: en la composición, el todo crea sus partes.</>,
+      strong: ['Habla de ciclo de vida y de quién crea las partes', 'Usa ejemplos de su propio diseño'],
+      weak: ['Solo describe el rombo lleno o vacío', 'Dice que en el código son exactamente iguales y no aporta más'],
+      followups: ['¿Y la asociación simple?', '¿Cómo se ve la composición en una base de datos?'],
+    },
+    {
+      q: '¿Por qué separaste la tarifa en una interfaz en vez de un if dentro de salir()?',
+      checks: 'Que conectes el patrón con un eje de cambio real.',
+      level: 'junior',
+      answer: <>Porque me dijiste que la tarifa cambia: por hora entre semana, plana el fin de semana, y probablemente una nocturna. Con un if, cada tarifa nueva es editar el método de salida, que es el más crítico. Con Strategy, una tarifa nueva es una clase nueva que se prueba sola, y el estacionamiento ni se entera. Si la tarifa fuera única y estable, un método simple bastaba.</>,
+      strong: ['Cita el requisito que lo justifica', 'Dice cuándo no haría falta'],
+      weak: ['"Porque es una buena práctica"', 'No sabe nombrar el principio Open/Closed'],
+      followups: ['¿Quién decide qué estrategia usar?', '¿Y si la tarifa depende de la hora de entrada y la de salida?'],
+    },
+    {
+      q: '¿Cuál es la diferencia entre Strategy y State? Tienen el mismo diagrama.',
+      checks: 'Que distingas la intención detrás de una estructura igual.',
+      level: 'semi',
+      answer: <>La estructura es la misma: un objeto delega en otro detrás de una interfaz. La diferencia es <b>quién elige y cuándo cambia</b>. En Strategy, el cliente elige el algoritmo desde afuera y en general no cambia solo. En State, el objeto cambia de estado por dentro, y cada estado decide cuál es el siguiente: la máquina expendedora pasa de "esperando dinero" a "con saldo" cuando insertas una moneda, sin que nadie de afuera lo pida.</>,
+      strong: ['Habla de quién controla la transición', 'Da un ejemplo de cada uno'],
+      weak: ['Dice que son iguales', 'Confunde State con una enumeración de estados'],
+      followups: ['¿Cuándo un enum con un switch es suficiente?'],
+    },
+    {
+      q: 'Dos barreras asignan el mismo lugar. ¿Cómo lo evitas y qué granularidad de lock eliges?',
+      checks: 'Que nombres la carrera check-then-act y discutas trade-offs de granularidad.',
+      level: 'senior',
+      answer: <>Es una carrera de comprobar y después actuar. Hago que <code>ocupar</code> sea atómico: un compare-and-set sobre el lugar, con un lock por lugar en memoria o un <code>UPDATE … WHERE ocupado_por IS NULL</code> si el estado está en una base. Si la operación falla, el asignador prueba con el siguiente candidato. Un lock global es correcto pero serializa todas las entradas; por nivel es un punto medio; por lugar da la máxima concurrencia y solo compiten las barreras que eligen exactamente el mismo lugar.</>,
+      strong: ['Nombra la carrera y la sección crítica', 'Compara tres granularidades', 'Menciona el reintento'],
+      weak: ['"Uso synchronized" sin decir sobre qué', 'Propone volver a chequear antes de ocupar'],
+      followups: ['¿Y si mover un auto de lugar toma dos locks?', '¿Cómo lo testeas?'],
+    },
+    {
+      q: '¿Cuándo usarías herencia en este diseño y cuándo no?',
+      checks: 'Que no uses herencia como taxonomía.',
+      level: 'semi',
+      answer: <>Uso herencia cuando una subclase cambia comportamiento y puede reemplazar a la base sin sorpresas (Liskov). <code>LugarConCarga</code> sobrescribe <code>liberar()</code> para resetear la energía: tiene sentido. <code>LugarChico</code> y <code>LugarGrande</code> solo cambiarían un dato, así que son un campo. Para variar algoritmos prefiero composición con una interfaz, porque se puede cambiar en tiempo de ejecución y no me ata a una jerarquía.</>,
+      strong: ['Menciona Liskov', 'Distingue dato de comportamiento'],
+      weak: ['"Nunca uso herencia"', '"Siempre que haya un es-un"'],
+      followups: ['¿Qué problema trae una jerarquía profunda?'],
+    },
+    {
+      q: '¿Cómo testearías el cálculo de la tarifa sin esperar tres horas?',
+      checks: 'Que diseñes pensando en testabilidad: dependencias inyectadas.',
+      level: 'junior',
+      answer: <>El reloj es una dependencia: lo inyecto en el constructor (un <code>java.time.Clock</code> en Java, <code>ahora: () =&gt; Date</code> en TypeScript). En el test paso un reloj falso que devuelve las 10:00 al entrar y las 12:30 al salir (con <code>Clock.fixed</code> o una subclase de <code>Clock</code> que puedo adelantar), y verifico que se cobran tres horas. Lo mismo con la tarifa: puedo testear <code>TarifaPorHora</code> sola, con un ticket construido a mano, sin estacionamiento.</>,
+      strong: ['Inyecta el reloj', 'Testea la estrategia aislada', 'Elige casos borde: justo una hora, un minuto más'],
+      weak: ['Mockea Date globalmente sin pensar en el diseño', 'No sabe cómo'],
+      followups: ['¿Qué casos borde probarías?'],
+    },
+    {
+      q: '¿Usarías Singleton para el estacionamiento? Hay uno solo.',
+      checks: 'Que conozcas el costo de Singleton.',
+      level: 'semi',
+      answer: <>Que haya uno solo en producción no significa que la clase tenga que impedir crear otro. Singleton es estado global: complica los tests (no puedo crear un estacionamiento limpio por test) y esconde dependencias. Prefiero crear una instancia al arrancar la aplicación y pasarla a quien la necesite. Si mañana la empresa tiene dos sedes, ese diseño ya funciona.</>,
+      strong: ['Distingue "hay uno" de "la clase lo impone"', 'Habla de tests y de inyección de dependencias'],
+      weak: ['"Sí, porque hay uno solo"'],
+      followups: ['¿Hay algún caso donde Singleton sí tenga sentido?'],
+    },
+    {
+      q: 'Ahora el estacionamiento acepta reservas desde una app. ¿Qué cambia en tu diseño?',
+      checks: 'Que veas el impacto en estados, concurrencia y en el asignador.',
+      level: 'senior',
+      answer: <>El lugar gana un estado intermedio: libre, reservado, ocupado. Con tres estados y transiciones con reglas (una reserva vence si no llegas en 15 minutos) empieza a pagar State, o al menos una máquina de estados explícita. Aparece una entidad <code>Reserva</code> con vencimiento, el asignador tiene que saltar los lugares reservados para otro, y la concurrencia ahora incluye app contra barrera. El vencimiento necesita un proceso que libere reservas expiradas.</>,
+      strong: ['Identifica el nuevo estado y sus transiciones', 'Piensa en el vencimiento', 'Vuelve a la concurrencia'],
+      weak: ['Agrega un booleano reservado sin pensar en transiciones'],
+      followups: ['¿Dónde vive la lógica de vencimiento?'],
+    },
+    {
+      q: 'Diseña la clase de una caché LRU. ¿Qué estructuras usas y por qué?',
+      checks: 'Que combines dos estructuras para lograr O(1) en todas las operaciones.',
+      level: 'semi',
+      answer: <>Un diccionario de clave a nodo para encontrar en O(1), y una lista doblemente enlazada para el orden de uso: el más reciente al frente y el menos reciente al final. <code>get</code> mueve el nodo al frente; <code>put</code> lo inserta al frente y, si se pasa de capacidad, borra el del final y su clave del diccionario. La lista es doble para poder sacar un nodo del medio en O(1). Si es multihilo, un lock alrededor de cada operación, porque hasta <code>get</code> modifica la lista.</>,
+      strong: ['Explica por qué la lista es doble', 'Nota que get también escribe'],
+      weak: ['Usa un arreglo y busca el menos usado en O(n)'],
+      followups: ['¿Cómo agregarías TTL por entrada?', '¿Y una versión LFU?'],
+    },
+  ]}
+/>
+
+<Takeaways>
+
+- LLD es diseño **dentro de un proceso**: clases, interfaces, relaciones y código. System design es entre procesos. No mezcles las altitudes.
+- Sigue el método en voz alta: requisitos, sustantivos y verbos, relaciones, patrones solo donde hay un eje de cambio, código del núcleo, extensión y concurrencia.
+- Cada patrón se justifica con un requisito. Strategy para reglas que cambian (tarifas, asignación), State para comportamiento que depende del estado, Observer para avisar cambios, Factory cuando crear tiene lógica.
+- Herencia solo cuando cambia el comportamiento; si solo cambia un dato, es un campo.
+- Encapsula las invariantes en la clase que las posee (`Lugar.ocupar`), inyecta el reloj y trabaja el dinero en centavos.
+- La extensión correcta agrega clases sin editar las existentes, y la concurrencia se resuelve haciendo atómico el comprobar y actuar, discutiendo la granularidad del lock.
+
+</Takeaways>
+
+## Fuentes y lecturas
+
+- Hello Interview, [Low-Level Design in a Hurry](https://www.hellointerview.com/learn/low-level-design): marco de entrega y problemas resueltos (estacionamiento, ascensor, rate limiter).
+- Donne Martin, [system-design-primer](https://github.com/donnemartin/system-design-primer), sección de diseño orientado a objetos, con una [solución del estacionamiento](https://github.com/donnemartin/system-design-primer/blob/master/solutions/object_oriented_design/parking_lot/parking_lot.ipynb).
+- Ashish Pratap Singh, [awesome-low-level-design](https://github.com/ashishps1/awesome-low-level-design): catálogo de enunciados de LLD con soluciones en varios lenguajes.
+- Refactoring.Guru: [Strategy](https://refactoring.guru/design-patterns/strategy), [State](https://refactoring.guru/design-patterns/state), [Observer](https://refactoring.guru/design-patterns/observer) y [Factory Method](https://refactoring.guru/design-patterns/factory-method).
+- Gamma, Helm, Johnson y Vlissides, *Design Patterns: Elements of Reusable Object-Oriented Software*, Addison-Wesley, 1994.
+- LeetCode, [Design Parking System](https://leetcode.com/problems/design-parking-system/) y [LRU Cache](https://leetcode.com/problems/lru-cache/): versiones reducidas para practicar el código del núcleo.

@@ -1,0 +1,838 @@
+import { RecursionVsMemo } from '../../components/widgets/entrevistas/RecursionVsMemo'
+import { DpTable } from '../../components/widgets/entrevistas/DpTable'
+
+La programación dinámica (DP) tiene fama de ser el tema más difícil de las entrevistas de código, y en parte la merece: no hay una plantilla que se copie y funcione. Pero la dificultad casi nunca está en el código, que suele tener diez líneas. Está en **definir bien qué guarda cada celda de la tabla**. Si esa frase está bien escrita, la recurrencia sale sola; si está mal, ningún truco la salva.
+
+La idea de fondo es simple: si un problema se arma con subproblemas más chicos y esos subproblemas **se repiten**, resuélvelos una vez y guarda la respuesta. Eso es todo. Lo demás es método: reconocer cuándo aplica, escribir el estado en palabras, encontrar la recurrencia, elegir los casos base, el orden de cálculo y dónde está la respuesta. Este tema te da ese método y lo aplica a los nueve problemas que más aparecen.
+
+<Sketch
+  width={640}
+  height={320}
+  caption="La idea del tema en un dibujo: la recursión ingenua vuelve a abrir subárboles que ya resolvió; la tabla calcula cada valor una vez, leyendo los anteriores."
+  items={[
+    { type: 'text', x: 24, y: 32, text: 'sin memoria: un árbol', size: 22, tone: 'pencil' },
+    { type: 'circle', x: 150, y: 80, r: 22, label: '5' },
+    { type: 'path', d: 'M136 97 L104 143 M164 97 L196 143 M78 179 L60 221 M102 179 L120 221', len: 220, tone: 'muted' },
+    { type: 'circle', x: 90, y: 160, r: 22, label: '4' },
+    { type: 'circle', x: 50, y: 240, r: 22, label: '3' },
+    { type: 'circle', x: 130, y: 240, r: 22, label: '2', with: true },
+    { type: 'circle', x: 210, y: 160, r: 22, label: '3', tone: 'bad', fill: true },
+    { type: 'text', x: 210, y: 214, text: 'otra vez', size: 20, anchor: 'middle', tone: 'bad' },
+    { type: 'text', x: 24, y: 300, text: 'O(2^n) llamadas', size: 22, font: 'code', tone: 'bad' },
+    { type: 'line', points: [[300, 20], [300, 300]], dashed: true, tone: 'muted' },
+    { type: 'text', x: 330, y: 32, text: 'con memoria: una fila', size: 22, tone: 'line' },
+    { type: 'cells', x: 340, y: 140, values: [1, 1, 2, 3, 5, 8], size: 46, index: true, states: [null, null, null, null, null, 'line'] },
+    { type: 'arrow', from: [501, 120], to: [586, 120], bend: -40, tone: 'line' },
+    { type: 'arrow', from: [547, 120], to: [594, 120], bend: -22, tone: 'line', with: true },
+    { type: 'text', x: 340, y: 236, text: ['cada valor se calcula', 'una sola vez'], size: 20, tone: 'pencil' },
+    { type: 'text', x: 340, y: 300, text: 'O(n)', size: 22, font: 'code', tone: 'ok' },
+  ]}
+/>
+
+## Cómo reconocer un problema de DP
+
+Un problema se resuelve con DP cuando cumple dos condiciones:
+
+1. **Subproblemas que se repiten.** Al resolverlo de forma recursiva, la misma llamada aparece una y otra vez. Para subir 5 escalones necesitas saber cuántas formas hay de subir 4 y 3; para subir 4, necesitas 3 y 2. El "3" ya apareció dos veces.
+2. **Subestructura óptima.** La mejor respuesta del problema grande se arma con las mejores respuestas de los chicos. El mínimo de monedas para 11 es uno más que el mínimo para 11 − c, para alguna moneda c.
+
+En la práctica, el enunciado te da pistas bastante directas:
+
+| Si el enunciado pregunta… | Piensa en |
+|---|---|
+| "¿De **cuántas formas** se puede…?" | DP que suma (escaleras, Coin Change II, caminos en una grilla) |
+| "¿Cuál es el **mínimo** o el **máximo**…?" | DP que toma min o max (monedas, ladrón de casas, mochila) |
+| "¿**Es posible**…?" | DP de booleanos (Word Break, suma de subconjunto) |
+| "La subsecuencia más larga…", dos cadenas a comparar | DP en 2D sobre prefijos (LCS, Edit Distance) |
+| "Lista **todas** las combinaciones…" | No es DP: es [backtracking](/casos/backtracking). Si hay que enumerarlas, no puedes evitar generarlas. |
+
+La última fila importa. DP sirve para **contar** u **optimizar** sobre un espacio enorme de opciones sin recorrerlas una por una. Si te piden las opciones en sí, la salida ya es exponencial y DP no te ahorra nada.
+
+<Callout type="interview">
+
+Lo que el entrevistador evalúa en un problema de DP no es que recites la recurrencia de memoria. Quiere ver que **defines el estado en voz alta** ("dp[i] es el mejor botín usando las primeras i casas"), que justificas la recurrencia con un caso concreto y que sabes pasar de la recursión a la tabla. Decir "esto es DP" sin explicar el estado no suma puntos.
+
+</Callout>
+
+## El método en cinco pasos
+
+Antes de escribir código, responde estas cinco preguntas. Escríbelas como comentario en el editor de la entrevista: ordenan tu cabeza y le muestran al entrevistador cómo piensas.
+
+<Steps>
+<Step title="Estado: qué significa una celda">
+
+Una frase en español, sin ambigüedad: "`dp[a]` es el mínimo de monedas para formar exactamente el monto `a`". Si no la puedes escribir, todavía no entendiste el problema.
+
+</Step>
+<Step title="Recurrencia: cómo se calcula una celda con otras">
+
+Piensa en **la última decisión**. ¿Cuál fue el último escalón, la última moneda, la última casa? Cada opción para esa decisión te lleva a un subproblema más chico.
+
+</Step>
+<Step title="Casos base">
+
+Los valores que no dependen de nada: `dp[0] = 0`, la fila de la cadena vacía, el primer escalón. Aquí es donde se decide si inicializas con 0, con 1 o con infinito.
+
+</Step>
+<Step title="Orden de cálculo">
+
+Cada celda tiene que calcularse **después** de las celdas que lee. En 1D suele ser de izquierda a derecha; en 2D, fila por fila. En la mochila 0/1 con un solo arreglo, de derecha a izquierda.
+
+</Step>
+<Step title="Dónde está la respuesta">
+
+A veces es la última celda (`dp[n]`), a veces el máximo de toda la tabla (LIS), a veces la esquina inferior derecha (LCS).
+
+</Step>
+</Steps>
+
+### De la recursión a la tabla, con Climbing Stairs
+
+**Enunciado.** Una escalera tiene `n` escalones. Puedes subir de a 1 o de a 2. ¿De cuántas formas distintas llegas arriba? Para `n = 3` la respuesta es 3: `1+1+1`, `1+2` y `2+1`.
+
+**Qué preguntar.** ¿`n` puede ser 0? (Normalmente no, pero si lo es, la respuesta convencional es 1: la forma de no moverse.) ¿Qué tan grande puede ser `n`? Si llega a 10⁵, la recursión profunda revienta la pila (`RecursionError` en Python, `StackOverflowError` en Java).
+
+**Fuerza bruta.** Para llegar al escalón `n`, el último paso vino del `n − 1` o del `n − 2`. Así que `climb(n) = climb(n − 1) + climb(n − 2)`. Es Fibonacci disfrazado. La versión recursiva directa es correcta, pero cada llamada abre dos más:
+
+<CodeTabs>
+
+```java title="Java"
+public int climb(int n) {
+    if (n <= 1) return 1;
+    return climb(n - 1) + climb(n - 2);
+}
+```
+
+```python title="Python"
+def climb(n):
+    if n <= 1:
+        return 1
+    return climb(n - 1) + climb(n - 2)
+```
+
+</CodeTabs>
+
+Eso es **O(2ⁿ)** (más precisamente, crece como φⁿ ≈ 1,618ⁿ). Con `n = 40` ya son cientos de millones de llamadas. La razón es que recalcula lo mismo muchísimas veces, y lo puedes ver:
+
+<RecursionVsMemo />
+
+**Paso 1: memoización (top-down).** Mismo código, más un diccionario (un `HashMap` en Java). Antes de calcular, pregunta si ya lo sabes; después de calcular, guárdalo. Cada `n` se resuelve una vez: **O(n)** tiempo y O(n) memoria (el diccionario más la pila de recursión).
+
+<CodeTabs>
+
+```java title="Java"
+private final Map<Integer, Integer> memo = new HashMap<>();
+
+public int climb(int n) {
+    if (n <= 1) return 1;
+    Integer cached = memo.get(n);
+    if (cached != null) return cached;
+    int ways = climb(n - 1) + climb(n - 2);
+    memo.put(n, ways);
+    return ways;
+}
+```
+
+```python title="Python"
+from functools import cache
+
+@cache
+def climb(n):
+    if n <= 1:
+        return 1
+    return climb(n - 1) + climb(n - 2)
+```
+
+</CodeTabs>
+
+En Java el memo se escribe a mano; en Python, `functools.cache` hace exactamente lo del widget. Úsalo si el entrevistador lo acepta, pero sé capaz de escribir el diccionario a mano: a veces te lo piden para ver que entiendes qué pasa.
+
+**Paso 2: tabulación (bottom-up).** En vez de bajar desde `n` y esperar a que vuelvan las llamadas, llena un arreglo desde abajo: `dp[0]`, `dp[1]`, `dp[2]`… Cada celda se calcula cuando las dos anteriores ya están listas. Sin recursión, sin riesgo de pila.
+
+<CodeTabs>
+
+```java title="Java"
+public int climb(int n) {
+    int[] dp = new int[n + 1]; // dp[i] = formas de llegar al escalón i
+    Arrays.fill(dp, 1);
+    for (int i = 2; i <= n; i++) {
+        dp[i] = dp[i - 1] + dp[i - 2];
+    }
+    return dp[n];
+}
+```
+
+```python title="Python"
+def climb(n):
+    dp = [1] * (n + 1)          # dp[i] = formas de llegar al escalón i
+    for i in range(2, n + 1):
+        dp[i] = dp[i - 1] + dp[i - 2]
+    return dp[n]
+```
+
+</CodeTabs>
+
+**Paso 3: optimizar memoria.** Si `dp[i]` solo lee las dos celdas anteriores, no necesitas el arreglo completo: dos variables bastan. O(n) tiempo, **O(1)** memoria.
+
+<CodeTabs>
+
+```java title="Java"
+public int climbStairs(int n) {
+    int prev2 = 1, prev1 = 1; // formas de llegar a i-2 y a i-1
+    for (int i = 2; i <= n; i++) {
+        int cur = prev1 + prev2;
+        prev2 = prev1;
+        prev1 = cur;
+    }
+    return prev1;
+}
+```
+
+```python title="Python"
+def climb_stairs(n: int) -> int:
+    prev2, prev1 = 1, 1  # formas de llegar a i-2 y a i-1
+    for _ in range(2, n + 1):
+        prev2, prev1 = prev1, prev1 + prev2
+    return prev1
+```
+
+```ts title="TypeScript"
+function climbStairs(n: number): number {
+  let prev2 = 1 // formas de llegar a i-2
+  let prev1 = 1 // formas de llegar a i-1
+  for (let i = 2; i <= n; i++) {
+    ;[prev2, prev1] = [prev1, prev1 + prev2]
+  }
+  return prev1
+}
+```
+
+</CodeTabs>
+
+<Callout type="tip" title="En Java">
+
+Con `int`, la respuesta desborda en `n = 46`: `climbStairs(46)` devuelve `-1323752223`, sin ningún error. LeetCode limita `n` a 45, el último valor que cabe. Si te piden más, usa `long` (alcanza hasta `n = 91`) o `BigInteger`. En la versión memoizada, `memo.get(n)` devuelve un `Integer` que puede ser `null`: compáralo con `null` antes de desempaquetarlo, o usa un `int[]` como memo.
+
+</Callout>
+
+¿Cuál conviene en la entrevista? **Empieza por la que te salga más natural**, casi siempre la memoización, porque sale directo de la recursión. Si te sobra tiempo, pasa a la tabla y menciona la optimización de memoria. Top-down tiene una ventaja real: solo calcula los subproblemas que se necesitan. Bottom-up tiene otras: no hay límite de recursión (en CPython el límite por defecto es 1.000 llamadas; en Java lo pone el tamaño de la pila del hilo, que se ajusta con `-Xss`) y suele ser más rápida por no tener el costo de las llamadas.
+
+**Variantes y repreguntas.** "¿Y si puedes subir 1, 2 o 3?" (suma tres términos). "¿Y si cada escalón tiene un costo?" (es [Min Cost Climbing Stairs](https://leetcode.com/problems/min-cost-climbing-stairs/): cambia la suma por un min). "¿Y si algunos escalones están rotos?" (esas celdas valen 0).
+
+<Quiz
+  question="Tu solución memoizada de Climbing Stairs en Python funciona para n = 500 pero falla con RecursionError para n = 5.000. ¿Cuál es la mejor corrección?"
+  options={[
+    { text: 'Agregar @cache también a la función de afuera.', why: 'La caché no cambia la profundidad: la primera llamada a climb(5000) igual baja 5.000 niveles antes de que vuelva algo.' },
+    { text: 'Reescribirla bottom-up con un bucle.', correct: true, why: 'La tabulación no usa la pila de llamadas, así que no hay límite de recursión. Además, como solo lee dos celdas anteriores, puede usar O(1) memoria.' },
+    { text: 'Cambiar el diccionario por una lista, que es más rápida.', why: 'Puede ser un poco más rápido, pero el problema es la profundidad de la recursión, no la estructura del memo.' },
+    { text: 'Es imposible: la respuesta para n = 5.000 no cabe en un entero.', why: 'En Python los enteros no tienen tamaño fijo. En TypeScript sí te pasarías de Number.MAX_SAFE_INTEGER, pero ese es otro problema.' },
+  ]}
+/>
+
+## Problemas en una dimensión
+
+En todos estos el estado es un índice (una posición del arreglo o un monto) y la tabla es una fila.
+
+### House Robber
+
+**Enunciado.** Cada casa de una calle tiene una cantidad de dinero. No puedes robar dos casas vecinas porque salta la alarma. ¿Cuánto es lo máximo que puedes llevarte? `[2, 7, 9, 3, 1]` → `12` (casas 0, 2 y 4: 2 + 9 + 1).
+
+**Qué preguntar.** ¿Puede haber valores negativos o cero? ¿La calle es una línea o un círculo? (Si es un círculo, es House Robber II.) ¿Arreglo vacío?
+
+**Fuerza bruta.** Probar todos los subconjuntos sin vecinos: O(2ⁿ).
+
+**Idea clave.** Mira la última casa: o la robas (y entonces no robaste la anterior) o no la robas (y te quedas con lo mejor hasta la anterior). Estado: `dp[i]` = mejor botín con las primeras `i` casas. Recurrencia: `dp[i] = max(dp[i − 1], dp[i − 2] + nums[i − 1])`.
+
+**Señal para reconocer el patrón:** si ves "elegir elementos de una secuencia con una restricción sobre los vecinos", piensa en "tomarlo o saltarlo", con un estado por posición.
+
+<CodeTabs>
+
+```java title="Java"
+public int rob(int[] nums) {
+    int prev2 = 0, prev1 = 0; // mejor botín hasta i-2 y hasta i-1
+    for (int x : nums) {
+        int cur = Math.max(prev1, prev2 + x);
+        prev2 = prev1;
+        prev1 = cur;
+    }
+    return prev1;
+}
+```
+
+```python title="Python"
+def rob(nums: list[int]) -> int:
+    prev2, prev1 = 0, 0  # mejor botín hasta i-2 y hasta i-1
+    for x in nums:
+        prev2, prev1 = prev1, max(prev1, prev2 + x)
+    return prev1
+```
+
+```ts title="TypeScript"
+function rob(nums: number[]): number {
+  let prev2 = 0 // mejor botín hasta i-2
+  let prev1 = 0 // mejor botín hasta i-1
+  for (const x of nums) {
+    ;[prev2, prev1] = [prev1, Math.max(prev1, prev2 + x)]
+  }
+  return prev1
+}
+```
+
+</CodeTabs>
+
+**Complejidad.** O(n) tiempo, O(1) memoria.
+
+**Casos borde y errores típicos.** Arreglo vacío (devuelve 0, y el código lo maneja sin `if`). Una sola casa. El error clásico es la recurrencia "codiciosa": robar siempre la mayor entre dos vecinas. Con `[2, 1, 1, 2]` la respuesta es 4 (primera y última), y un greedy local se equivoca.
+
+**Variantes.** House Robber II (circular): corre el algoritmo dos veces, sin la primera casa y sin la última, y quédate con el máximo. House Robber III: las casas forman un árbol, y el estado pasa a ser "mejor botín del subárbol robando o sin robar la raíz".
+
+### Coin Change: el mínimo de monedas
+
+**Enunciado.** Dadas denominaciones `coins` y un `amount`, devuelve la menor cantidad de monedas que suman exactamente `amount`, o `-1` si es imposible. Hay monedas ilimitadas de cada tipo. `coins = [1, 2, 5], amount = 11` → `3` (5 + 5 + 1).
+
+**Qué preguntar.** ¿Las monedas son ilimitadas? ¿Puede `amount` ser 0? (Respuesta: 0 monedas.) ¿Qué devuelvo si es imposible?
+
+**Fuerza bruta.** Probar todas las combinaciones con recursión: exponencial en el monto. La tentación es usar **greedy** (siempre la moneda más grande que quepa). Funciona con `[1, 2, 5]`, pero falla con `[1, 3, 4]` y monto 6: greedy toma 4 + 1 + 1 (3 monedas) cuando 3 + 3 (2 monedas) es mejor. Ese contraejemplo se analiza en [intervalos y greedy](/casos/intervalos-y-greedy).
+
+**Idea clave.** La última moneda que usaste fue alguna `c`. Lo que queda, `a − c`, también se tiene que formar con el mínimo de monedas. Estado: `dp[a]` = mínimo de monedas para formar `a`. Recurrencia: `dp[a] = min(dp[a − c] + 1)` sobre todas las monedas `c ≤ a`.
+
+**Señal para reconocer el patrón:** si ves "mínimo número de piezas para llegar exactamente a un total, con piezas reutilizables", piensa en un DP indexado por el total.
+
+Mira cómo se llena la tabla. Cambia la entrada a `[1, 3, 4] → 6` para ver dónde fallaría el greedy y a `[2] → 3` para ver por qué la tabla empieza en infinito:
+
+<DpTable />
+
+<CodeTabs>
+
+```java title="Java"
+public int coinChange(int[] coins, int amount) {
+    int inf = amount + 1; // más monedas de las que nunca harán falta
+    int[] dp = new int[amount + 1]; // dp[a] = mínimo de monedas para formar a
+    Arrays.fill(dp, inf);
+    dp[0] = 0;
+    for (int a = 1; a <= amount; a++) {
+        for (int c : coins) {
+            if (c <= a) dp[a] = Math.min(dp[a], dp[a - c] + 1);
+        }
+    }
+    return dp[amount] > amount ? -1 : dp[amount];
+}
+```
+
+```python title="Python"
+def coin_change(coins: list[int], amount: int) -> int:
+    INF = float('inf')
+    dp = [0] + [INF] * amount  # dp[a] = mínimo de monedas para formar a
+    for a in range(1, amount + 1):
+        for c in coins:
+            if c <= a:
+                dp[a] = min(dp[a], dp[a - c] + 1)
+    return dp[amount] if dp[amount] != INF else -1
+```
+
+```ts title="TypeScript"
+function coinChange(coins: number[], amount: number): number {
+  // dp[a] = mínimo de monedas para formar a
+  const dp = new Array<number>(amount + 1).fill(Infinity)
+  dp[0] = 0
+  for (let a = 1; a <= amount; a++) {
+    for (const c of coins) {
+      if (c <= a) dp[a] = Math.min(dp[a], dp[a - c] + 1)
+    }
+  }
+  return dp[amount] === Infinity ? -1 : dp[amount]
+}
+```
+
+</CodeTabs>
+
+**Complejidad.** O(amount × k) tiempo, con `k` monedas; O(amount) memoria. Ojo: es *pseudo-polinomial*, porque depende del **valor** del monto, no del tamaño de la entrada. Con `amount = 10⁹` la tabla no entra en memoria.
+
+**Casos borde y errores típicos.** `amount = 0` devuelve 0. El error más común: **inicializar con 0 en vez de infinito**. Con ceros, `min(0, algo)` siempre da 0 y la tabla entera queda en cero. El segundo error: devolver `INF` en vez de `-1`. La versión Java usa `amount + 1` como "infinito", que funciona porque nunca necesitas más de `amount` monedas (la menor vale al menos 1).
+
+<Callout type="tip" title="En Java">
+
+No uses `Integer.MAX_VALUE` como infinito: `dp[a - c] + 1` desborda a `Integer.MIN_VALUE`, ese negativo gana todos los `min` y la tabla se llena de basura. Por eso la versión Java usa `amount + 1`, que nunca desborda y nunca se alcanza.
+
+</Callout>
+
+**Variantes.** "Devuelve también qué monedas usaste": guarda en otra tabla qué moneda mejoró cada celda y camina hacia atrás, como hace el widget al final. "Cada moneda se puede usar una sola vez": pasa a ser una mochila 0/1 (más abajo).
+
+### Coin Change II: cuántas formas, y por qué importa el orden de los loops
+
+**Enunciado.** Mismas monedas ilimitadas, pero ahora: ¿cuántas **combinaciones** distintas suman `amount`? `amount = 5, coins = [1, 2, 5]` → `4`: `5`, `2+2+1`, `2+1+1+1`, `1+1+1+1+1`.
+
+**Qué preguntar.** ¿`1 + 2` y `2 + 1` son la misma forma o dos distintas? Esta pregunta **cambia el algoritmo**.
+
+**Idea clave.** Estado: `ways[a]` = cantidad de formas de formar `a`. Caso base: `ways[0] = 1` (hay una forma de formar 0: no usar nada). Para cada moneda, `ways[a] += ways[a − c]`. La clave está en qué loop va afuera:
+
+- **Monedas afuera, montos adentro**: cuando procesas la moneda 2, solo puedes agregarla a formas que usan monedas ya procesadas. Cada combinación se cuenta una vez, en un orden canónico. Esto cuenta **combinaciones** (lo que pide Coin Change II).
+- **Montos afuera, monedas adentro**: para cada monto pruebas cualquier moneda como "última", así que `1 + 2` y `2 + 1` se cuentan por separado. Esto cuenta **secuencias ordenadas** (es [Combination Sum IV](https://leetcode.com/problems/combination-sum-iv/)).
+
+Con `amount = 3` y `coins = [1, 2]`: monedas afuera da 2 (`1+1+1`, `1+2`); montos afuera da 3 (`1+1+1`, `1+2`, `2+1`).
+
+<CodeTabs>
+
+```java title="Java"
+public int change(int amount, int[] coins) {
+    int[] ways = new int[amount + 1]; // ways[a] = combinaciones que suman a
+    ways[0] = 1;
+    for (int c : coins) { // monedas afuera: cada combinación se cuenta una vez
+        for (int a = c; a <= amount; a++) {
+            ways[a] += ways[a - c];
+        }
+    }
+    return ways[amount];
+}
+```
+
+```python title="Python"
+def change(amount: int, coins: list[int]) -> int:
+    ways = [1] + [0] * amount  # ways[a] = combinaciones que suman a
+    for c in coins:            # monedas afuera: cada combinación se cuenta una vez
+        for a in range(c, amount + 1):
+            ways[a] += ways[a - c]
+    return ways[amount]
+```
+
+```ts title="TypeScript"
+function change(amount: number, coins: number[]): number {
+  const ways = new Array<number>(amount + 1).fill(0) // ways[a] = combinaciones que suman a
+  ways[0] = 1
+  for (const c of coins) {
+    // monedas afuera: cada combinación se cuenta una vez
+    for (let a = c; a <= amount; a++) ways[a] += ways[a - c]
+  }
+  return ways[amount]
+}
+```
+
+</CodeTabs>
+
+**Complejidad.** O(amount × k) tiempo, O(amount) memoria.
+
+**Errores típicos.** Inicializar `ways[0] = 0` (todo queda en cero). Invertir los loops sin darte cuenta. Y en Coin Change II el rango interno va **hacia arriba** (`a` de `c` a `amount`), lo que permite reutilizar la moneda: esa dirección es la que distingue "ilimitadas" de "una de cada una" en la mochila.
+
+<Quiz
+  question="Con coins = [1, 2] y amount = 4, intercambias los loops de Coin Change II (montos afuera, monedas adentro). ¿Qué devuelve?"
+  options={[
+    { text: '3, igual que antes: el orden de los loops no cambia una suma.', why: 'La suma final sí depende del orden, porque cambia qué celdas ya están actualizadas cuando lees ways[a − c].' },
+    { text: '5, porque ahora cuenta secuencias ordenadas: 1111, 112, 121, 211 y 22.', correct: true, why: 'Con los montos afuera, cada monto prueba cualquier moneda como última, así que 1+1+2, 1+2+1 y 2+1+1 son tres formas distintas. Con las monedas afuera serían 3: 1111, 112 y 22.' },
+    { text: '0, porque ways[0] se sobrescribe.', why: 'ways[0] nunca se escribe: el loop interno empieza en a = 1 o en a = c.' },
+  ]}
+/>
+
+### Longest Increasing Subsequence
+
+**Enunciado.** Largo de la subsecuencia estrictamente creciente más larga (no tiene que ser contigua). `[10, 9, 2, 5, 3, 7, 101, 18]` → `4` (por ejemplo `2, 3, 7, 18`).
+
+**Qué preguntar.** ¿Estrictamente creciente o no decreciente? ¿Me piden el largo o la subsecuencia? ¿Qué tamaño tiene el arreglo? (Si llega a 10⁵, O(n²) no alcanza.)
+
+**Fuerza bruta.** Todas las subsecuencias: O(2ⁿ).
+
+**Idea clave.** Estado: `dp[i]` = largo de la LIS que **termina exactamente en** `nums[i]`. Ese "termina en" es lo que hace que la recurrencia funcione: para extenderla, solo necesitas saber cuál es el último elemento. `dp[i] = 1 + max(dp[j])` sobre los `j` anteriores con `nums[j]` menor que `nums[i]`. La respuesta es el **máximo de toda la tabla**, no `dp[n − 1]`.
+
+**Señal para reconocer el patrón:** si el estado "los primeros i elementos" no alcanza para decidir, prueba "la mejor solución que **termina** en i".
+
+<CodeTabs>
+
+```java title="Java"
+public int lengthOfLIS(int[] nums) {
+    int[] dp = new int[nums.length]; // dp[i] = LIS que termina en nums[i]
+    Arrays.fill(dp, 1);
+    int best = 0;
+    for (int i = 0; i < nums.length; i++) {
+        for (int j = 0; j < i; j++) {
+            if (nums[j] < nums[i]) dp[i] = Math.max(dp[i], dp[j] + 1);
+        }
+        best = Math.max(best, dp[i]);
+    }
+    return best;
+}
+```
+
+```python title="Python"
+def length_of_lis(nums: list[int]) -> int:
+    dp = [1] * len(nums)  # dp[i] = LIS que termina en nums[i]
+    for i in range(len(nums)):
+        for j in range(i):
+            if nums[j] < nums[i]:
+                dp[i] = max(dp[i], dp[j] + 1)
+    return max(dp, default=0)
+```
+
+```ts title="TypeScript"
+function lengthOfLIS(nums: number[]): number {
+  const dp = new Array<number>(nums.length).fill(1) // dp[i] = LIS que termina en nums[i]
+  for (let i = 0; i < nums.length; i++) {
+    for (let j = 0; j < i; j++) {
+      if (nums[j] < nums[i]) dp[i] = Math.max(dp[i], dp[j] + 1)
+    }
+  }
+  return nums.length ? Math.max(...dp) : 0
+}
+```
+
+</CodeTabs>
+
+**Complejidad.** O(n²) tiempo, O(n) memoria.
+
+<Details summary="Profundizar: LIS en O(n log n)">
+
+Mantén un arreglo `tails` donde `tails[k]` es el **menor final posible** de una subsecuencia creciente de largo `k + 1`. Ese arreglo siempre está ordenado, así que para cada número buscas con [búsqueda binaria](/casos/busqueda-binaria) la primera posición con un valor mayor o igual y lo reemplazas (o lo agregas al final si es mayor que todos). El largo de `tails` es la respuesta.
+
+<CodeTabs>
+
+```java title="Java"
+public int lengthOfLIS(int[] nums) {
+    int[] tails = new int[nums.length];
+    int size = 0;
+    for (int x : nums) {
+        int lo = 0, hi = size; // primera posición con tails[k] >= x
+        while (lo < hi) {
+            int mid = lo + (hi - lo) / 2;
+            if (tails[mid] < x) lo = mid + 1;
+            else hi = mid;
+        }
+        tails[lo] = x;
+        if (lo == size) size++;
+    }
+    return size;
+}
+```
+
+```python title="Python"
+from bisect import bisect_left
+
+def length_of_lis(nums):
+    tails = []
+    for x in nums:
+        k = bisect_left(tails, x)  # bisect_right si se permite "no decreciente"
+        if k == len(tails):
+            tails.append(x)
+        else:
+            tails[k] = x
+    return len(tails)
+```
+
+</CodeTabs>
+
+Ojo: `tails` **no** es una subsecuencia válida; solo su largo es correcto. Si te piden la subsecuencia, guarda para cada elemento el índice de su predecesor.
+
+</Details>
+
+**Errores típicos.** Devolver `dp[-1]` en vez del máximo. Usar `<=` cuando piden estrictamente creciente.
+
+### Word Break
+
+**Enunciado.** ¿Se puede partir `s` en una secuencia de palabras de un diccionario (reutilizables)? `s = "leetcode", words = ["leet", "code"]` → `true`. `s = "catsandog", words = ["cats", "dog", "sand", "and", "cat"]` → `false`.
+
+**Qué preguntar.** ¿Las palabras se pueden repetir? ¿Me piden solo si es posible o todas las particiones? (Todas las particiones es Word Break II: backtracking con memo, y la salida puede ser exponencial.)
+
+**Fuerza bruta.** Probar cada prefijo que sea palabra y recursión sobre el resto: exponencial en el peor caso (`"aaaa…ab"` con `["a", "aa", "aaa"]`).
+
+**Idea clave.** Estado: `ok[i]` = el prefijo `s[:i]` se puede partir. `ok[i]` es verdadero si existe un `j` con `ok[j]` verdadero y `s[j:i]` en el diccionario. Caso base: `ok[0] = true` (la cadena vacía se parte en cero palabras).
+
+**Señal para reconocer el patrón:** si ves "¿se puede partir o armar X con piezas de un conjunto?", piensa en un DP booleano sobre prefijos.
+
+<CodeTabs>
+
+```java title="Java"
+public boolean wordBreak(String s, List<String> wordDict) {
+    Set<String> dict = new HashSet<>(wordDict);
+    int longest = 0;
+    for (String w : dict) longest = Math.max(longest, w.length());
+    boolean[] ok = new boolean[s.length() + 1]; // ok[i] = s[0..i) se puede partir
+    ok[0] = true;
+    for (int i = 1; i <= s.length(); i++) {
+        for (int j = Math.max(0, i - longest); j < i; j++) {
+            if (ok[j] && dict.contains(s.substring(j, i))) {
+                ok[i] = true;
+                break;
+            }
+        }
+    }
+    return ok[s.length()];
+}
+```
+
+```python title="Python"
+def word_break(s: str, words: list[str]) -> bool:
+    dic = set(words)
+    longest = max(map(len, dic), default=0)
+    ok = [True] + [False] * len(s)  # ok[i] = s[:i] se puede partir
+    for i in range(1, len(s) + 1):
+        for j in range(max(0, i - longest), i):
+            if ok[j] and s[j:i] in dic:
+                ok[i] = True
+                break
+    return ok[len(s)]
+```
+
+```ts title="TypeScript"
+function wordBreak(s: string, words: string[]): boolean {
+  const dic = new Set(words)
+  const longest = Math.max(0, ...words.map((w) => w.length))
+  const ok = new Array<boolean>(s.length + 1).fill(false) // ok[i] = s[:i] se puede partir
+  ok[0] = true
+  for (let i = 1; i <= s.length; i++) {
+    for (let j = Math.max(0, i - longest); j < i; j++) {
+      if (ok[j] && dic.has(s.slice(j, i))) {
+        ok[i] = true
+        break
+      }
+    }
+  }
+  return ok[s.length]
+}
+```
+
+</CodeTabs>
+
+**Complejidad.** Con `L` = largo de la palabra más larga: O(n × L) cortes, y cada corte cuesta O(L) entre crear la subcadena (en Java, `substring` crea un `String` nuevo) y hashearla. En total O(n × L²) tiempo y O(n + tamaño del diccionario) memoria. Sin el límite `longest`, sería O(n³).
+
+**Variantes.** Si el diccionario es muy grande, guardarlo en un [trie](/casos/autocompletado) permite avanzar carácter por carácter desde cada `j` válido y cortar en cuanto el prefijo no exista.
+
+## Problemas en dos dimensiones
+
+Cuando el problema compara dos secuencias, o combina una secuencia con una capacidad, el estado necesita dos índices.
+
+### Longest Common Subsequence
+
+**Enunciado.** Largo de la subsecuencia común más larga entre dos cadenas. `"abcde"` y `"ace"` → `3` (`"ace"`).
+
+**Qué preguntar.** ¿Subsecuencia (puede saltar caracteres) o subcadena (contigua)? Son problemas distintos. ¿Mayúsculas y minúsculas cuentan como distintas? ¿Me piden el largo o la cadena?
+
+**Fuerza bruta.** Todas las subsecuencias de una (2ᵐ) y comprobar cada una en la otra: O(2ᵐ × n).
+
+**Idea clave.** Estado: `dp[i][j]` = LCS entre los primeros `i` caracteres de `a` y los primeros `j` de `b`. Mira el último carácter de cada prefijo:
+
+- Si `a[i − 1] == b[j − 1]`, ese carácter está en la respuesta: `dp[i][j] = dp[i − 1][j − 1] + 1`.
+- Si no, al menos uno de los dos sobra: `dp[i][j] = max(dp[i − 1][j], dp[i][j − 1])`.
+
+<Sketch
+  width={640}
+  height={300}
+  caption="De qué celdas depende dp[i][j] en LCS: la diagonal si los caracteres coinciden; si no, la mejor entre arriba e izquierda."
+  items={[
+    { type: 'box', x: 40, y: 60, w: 110, h: 64, label: 'diagonal', size: 20 },
+    { type: 'box', x: 170, y: 60, w: 110, h: 64, label: 'arriba', size: 20 },
+    { type: 'box', x: 40, y: 150, w: 110, h: 64, label: 'izquierda', size: 20 },
+    { type: 'box', x: 170, y: 150, w: 110, h: 64, label: 'dp[i][j]', font: 'code', size: 20, fill: true, tone: 'line' },
+    { type: 'arrow', from: [140, 118], to: [180, 156], tone: 'ok' },
+    { type: 'arrow', from: [225, 126], to: [225, 148], tone: 'line' },
+    { type: 'arrow', from: [152, 182], to: [168, 182], tone: 'line', with: true },
+    { type: 'text', x: 320, y: 84, text: 'si a[i−1] == b[j−1]:', size: 20, font: 'code' },
+    { type: 'text', x: 320, y: 116, text: 'diagonal + 1', size: 22, tone: 'ok' },
+    { type: 'text', x: 320, y: 178, text: 'si no:', size: 20, font: 'code' },
+    { type: 'text', x: 320, y: 210, text: 'max(arriba, izquierda)', size: 22, tone: 'line' },
+    { type: 'text', x: 40, y: 272, text: 'fila 0 y columna 0: la cadena vacía', size: 19, tone: 'pencil' },
+  ]}
+/>
+
+**Por qué la tabla tiene una fila y una columna de más.** La fila 0 y la columna 0 representan el prefijo vacío, que tiene LCS 0 con cualquier cosa. Gracias a eso, `dp[i − 1][j − 1]` siempre existe y no necesitas casos especiales. El precio es que `dp[i][j]` habla de `a[i − 1]`, no de `a[i]`: ese desplazamiento de uno es la fuente número uno de bugs en DP 2D. En el widget de arriba, cambia el problema a **LCS** para ver cómo cada celda lee la diagonal o el máximo entre arriba e izquierda, y cómo se reconstruye la cadena caminando hacia atrás.
+
+**Señal para reconocer el patrón:** si ves dos cadenas o secuencias y una pregunta sobre lo que comparten o cuánto cuesta transformar una en otra, piensa en una tabla de prefijos `dp[i][j]`.
+
+<CodeTabs>
+
+```java title="Java"
+public int longestCommonSubsequence(String a, String b) {
+    int m = a.length(), n = b.length();
+    // dp[i][j] = LCS entre a[0..i) y b[0..j); fila y columna 0 = prefijo vacío
+    int[][] dp = new int[m + 1][n + 1];
+    for (int i = 1; i <= m; i++) {
+        for (int j = 1; j <= n; j++) {
+            if (a.charAt(i - 1) == b.charAt(j - 1)) dp[i][j] = dp[i - 1][j - 1] + 1;
+            else dp[i][j] = Math.max(dp[i - 1][j], dp[i][j - 1]);
+        }
+    }
+    return dp[m][n];
+}
+```
+
+```python title="Python"
+def longest_common_subsequence(a: str, b: str) -> int:
+    m, n = len(a), len(b)
+    # dp[i][j] = LCS entre a[:i] y b[:j]; fila y columna 0 = prefijo vacío
+    dp = [[0] * (n + 1) for _ in range(m + 1)]
+    for i in range(1, m + 1):
+        for j in range(1, n + 1):
+            if a[i - 1] == b[j - 1]:
+                dp[i][j] = dp[i - 1][j - 1] + 1
+            else:
+                dp[i][j] = max(dp[i - 1][j], dp[i][j - 1])
+    return dp[m][n]
+```
+
+```ts title="TypeScript"
+function longestCommonSubsequence(a: string, b: string): number {
+  const m = a.length
+  const n = b.length
+  // dp[i][j] = LCS entre a[:i] y b[:j]; fila y columna 0 = prefijo vacío
+  const dp = Array.from({ length: m + 1 }, () => new Array<number>(n + 1).fill(0))
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      dp[i][j] = a[i - 1] === b[j - 1] ? dp[i - 1][j - 1] + 1 : Math.max(dp[i - 1][j], dp[i][j - 1])
+    }
+  }
+  return dp[m][n]
+}
+```
+
+</CodeTabs>
+
+**Complejidad.** O(m × n) tiempo y memoria. Como cada fila solo lee la anterior, puedes bajar la memoria a O(min(m, n)) con dos filas, a costa de no poder reconstruir la cadena.
+
+**Errores típicos.** Escribir `[[0] * (n + 1)] * (m + 1)` en Python: crea `m + 1` referencias a **la misma fila**, y escribir en una escribe en todas (en Java, `new int[m + 1][n + 1]` crea filas independientes, ya en cero). Confundir `a[i]` con `a[i − 1]`.
+
+### Edit Distance (mención)
+
+[Edit Distance](https://leetcode.com/problems/edit-distance/) pide el mínimo de inserciones, borrados y reemplazos para transformar una cadena en otra (`"horse"` → `"ros"` cuesta 3). Es la misma tabla de prefijos que LCS con otra recurrencia: si los últimos caracteres coinciden, `dp[i][j] = dp[i − 1][j − 1]`; si no, `1 + min(dp[i − 1][j], dp[i][j − 1], dp[i − 1][j − 1])`, que corresponden a borrar, insertar y reemplazar. Los casos base cambian: `dp[i][0] = i` y `dp[0][j] = j`, porque transformar en o desde la cadena vacía cuesta tantas operaciones como caracteres. Si te sale LCS, te sale esta.
+
+### Mochila 0/1
+
+**Enunciado.** Tienes objetos con peso y valor, y una mochila con capacidad `W`. Cada objeto se lleva **entero o no se lleva**, y solo hay uno de cada uno. Maximiza el valor. Pesos `[1, 3, 4, 5]`, valores `[1, 4, 5, 7]`, `W = 7` → `9` (los de peso 3 y 4).
+
+En LeetCode no aparece con ese nombre; su forma más conocida es [Partition Equal Subset Sum](https://leetcode.com/problems/partition-equal-subset-sum/) ("¿se puede partir el arreglo en dos mitades de igual suma?" es "¿hay un subconjunto que sume total ÷ 2?").
+
+**Qué preguntar.** ¿Cada objeto se usa una vez o ilimitadas veces? ¿Los pesos son enteros y la capacidad razonable? (Si `W` es enorme, la tabla no entra.)
+
+**Fuerza bruta.** Todos los subconjuntos: O(2ⁿ).
+
+**Idea clave.** Estado: `best[i][w]` = mejor valor usando los primeros `i` objetos con capacidad `w`. Para el objeto `i`, o no lo llevas (`best[i − 1][w]`) o lo llevas si cabe (`best[i − 1][w − peso] + valor`). Como cada fila solo lee la anterior, se puede usar un solo arreglo… **recorriendo `w` de mayor a menor**. Si lo recorres de menor a mayor, `best[w − peso]` ya incluye el objeto actual y lo estarías usando dos veces: eso es la mochila **ilimitada**, la misma estructura de Coin Change.
+
+<Sketch
+  width={640}
+  height={290}
+  caption="Por qué la mochila 0/1 recorre la capacidad de mayor a menor: de menor a mayor, best[w − 2] ya incluye el objeto y lo vuelves a sumar."
+  items={[
+    { type: 'text', x: 24, y: 30, text: 'un objeto: peso 2, valor 3', size: 20, tone: 'pencil' },
+    { type: 'text', x: 24, y: 86, text: 'w de mayor a menor', size: 20, tone: 'ok' },
+    { type: 'text', x: 24, y: 112, text: 'lee best[w − 2] viejo', size: 18, tone: 'pencil' },
+    { type: 'cells', x: 290, y: 70, values: [0, 0, 3, 3, 3, 3, 3], size: 44, index: true },
+    { type: 'arrow', from: [488, 50], to: [574, 50], bend: -26, tone: 'ok' },
+    { type: 'check', x: 608, y: 82, size: 22 },
+    { type: 'text', x: 24, y: 196, text: 'w de menor a mayor', size: 20, tone: 'bad' },
+    { type: 'text', x: 24, y: 222, text: 'best[w − 2] ya lo incluye', size: 18, tone: 'pencil' },
+    { type: 'cells', x: 290, y: 180, values: [0, 0, 3, 3, 6, 6, 9], size: 44, index: true, states: [null, null, null, null, 'bad', null, 'bad'] },
+    { type: 'arrow', from: [400, 160], to: [484, 160], bend: -26, tone: 'bad' },
+    { type: 'arrow', from: [492, 160], to: [574, 160], bend: -26, tone: 'bad' },
+    { type: 'cross', x: 608, y: 192, size: 22 },
+    { type: 'text', x: 290, y: 272, text: '9 = el objeto tres veces', size: 20, tone: 'bad' },
+  ]}
+/>
+
+**Señal para reconocer el patrón:** si ves "elige un subconjunto con un límite de peso, costo o suma, y maximiza o decide si se puede", piensa en mochila, con la capacidad como segunda dimensión.
+
+<CodeTabs>
+
+```java title="Java"
+public int knapsack(int[] weights, int[] values, int capacity) {
+    int[] best = new int[capacity + 1]; // best[w] = mayor valor con peso total ≤ w
+    for (int i = 0; i < weights.length; i++) {
+        for (int w = capacity; w >= weights[i]; w--) { // de mayor a menor: cada objeto una vez
+            best[w] = Math.max(best[w], best[w - weights[i]] + values[i]);
+        }
+    }
+    return best[capacity];
+}
+```
+
+```python title="Python"
+def knapsack(weights: list[int], values: list[int], capacity: int) -> int:
+    best = [0] * (capacity + 1)  # best[w] = mayor valor con peso total ≤ w
+    for wt, val in zip(weights, values):
+        for w in range(capacity, wt - 1, -1):  # de mayor a menor: cada objeto una vez
+            best[w] = max(best[w], best[w - wt] + val)
+    return best[capacity]
+```
+
+```ts title="TypeScript"
+function knapsack(weights: number[], values: number[], capacity: number): number {
+  const best = new Array<number>(capacity + 1).fill(0) // best[w] = mayor valor con peso total ≤ w
+  weights.forEach((wt, i) => {
+    for (let w = capacity; w >= wt; w--) {
+      // de mayor a menor: cada objeto una vez
+      best[w] = Math.max(best[w], best[w - wt] + values[i])
+    }
+  })
+  return best[capacity]
+}
+```
+
+</CodeTabs>
+
+**Complejidad.** O(n × W) tiempo, O(W) memoria. Pseudo-polinomial, igual que Coin Change.
+
+**Casos borde.** Objetos más pesados que la mochila (el loop interno simplemente no corre). Capacidad 0. Si te piden "exactamente W" en vez de "como mucho W", inicializa con menos infinito salvo `best[0] = 0`.
+
+<Quiz
+  question="En la mochila 0/1 con un solo arreglo, alguien recorre w de menor a mayor. Con un objeto de peso 2 y valor 3, y capacidad 6, ¿qué pasa?"
+  options={[
+    { text: 'Nada, el resultado es el mismo: 3.', why: 'De menor a mayor, best[4] lee best[2], que ya incluye el objeto. El objeto se cuenta varias veces.' },
+    { text: 'Devuelve 9: usa el mismo objeto tres veces, como si fuera la mochila ilimitada.', correct: true, why: 'best[2] = 3, best[4] = best[2] + 3 = 6, best[6] = best[4] + 3 = 9. Recorriendo de mayor a menor, best[w − 2] todavía tiene el valor de la fila anterior, así que el objeto se usa a lo sumo una vez.' },
+    { text: 'Lanza un error de índice fuera de rango.', why: 'w − peso nunca es negativo porque el loop empieza en w = peso.' },
+  ]}
+/>
+
+## Errores típicos en DP
+
+Casi todos los bugs de DP caen en una de estas categorías. Repásalas antes de decir "terminé".
+
+- **Estado mal definido.** El síntoma es una recurrencia que "casi" funciona y necesita parches. Con LIS, "`dp[i]` = LIS de los primeros i" no permite decidir si puedes extender con `nums[i]`, porque no sabes en qué termina. "LIS que termina en i" sí. Si necesitas parches, cambia la definición, no la recurrencia.
+- **Índices desplazados.** Con una fila o columna extra para el caso vacío, `dp[i]` habla del elemento `i − 1`. Decide la convención al principio, escríbela en un comentario y respétala.
+- **Inicializar con 0 donde va infinito.** En problemas de mínimo, 0 es un valor válido y gana todos los `min`. Usa `float('inf')` o `Infinity` (o un valor imposible, como `amount + 1`) y recuerda traducirlo a `-1` en la respuesta.
+- **Caso base de conteo en 0.** En problemas de "cuántas formas", `dp[0] = 1` (la forma vacía). Con 0, todo se multiplica o se suma a partir de nada.
+- **Orden de los loops.** Coin Change II contra Combination Sum IV; mochila 0/1 contra ilimitada. El orden y la dirección cambian **qué** cuentas.
+- **Respuesta en el lugar equivocado.** `dp[n]` contra `max(dp)`.
+- **Memoizar con la llave equivocada.** En Python, `@cache` necesita argumentos hasheables: una lista lanza `TypeError`. En Java el error es silencioso: si la llave del `HashMap` es un `int[]`, su `hashCode` y su `equals` son los de `Object` (por identidad), así que dos arreglos con los mismos números nunca coinciden y el memo no sirve. Pasa índices, no sublistas; si el estado tiene dos números, usa un `record`, un `long` que los combine o una tabla `int[][]`.
+
+<Callout type="tip" title="Cómo depurar en vivo">
+
+Dibuja la tabla para una entrada de tres o cuatro elementos y llénala a mano antes de correr el código. Si tu tabla a mano y la del programa difieren, el bug está en la primera celda distinta. Es exactamente lo que hace el widget de arriba, y en la entrevista se ve muy bien.
+
+</Callout>
+
+## Problemas típicos de este patrón
+
+| Problema (LeetCode) | Estado | Idea |
+|---|---|---|
+| [Climbing Stairs](https://leetcode.com/problems/climbing-stairs/) | formas de llegar a i | Fibonacci, O(1) memoria |
+| [Min Cost Climbing Stairs](https://leetcode.com/problems/min-cost-climbing-stairs/) | costo mínimo hasta i | min en vez de suma |
+| [House Robber](https://leetcode.com/problems/house-robber/) | mejor botín con i casas | tomar o saltar |
+| [House Robber II](https://leetcode.com/problems/house-robber-ii/) | igual, en círculo | dos pasadas |
+| [Decode Ways](https://leetcode.com/problems/decode-ways/) | formas de decodificar s[:i] | uno o dos dígitos |
+| [Coin Change](https://leetcode.com/problems/coin-change/) | mínimo de monedas para a | inicializar con infinito |
+| [Coin Change II](https://leetcode.com/problems/coin-change-ii/) | combinaciones para a | monedas en el loop de afuera |
+| [Combination Sum IV](https://leetcode.com/problems/combination-sum-iv/) | secuencias para a | montos en el loop de afuera |
+| [Longest Increasing Subsequence](https://leetcode.com/problems/longest-increasing-subsequence/) | LIS que termina en i | respuesta = max(dp) |
+| [Word Break](https://leetcode.com/problems/word-break/) | s[:i] se puede partir | booleano sobre prefijos |
+| [Unique Paths](https://leetcode.com/problems/unique-paths/) | caminos hasta (i, j) | arriba + izquierda |
+| [Longest Common Subsequence](https://leetcode.com/problems/longest-common-subsequence/) | LCS de a[:i] y b[:j] | diagonal o max |
+| [Edit Distance](https://leetcode.com/problems/edit-distance/) | costo de a[:i] a b[:j] | 1 + min de tres |
+| [Partition Equal Subset Sum](https://leetcode.com/problems/partition-equal-subset-sum/) | ¿suma s alcanzable? | mochila 0/1, de mayor a menor |
+| [Longest Palindromic Substring](https://leetcode.com/problems/longest-palindromic-substring/) | ¿s[i..j] es palíndromo? | por largo creciente |
+
+Si te trabas con uno nuevo, vuelve a la tabla de señales del principio y a los cinco pasos. Casi siempre el problema es el paso 1.
+
+<Takeaways>
+
+- DP aplica cuando hay **subproblemas que se repiten** y la mejor respuesta se arma con las mejores respuestas de los subproblemas. Las pistas: "cuántas formas", "mínimo o máximo", "¿es posible?".
+- Escribe el **estado en una frase** antes de tocar el código. Casi todos los bugs vienen de un estado ambiguo.
+- La recurrencia sale de mirar **la última decisión**: el último escalón, la última moneda, el último carácter.
+- El camino natural es recursión → memoización → tabla → optimizar memoria. Memoización es lo más rápido de escribir; la tabla evita el límite de recursión.
+- **Infinito para mínimos, 1 en la celda vacía para conteos**, una fila extra para el prefijo vacío en 2D.
+- El **orden y la dirección de los loops** deciden qué cuentas: combinaciones o secuencias, mochila 0/1 o ilimitada.
+- Coin Change, LCS y la mochila son pseudo-polinomiales: dependen del valor del monto o de la capacidad, no solo de cuántos datos hay.
+
+</Takeaways>
+
+## Fuentes y lecturas
+
+- Tech Interview Handbook, [Dynamic programming cheatsheet](https://www.techinterviewhandbook.org/algorithms/dynamic-programming/).
+- Jeff Erickson, [*Algorithms*](https://jeffe.cs.illinois.edu/teaching/algorithms/), capítulo 3, "Dynamic Programming" (libro gratuito, con la mejor explicación de cómo definir el estado en palabras).
+- Cormen, Leiserson, Rivest y Stein, *Introduction to Algorithms* (CLRS), capítulo "Dynamic Programming": subestructura óptima, LCS y el análisis formal de memoización contra tabulación.
+- Documentación de Python, [`functools.cache` y `lru_cache`](https://docs.python.org/3/library/functools.html#functools.cache), y [`sys.setrecursionlimit`](https://docs.python.org/3/library/sys.html#sys.setrecursionlimit).
+- Documentación de Python, [`bisect`](https://docs.python.org/3/library/bisect.html), para la versión O(n log n) de LIS.
+- LeetCode, problemas enlazados en la tabla de arriba.

@@ -1,0 +1,213 @@
+.sr {
+  display: grid;
+  gap: var(--s-3);
+}
+.sr-blurb {
+  margin: 0;
+  font-family: var(--font-read);
+  font-size: var(--step--1);
+  line-height: 1.5;
+  color: var(--ink-2);
+  max-width: 62ch;
+}
+.sr-stage-label {
+  justify-self: center;
+  width: min(100%, 22rem);
+  padding: 3px 0;
+  border-radius: 999px 999px 4px 4px;
+  background: var(--paper-3);
+  color: var(--ink-3);
+  font-family: var(--font-sign);
+  font-weight: 700;
+  font-size: 0.74rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  text-align: center;
+}
+.sr-map {
+  justify-self: center;
+  display: grid;
+  grid-template-columns: repeat(7, minmax(36px, 52px));
+  gap: 5px;
+  width: 100%;
+  max-width: calc(7 * 52px + 6 * 5px);
+}
+.sr-seat {
+  min-height: 42px;
+  padding: 0;
+  border-radius: 8px 8px 12px 12px;
+  border: 3px solid var(--rule-strong);
+  background: var(--paper);
+  color: var(--ink-3);
+  font-family: var(--font-sign);
+  font-weight: 700;
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    background-color 200ms var(--ease-out),
+    border-color 200ms var(--ease-out),
+    color 200ms var(--ease-out);
+}
+.sr-seat:hover:not(:disabled) {
+  border-color: var(--ink-2);
+  color: var(--ink);
+}
+.sr-seat:focus-visible {
+  outline: 2px solid var(--line-ink);
+  outline-offset: 2px;
+}
+.sr-seat:disabled {
+  cursor: progress;
+  opacity: 0.55;
+}
+.sr-seat.is-racing {
+  border-color: var(--line);
+  background: var(--line-tint);
+  color: var(--ink);
+  opacity: 1;
+}
+.sr-seat.is-held.own-A,
+.sr-swatch.is-held.own-A {
+  border-color: var(--line);
+  background: var(--line-tint-2);
+  color: var(--ink);
+}
+.sr-seat.is-held.own-B,
+.sr-swatch.is-held.own-B {
+  border-color: var(--ink-3);
+  border-style: dashed;
+  background: var(--paper-3);
+  color: var(--ink-2);
+}
+.sr-seat.is-sold.own-A,
+.sr-swatch.is-sold.own-A {
+  border-color: var(--line);
+  background: var(--line);
+  color: var(--line-on);
+}
+.sr-seat.is-sold.own-B {
+  border-color: var(--ink-3);
+  background: var(--ink-3);
+  color: var(--paper);
+}
+.sr-seat.is-double,
+.sr-swatch.is-double {
+  border-color: var(--bad);
+  background: color-mix(in oklab, var(--bad) 18%, var(--paper));
+  color: var(--bad);
+  font-size: 0.72rem;
+}
+.sr-legend {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--s-2) var(--s-4);
+  font-size: 0.82rem;
+  color: var(--ink-3);
+}
+.sr-legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.sr-swatch {
+  display: inline-block;
+  width: 16px;
+  height: 14px;
+  border-radius: 4px;
+  border: 2px solid var(--rule-strong);
+  background: var(--paper);
+}
+.sr-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--s-2);
+}
+.sr-race {
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--card);
+  padding: var(--s-3);
+  min-height: 9.5rem;
+}
+.sr-race__title {
+  font-weight: 700;
+  font-size: 0.8rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  margin-bottom: var(--s-2);
+}
+.sr-race__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+}
+.sr-race__empty {
+  color: var(--ink-3);
+  font-style: italic;
+  font-size: 0.88rem;
+}
+.sr-step {
+  display: grid;
+  grid-template-columns: 28px 1fr;
+  align-items: start;
+  gap: var(--s-2);
+}
+.sr-step.lane-B {
+  padding-left: clamp(0px, 4vw, 2.5rem);
+}
+.sr-step__lane {
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 3px solid var(--line);
+  background: var(--paper);
+  font-weight: 700;
+  font-size: 0.75rem;
+  color: var(--ink);
+}
+.sr-step.lane-B .sr-step__lane {
+  border-color: var(--ink-3);
+}
+.sr-step.lane-sys .sr-step__lane {
+  border-color: var(--rule-strong);
+  color: var(--ink-3);
+}
+.sr-step__text {
+  font-family: var(--font-code);
+  font-size: 0.78rem;
+  line-height: 1.5;
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+  padding-top: 2px;
+}
+.sr-step.lane-sys .sr-step__text {
+  font-family: var(--font-sign);
+  font-size: 0.88rem;
+}
+.sr-step.is-ok .sr-step__text {
+  color: var(--ok);
+}
+.sr-step.is-warn .sr-step__text {
+  color: var(--warn);
+}
+.sr-step.is-bad .sr-step__text {
+  color: var(--bad);
+}
+.sr-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-3) var(--s-5);
+  margin-bottom: var(--s-3);
+}

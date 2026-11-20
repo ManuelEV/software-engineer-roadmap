@@ -1,0 +1,89 @@
+.hp-pick,
+.hp-ops {
+  display: grid;
+  gap: 4px;
+}
+.hp-pick select {
+  min-height: 40px;
+  max-width: 100%;
+  padding: 0 10px;
+  border: 1.5px solid var(--rule-strong);
+  border-radius: 8px;
+  background: var(--card);
+  color: var(--ink);
+  font-family: var(--font-code);
+  font-size: 0.86rem;
+}
+.hp-ops__row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.hp-num {
+  width: 4.6rem;
+  min-height: 40px;
+  padding: 0 10px;
+  border: 1.5px solid var(--rule-strong);
+  border-radius: 8px;
+  background: var(--card);
+  color: var(--ink);
+  font-family: var(--font-code);
+  font-size: 0.95rem;
+}
+.hp-num:focus-visible,
+.hp-pick select:focus-visible {
+  outline: 2px solid var(--line-ink);
+  outline-offset: 1px;
+}
+
+.hp-tree {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-width: 520px;
+}
+.hp-edge {
+  stroke: var(--rule-strong);
+  stroke-width: 1.75;
+}
+.hp-node circle {
+  fill: var(--card);
+  stroke: var(--rule-strong);
+  stroke-width: 1.75;
+  transition:
+    fill 220ms var(--ease-out),
+    stroke 220ms var(--ease-out);
+}
+.hp-node text {
+  font-family: var(--font-code);
+  font-size: 15px;
+  font-weight: 700;
+  fill: var(--ink);
+  transition: fill 220ms var(--ease-out);
+}
+.hp-node.is-active circle {
+  fill: var(--line);
+  stroke: var(--line);
+}
+.hp-node.is-active text {
+  fill: var(--line-on);
+}
+.hp-node.is-compare circle {
+  fill: var(--line-tint-2);
+  stroke: var(--line);
+  stroke-width: 2.75;
+}
+.hp-node.is-done circle {
+  fill: var(--paper-3);
+}
+.hp-node.is-found circle {
+  fill: color-mix(in oklab, var(--ok) 22%, var(--card));
+  stroke: var(--ok);
+  stroke-width: 2.5;
+}
+.hp-empty {
+  font-family: var(--font-sign);
+  font-size: 15px;
+  font-style: italic;
+  fill: var(--ink-3);
+}

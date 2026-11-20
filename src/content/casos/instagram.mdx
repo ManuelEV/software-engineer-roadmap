@@ -1,0 +1,360 @@
+import { StoriesTTL } from '../../components/widgets/casos-a/StoriesTTL'
+
+"Diseña Instagram." Comparte mucho con [Twitter](/casos/twitter): seguidores, un feed, publicaciones. Pero cambia el centro de gravedad. En Twitter el contenido es texto de unos cientos de bytes; en Instagram cada publicación son **megabytes de imágenes** que hay que guardar para siempre, en varios tamaños, y servir a millones de teléfonos con pantallas distintas. Y agrega dos piezas con su propio carácter: **los likes**, que convierten la publicación de una celebridad en la fila más escrita del sistema durante unos minutos, y **las historias**, contenido que tiene que desaparecer exactamente a las 24 horas.
+
+Es un caso excelente para entrevistas porque permite profundizar en direcciones muy distintas según tu nivel: almacenamiento de objetos y CDN, generación de IDs y sharding (Instagram publicó un artículo clásico sobre eso), contadores a escala y expiración por tiempo. El reto es no repetir el caso de Twitter y enfocarte en lo que es propio de Instagram.
+
+<Sketch
+  width={640}
+  height={290}
+  caption="Lo propio de Instagram: cada publicación son megabytes de imagen, en varios tamaños, servidos desde el borde y no desde tus servidores."
+  items={[
+    { type: 'text', x: 24, y: 32, text: 'una foto, muchos tamaños', size: 22, tone: 'pencil' },
+    { type: 'box', x: 24, y: 56, w: 120, h: 96, label: 'original', size: 20 },
+    { type: 'arrow', from: [146, 104], to: [200, 104] },
+    { type: 'box', x: 206, y: 56, w: 96, h: 96, label: '1080', size: 20, tone: 'line', fill: true },
+    { type: 'box', x: 312, y: 72, w: 72, h: 72, label: '640', size: 20, tone: 'line', with: true },
+    { type: 'box', x: 394, y: 88, w: 54, h: 54, label: '320', size: 18, tone: 'line', with: true },
+    { type: 'box', x: 458, y: 100, w: 40, h: 40, label: '150', size: 18, tone: 'line', with: true },
+    { type: 'text', x: 206, y: 186, text: 'WebP, al subir o en el borde', size: 18, tone: 'pencil' },
+    { type: 'arrow', from: [504, 120], to: [552, 120] },
+    { type: 'box', x: 558, y: 92, w: 66, h: 56, label: 'CDN', size: 20, tone: 'line', fill: true },
+    { type: 'highlight', x: 20, y: 222, w: 248, h: 28 },
+    { type: 'text', x: 24, y: 244, text: '~200 TB nuevos por día', size: 20, with: true },
+    { type: 'text', x: 24, y: 276, text: 'los bytes nunca pasan por tus servidores', size: 18, tone: 'pencil' },
+  ]}
+/>
+
+## Requisitos
+
+**Funcionales**
+
+1. Publicar fotos (una o varias) con descripción.
+2. Seguir cuentas y ver un **feed** de las publicaciones de quienes sigues.
+3. Dar **like** y comentar; ver los contadores.
+4. Publicar **historias** que desaparecen a las 24 horas, y ver la bandeja de historias de tus seguidos con el anillo de "no visto".
+5. Ver el perfil de una cuenta (su grilla de publicaciones).
+
+**No funcionales**
+
+- **Feed rápido**: carga en menos de 500 ms (supuesto) y las imágenes aparecen sin saltos.
+- **Durabilidad total** de las fotos: perder la foto de una boda no es un incidente menor.
+- **Publicación visible en segundos** para los seguidores.
+- **Consistencia eventual aceptable** en contadores y feed; **exactitud** en la expiración de historias (una historia no debe verse a las 24 h y 5 min).
+- **Uso eficiente de datos móviles**: no mandar una imagen de 4.000 píxeles a una pantalla que muestra 400.
+
+**Fuera de alcance**: Reels (es el caso de [TikTok](/casos/tiktok)), mensajes directos (el de [WhatsApp](/casos/whatsapp)), Explorar, búsqueda y anuncios.
+
+## Estimaciones
+
+Supongamos **500 millones de usuarios activos diarios**, **100 millones de publicaciones** por día, cada usuario abre el feed **20 veces** al día, y **300 millones de historias** diarias.
+
+| Magnitud | Cálculo | Resultado |
+|---|---|---|
+| Publicaciones | 100 M ÷ 86.400 | ~1.200/s promedio |
+| Almacenamiento de fotos | 100 M × ~2 MB (original + 4 tamaños) | ~200 TB/día, ~73 PB/año antes de replicar |
+| Lecturas de feed | 500 M × 20 ÷ 86.400 | ~116.000/s promedio, ~350.000/s pico |
+| Peticiones de imágenes | ~10 imágenes por página de feed | ~1–3 M/s: **CDN obligatorio** |
+| Likes | supongamos 5.000 M por día | ~58.000/s en total; miles por segundo en una sola publicación viral |
+| Vistas de historias | 300 M × ~100 espectadores | ~30.000 M eventos/día, ~350.000/s |
+
+Lo que dicen estos números:
+
+1. **El almacenamiento domina el costo** y crece para siempre. La pregunta "¿cuántas copias guardas de cada foto?" vale petabytes. Facebook pasó de un factor de replicación efectivo de 3,6 a 2,1 para fotos "tibias" con su sistema f4 (2014), usando *erasure coding*.
+2. **Las imágenes se sirven desde el borde**, nunca desde tus servidores.
+3. **Los likes y las vistas de historias son escrituras masivas y pequeñas**, concentradas en pocas claves calientes: un problema de contadores, no de base de datos.
+
+## Entidades y API
+
+Entidades: **User**, **Post** (con una o varias **Media**), **Follow**, **Like**, **Comment**, **Story** y **StoryView**.
+
+```http
+POST /v1/media/uploads
+{ "content_type": "image/jpeg", "size_bytes": 1840221 }
+
+201 Created
+{ "media_id": "md_3c1f", "upload_url": "https://media.storage.ejemplo/…&signature=…" }
+```
+
+```http
+POST /v1/posts
+{ "media_ids": ["md_3c1f", "md_3c20"], "caption": "Atardecer en Valparaíso" }
+
+201 Created
+{ "post_id": "2899102938471625728" }
+```
+
+```http
+GET /v1/feed?cursor=…
+
+200 OK
+{ "items": [ { "post_id": "…", "author": { … },
+               "media": [ { "url": "https://cdn.ejemplo/p/…/1080.webp", "width": 1080, "height": 1350,
+                            "variants": { "320": "…/320.webp", "640": "…/640.webp" } } ],
+               "like_count": 18234, "liked_by_me": false } ],
+  "cursor": "…" }
+```
+
+```http
+PUT    /v1/posts/2899102938471625728/likes/me   → 204   (idempotente: dos PUT = un like)
+DELETE /v1/posts/2899102938471625728/likes/me   → 204
+```
+
+```http
+GET  /v1/stories/tray                       → [ { "user": { … }, "has_unseen": true, "latest_at": "…" } ]
+POST /v1/stories    { "media_id": "md_9a01" } → 201 { "story_id": "…", "expires_at": "…" }
+POST /v1/stories/views { "story_ids": ["…", "…"] } → 202
+```
+
+Detalles con criterio:
+
+- **El like es un `PUT` idempotente** sobre un recurso (`likes/me`), no un `POST` que crea un like nuevo. Si el cliente reintenta por una red inestable, no hay likes duplicados.
+- **El feed devuelve variantes** de cada imagen con sus dimensiones. El cliente elige la adecuada para su pantalla y reserva el espacio antes de que la imagen llegue (sin saltos en el diseño).
+- **Las vistas de historias van en lote**: el cliente acumula y envía cada pocos segundos.
+
+## Modelo de datos
+
+**IDs con el shard adentro.** En 2012 Instagram publicó cómo genera IDs de 64 bits sin un servicio central: **41 bits** de tiempo en milisegundos desde una época propia, **13 bits** con el ID del **shard lógico** y **10 bits** de secuencia (una secuencia de Postgres módulo 1.024). Usaban miles de shards lógicos mapeados a menos servidores físicos, y la función que genera el ID corre **dentro de la base** (PL/pgSQL), en el mismo shard donde se inserta la fila. Dos ventajas: los IDs se ordenan por tiempo, y **dado un ID sabes en qué shard está la fila** sin consultar ningún índice.
+
+La misma idea en Java, con las operaciones de bits a la vista:
+
+```java title="Java"
+/** ID de 64 bits: 41 bits de milisegundos | 13 bits de shard lógico | 10 bits de secuencia. */
+static final long EPOCH_MS = 1314220021721L; // el valor de our_epoch del artículo de Instagram
+
+static long nextId(long nowMs, int shardId, long seq) {
+    long id = (nowMs - EPOCH_MS) << 23;  // el tiempo ocupa los 41 bits altos (64 − 41 = 23)
+    id |= (long) shardId << 10;          // 13 bits de shard: hasta 8.192 shards lógicos
+    id |= seq % 1024;                    // 10 bits de secuencia: 1.024 IDs por ms y shard
+    return id;
+}
+
+static int shardOf(long id) { return (int) ((id >>> 10) & 0x1FFF); }   // sin consultar ningún índice
+static long createdAtMs(long id) { return (id >>> 23) + EPOCH_MS; }
+```
+
+<Callout type="tip" title="En Java">
+
+Un desplazamiento se calcula en el tipo del operando izquierdo. Con un `int`, todo pasa en 32 bits: `shardId << 10` cabe, pero el mismo patrón con el tiempo (`<< 23`) se desbordaría en silencio. Por eso el cast a `long` va **antes** de desplazar, como en `(long) shardId << 10`. Y para extraer usa `>>>` (desplazamiento sin signo): `>>` arrastra el bit de signo si algún día el ID llega a usar el bit 63.
+
+</Callout>
+
+```text
+posts         PK post_id (41b tiempo | 13b shard lógico | 10b secuencia)
+              → author_id, caption, media[], created_at          (sharded por author_id)
+
+media         objetos: /p/{post_id}/{media_n}/{original|1080|640|320|150}.{jpg|webp}
+
+follows       PK follower_id, followee_id    + tabla inversa por followee_id
+
+likes         PK post_id, user_id → created_at       ← unicidad: un like por persona
+user_likes    PK user_id, post_id                    ← "¿le di like?" en el feed
+counters      post_id → like_count, comment_count    ← desnormalizado
+
+feed          user_id → [post_id …]                  (precalculado, como en Twitter)
+
+stories       PK story_id → author_id, media, created_at, expires_at
+tray          ZSET tray:{viewer_id}  member = story_id  score = expires_at
+story_views   PK story_id, viewer_id → seen_at       ← quién vio (para el autor)
+seen          SET seen:{viewer_id} TTL 24 h          ← para el anillo de la bandeja
+```
+
+Tres decisiones a defender:
+
+- **Postgres particionado** para publicaciones, likes y relaciones: así empezó Instagram, y el sharding por autor mantiene juntos los datos de un perfil. Para cargas de escritura masiva con expiración natural (feed, vistas de historias) encajan mejor almacenes de columnas anchas como Cassandra, que Instagram también adoptó con los años.
+- **El contador de likes está desnormalizado.** Contar filas de `likes` cada vez que alguien ve una publicación es inviable cuando una tiene millones.
+- **Los bytes de las fotos nunca pasan por la base de datos**, ni por tus servidores de aplicación.
+
+## Diseño de alto nivel
+
+<FlowDiagram
+  caption="Publicar, ver el feed, dar like y abrir historias. Recorre los pasos."
+  nodes={[
+    { id: 'app', label: 'App', kind: 'mobile', x: 0, y: 1.3 },
+    { id: 'up', label: 'Upload API', kind: 'service', x: 1, y: 0 },
+    { id: 'blob', label: 'Blob storage', kind: 'storage', x: 2, y: 0, sub: 'caliente → tibio' },
+    { id: 'proc', label: 'Redimensionado', kind: 'image', x: 3, y: 0, sub: '4 tamaños, WebP' },
+    { id: 'cdn', label: 'CDN', kind: 'cdn', x: 4, y: 0.8 },
+    { id: 'post', label: 'Post service', kind: 'service', x: 2, y: 1.3, sub: 'IDs con shard' },
+    { id: 'fo', label: 'Fan-out', kind: 'worker', x: 3, y: 1.3, sub: 'híbrido' },
+    { id: 'feed', label: 'Feed service', kind: 'service', x: 1, y: 2.5, sub: 'mezcla y rankea' },
+    { id: 'fc', label: 'Feeds', kind: 'cache', x: 3, y: 2.5, sub: 'IDs precalculados' },
+    { id: 'like', label: 'Likes', kind: 'db', x: 2, y: 3.5, sub: 'filas + contadores' },
+    { id: 'st', label: 'Historias', kind: 'timer', x: 3, y: 3.5, sub: 'ZSET por expiración' },
+  ]}
+  edges={[
+    { from: 'app', to: 'up' },
+    { from: 'up', to: 'blob' },
+    { from: 'blob', to: 'proc', bidir: true },
+    { from: 'cdn', to: 'blob', dashed: true, label: 'miss' },
+    { from: 'app', to: 'cdn' },
+    { from: 'app', to: 'post' },
+    { from: 'post', to: 'fo' },
+    { from: 'fo', to: 'fc' },
+    { from: 'app', to: 'feed' },
+    { from: 'feed', to: 'fc' },
+    { from: 'feed', to: 'like' },
+    { from: 'feed', to: 'st' },
+  ]}
+  steps={[
+    {
+      title: 'Subir la imagen',
+      body: <>La app comprime y redimensiona la foto en el teléfono (no tiene sentido subir 12 MP para mostrar 1.080 px), pide una URL prefirmada y sube directo al almacenamiento de objetos.</>,
+      active: ['app', 'up', 'blob'],
+      flow: ['app-up', 'up-blob'],
+    },
+    {
+      title: 'Generar variantes',
+      body: <>Un evento de subida completa dispara el redimensionado: 1080, 640, 320 y 150 px, en WebP (y JPEG para clientes viejos). Se guardan junto al original.</>,
+      active: ['blob', 'proc'],
+      flow: ['blob-proc'],
+    },
+    {
+      title: 'Crear la publicación',
+      body: <>La app envía <code>POST /v1/posts</code> con los <code>media_ids</code>. El Post service inserta la fila en el shard del autor; el ID nace ahí mismo, con el shard codificado adentro.</>,
+      active: ['app', 'post'],
+      flow: ['app-post'],
+    },
+    {
+      title: 'Repartir',
+      body: <>Un evento dispara el fan-out híbrido: el ID se inserta en el feed precalculado de los seguidores activos, salvo que el autor sea una cuenta enorme, cuyas publicaciones se mezclan al leer.</>,
+      active: ['post', 'fo', 'fc'],
+      flow: ['post-fo', 'fo-fc'],
+    },
+    {
+      title: 'Leer el feed',
+      body: <>El Feed service toma los IDs precalculados, agrega las publicaciones de cuentas grandes, las rankea, e hidrata autores, contadores y <code>liked_by_me</code>. Responde con URLs del CDN.</>,
+      active: ['app', 'feed', 'fc', 'like'],
+      flow: ['app-feed', 'feed-fc', 'feed-like'],
+    },
+    {
+      title: 'Las imágenes, desde el borde',
+      body: <>La app descarga la variante adecuada para su pantalla desde el PoP más cercano. Una foto popular se sirve millones de veces sin tocar el almacenamiento.</>,
+      active: ['app', 'cdn'],
+      flow: ['app-cdn'],
+    },
+    {
+      title: 'La bandeja de historias',
+      body: <>El Feed service lee el índice de historias del usuario con <code>ZRANGEBYSCORE tray:yo ahora +inf</code>: solo lo que todavía no expiró. El anillo de color sale de comparar contra el conjunto de historias ya vistas.</>,
+      active: ['feed', 'st'],
+      flow: ['feed-st'],
+    },
+  ]}
+/>
+
+## Profundizaciones
+
+### 1. Guardar y servir petabytes de fotos
+
+**Antes de subir.** La mejor optimización es la que no ocurre: el teléfono redimensiona y comprime antes de subir. Ahorra datos al usuario, tiempo de subida y almacenamiento.
+
+**Variantes: ¿antes o bajo demanda?** Dos estrategias:
+
+- **Pre-generar** un conjunto fijo de tamaños al subir. Simple y predecible; desperdicia almacenamiento en tamaños que algunas fotos nunca usan.
+- **Redimensionar en el borde bajo demanda** (`/p/123/0/w=640.webp`), con el resultado cacheado en el CDN. Ahorra almacenamiento y permite nuevos tamaños sin reprocesar el catálogo, pero la primera petición de cada variante paga el costo de cómputo.
+
+Muchos sistemas combinan: pre-generan los tamaños más pedidos y generan el resto bajo demanda.
+
+**Por qué un sistema de archivos común no alcanza.** Facebook lo explicó en su paper sobre **Haystack** (OSDI 2010). En aquel momento guardaba más de 260.000 millones de imágenes (más de 20 PB), recibía mil millones de fotos nuevas por semana y servía más de un millón de imágenes por segundo en el pico. Con un archivo por foto en un sistema POSIX, leer una foto costaba **varias operaciones de disco** solo para resolver directorios e inodos, porque esos metadatos no cabían en memoria. Haystack empaqueta millones de fotos en archivos enormes y mantiene en memoria un índice compacto (foto → desplazamiento en el archivo): **una sola lectura de disco por foto**. La lección general: en almacenamiento de objetos a escala, **los metadatos por objeto** son el costo escondido.
+
+**Capas por antigüedad.** Una foto recibe la mayoría de sus vistas en los primeros días. Después se vuelve "tibia": se ve poco pero no se puede borrar. El paper de **f4** (OSDI 2014) describe cómo Facebook movió esas fotos a un almacenamiento con *erasure coding*, bajando el factor de replicación efectivo de 3,6 a 2,8 o 2,1. Con petabytes al año, esa diferencia es enorme. Hoy, en la nube, el equivalente es mover objetos a clases de almacenamiento más baratas por reglas de antigüedad.
+
+<Quiz
+  question="Tienes 70 PB de fotos al año y casi todas las vistas ocurren en la primera semana. ¿Qué decisión tiene más impacto en costo?"
+  options={[
+    { text: 'Usar una base de datos más rápida para los metadatos de las publicaciones.', why: 'Los metadatos son una fracción minúscula del volumen; no mueven el costo de almacenamiento.' },
+    { text: 'Mover las fotos viejas a una capa más barata, con erasure coding en lugar de 3 réplicas completas.', correct: true, why: 'Pasar de un factor de replicación de ~3 a ~2,1 recorta casi un tercio del almacenamiento de la mayor parte del catálogo, que es lo que más pesa. Las fotos calientes siguen en la capa rápida y detrás del CDN.' },
+    { text: 'Borrar las fotos que no se ven hace más de un año.', why: 'Las fotos son de los usuarios: la durabilidad es un requisito, no una optimización negociable.' },
+  ]}
+/>
+
+### 2. El feed
+
+La estructura es la del caso de [Twitter](/casos/twitter): **fan-out híbrido**, con feeds precalculados de IDs para la mayoría de las cuentas y mezcla al leer para las cuentas enormes. No lo repitas entero en la entrevista; menciónalo y concéntrate en lo que cambia:
+
+- **El feed está rankeado**, no es cronológico (Instagram cambió a feed ordenado por relevancia en 2016). El precalculado funciona como **fuente de candidatos**; el ranking ocurre al leer, con un modelo que predice interacciones, como en el embudo de [TikTok](/casos/tiktok).
+- **La hidratación incluye datos por espectador**: `liked_by_me` requiere consultar, para cada publicación del feed, si este usuario le dio like. Un multiget a `user_likes` por `(user_id, post_id)` lo resuelve en una ida y vuelta.
+- **El costo de una página de feed es sobre todo de imágenes**. Diez publicaciones son diez o más imágenes: conviene precargar la siguiente página de imágenes en una calidad modesta mientras el usuario lee.
+
+### 3. Likes: la publicación de una celebridad
+
+Cuando una cuenta con cientos de millones de seguidores publica, en los primeros minutos pasan dos cosas a la vez: **millones de lecturas** de esa publicación y **miles de likes por segundo** sobre la misma fila. Instagram contó en 2015 cómo resolvió lo que llamaba "el problema de Justin Bieber". Las piezas:
+
+1. **Unicidad.** La tabla `likes` con clave primaria `(post_id, user_id)` garantiza un like por persona; el `PUT` idempotente hace que los reintentos no dupliquen.
+2. **Contador desnormalizado.** En vez de `SELECT COUNT(*)` sobre millones de filas cada vez que alguien mira la publicación, se mantiene un contador por publicación. Leerlo es un acceso puntual.
+3. **Escrituras al contador sin pelear por una fila.** Opciones: **contadores particionados** (N sub-contadores por publicación; cada like incrementa uno al azar; la lectura suma), o **agregación asíncrona** (cada like va a un log; un consumidor suma por publicación cada pocos segundos y escribe un solo incremento). El número que ves puede estar unos segundos atrasado: nadie lo nota, y por eso además se muestra redondeado ("1,2 M").
+4. **Estampida en el caché.** Si la entrada de caché de esa publicación expira o se invalida, miles de peticiones simultáneas van a la base a la vez. Instagram usó **leases de memcache**: la primera petición que encuentra un *miss* recibe un permiso para recalcular; las demás esperan brevemente o reciben el valor anterior. Es la técnica descrita en el paper *Scaling Memcache at Facebook* (NSDI 2013).
+
+<Quiz
+  question="Una publicación viral recibe 5.000 likes por segundo. ¿Qué diseño evita que el contador sea un cuello de botella?"
+  options={[
+    { text: 'UPDATE posts SET like_count = like_count + 1 en cada like, dentro de una transacción.', why: 'Todas las transacciones compiten por el bloqueo de la misma fila; a miles por segundo, la latencia se dispara y arrastra al shard completo.' },
+    { text: 'Calcular COUNT(*) sobre la tabla de likes cada vez que alguien ve la publicación.', why: 'Convierte cada lectura (millones) en un recorrido de millones de filas.' },
+    { text: 'Registrar cada like en su tabla y actualizar el contador en lotes (o en N sub-contadores), aceptando unos segundos de retraso.', correct: true, why: 'La unicidad la da la tabla de likes; el contador recibe un incremento agregado cada pocos segundos, o se reparte entre sub-contadores. La consistencia eventual es aceptable para un número que además se muestra redondeado.' },
+  ]}
+/>
+
+### 4. Historias: contenido que caduca
+
+Las historias (lanzadas en 2016) cambian el modelo de datos: cada pieza tiene una **fecha de expiración** y la bandeja tiene que reflejarla al minuto. Mueve el reloj del simulador y observa la diferencia entre lo que **se ve** y lo que **todavía está en el índice**.
+
+<StoriesTTL />
+
+Las decisiones de diseño:
+
+- **La corrección sale de la lectura, no de la limpieza.** El índice de la bandeja es un sorted set con la **hora de expiración como puntaje**. La lectura pide solo puntajes mayores que "ahora" (`ZRANGEBYSCORE tray:yo ahora +inf`). Aunque el job de limpieza se atrase una hora, ninguna historia expirada se muestra. La limpieza (`ZREMRANGEBYSCORE … -inf ahora`, o TTL en la base) existe para **liberar memoria**, no para cumplir el requisito.
+- **¿Push o pull para la bandeja?** Con push, al publicar una historia se inserta su ID en la bandeja de cada seguidor (el fan-out de siempre, con el mismo problema de las celebridades). Con pull, al abrir la app se consultan las historias vigentes de cada cuenta seguida. Como la bandeja se abre muchísimo y las historias se publican menos, conviene push para cuentas normales y pull para las enormes: el mismo híbrido del feed.
+- **"Expirar" no siempre significa borrar.** La historia deja de ser visible para los demás, pero el autor la conserva en su archivo privado. Por eso el objeto multimedia no se borra a las 24 h; se borra o se mueve el **índice de visibilidad**.
+- **Dos registros de vistas distintos.** El autor quiere ver **quién** vio su historia: `story_views` por historia, una escritura por espectador (deduplicada por `(story_id, viewer_id)`), que en una cuenta grande es un caso de alta escritura como los likes. El espectador necesita saber **qué ya vio** para pintar el anillo: un conjunto por espectador con TTL de 24 h, que se limpia solo.
+
+<Callout type="idea" title="El patrón general">
+
+"Filtra por tiempo al leer, limpia en segundo plano" sirve para cualquier dato con vencimiento: sesiones, ofertas temporales, reservas que se liberan si no se pagan, códigos de un solo uso. Si la exactitud dependiera del job de limpieza, cualquier atraso del job sería un bug visible.
+
+</Callout>
+
+## Cuellos de botella y trade-offs
+
+| Tensión | Trade-off |
+|---|---|
+| Variantes pre-generadas vs bajo demanda | Almacenamiento vs cómputo en la primera petición |
+| Réplicas completas vs erasure coding | Lectura y recuperación más simples vs un tercio menos de almacenamiento para lo tibio |
+| Contador exacto vs escalable | Exactitud inmediata vs agregación con segundos de retraso |
+| Push vs pull en feed y bandeja | Lecturas baratas vs amplificación de escritura con celebridades |
+| Limpieza inmediata vs perezosa | Memoria vs carga constante de borrados; la corrección se resuelve al leer en ambos casos |
+| Ranking vs cronológico | Más engagement y más cómputo por lectura vs simplicidad y previsibilidad |
+
+## Qué espera el entrevistador
+
+<Callout type="interview" title="Por nivel">
+
+**Mid-level.** Subida a almacenamiento de objetos con URL prefirmada, varias resoluciones, CDN, base de datos para publicaciones y seguidores, un feed que funcione, likes con contador. Historias con un campo de expiración.
+
+**Senior.** Feed híbrido justificado (sin repetir todo Twitter), IDs ordenables y sharding, contador desnormalizado con estrategia para publicaciones virales, `PUT` idempotente, bandeja de historias con índice por expiración y filtrado al leer, estimaciones de almacenamiento que guíen las decisiones.
+
+**Staff.** Economía del almacenamiento (capas por antigüedad, erasure coding, metadatos por objeto), variantes bajo demanda en el borde, estampidas de caché y leases, separación entre corrección y limpieza, vistas de historias a escala, multi-región para fotos y feeds, y cómo evolucionaría al agregar Reels o Explorar.
+
+</Callout>
+
+<Takeaways>
+
+- Instagram es Twitter con **megabytes por publicación**: el almacenamiento y la entrega de imágenes dominan el costo.
+- Las fotos van **directo al almacenamiento de objetos**, en variantes por tamaño, servidas desde el **CDN**; las viejas, a capas más baratas.
+- IDs de 64 bits con **tiempo + shard lógico + secuencia**: ordenables y con la ubicación incluida.
+- Likes: **tabla con unicidad** + **contador desnormalizado** actualizado en lotes o particionado; leases contra la estampida en caché.
+- Historias: índice con la **expiración como puntaje**; la corrección se resuelve **al leer** y la limpieza es solo para memoria.
+- Reutiliza el **fan-out híbrido** de Twitter para el feed y la bandeja, y enfócate en lo que Instagram tiene de propio.
+
+</Takeaways>
+
+## Fuentes y lecturas
+
+- Instagram Engineering, [Sharding & IDs at Instagram](https://instagram-engineering.com/sharding-ids-at-instagram-1cf5a71e5a5c) (2012).
+- Instagram Engineering, [Instagration Pt. 2: Scaling our infrastructure to multiple data centers](https://instagram-engineering.com/instagration-pt-2-scaling-our-infrastructure-to-multiple-data-centers-5745cbad7834) (2015): contadores desnormalizados y leases de memcache.
+- Wired, [How Instagram Solved Its Justin Bieber Problem](https://www.wired.com/2015/11/how-instagram-solved-its-justin-bieber-problem/) (2015).
+- Lisa Guo, [Scaling Instagram Infrastructure](https://www.infoq.com/presentations/instagram-scale-infrastructure/), QCon London 2017 (InfoQ).
+- Doug Beaver y otros, [Finding a Needle in Haystack: Facebook's Photo Storage](https://www.usenix.org/conference/osdi10/finding-needle-haystack-facebooks-photo-storage), OSDI 2010.
+- Subramanian Muralidhar y otros, [f4: Facebook's Warm BLOB Storage System](https://www.usenix.org/conference/osdi14/technical-sessions/presentation/muralidhar), OSDI 2014.
+- Rajesh Nishtala y otros, [Scaling Memcache at Facebook](https://www.usenix.org/conference/nsdi13/technical-sessions/presentation/nishtala), NSDI 2013.
+- Instagram, [Introducing Instagram Stories](https://about.instagram.com/blog/announcements/introducing-instagram-stories) (2016).
+- Hello Interview, [Design Instagram](https://www.hellointerview.com/learn/system-design/problem-breakdowns/instagram).

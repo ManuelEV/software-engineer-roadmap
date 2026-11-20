@@ -1,0 +1,157 @@
+.rf-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  align-items: center;
+}
+.rf-svg {
+  display: block;
+  width: 100%;
+  max-width: 460px;
+  height: auto;
+  margin: 0 auto;
+}
+.rf-link {
+  stroke: var(--rule);
+  stroke-width: 2;
+}
+.rf-link.is-cut {
+  stroke: var(--bad);
+  stroke-dasharray: 3 6;
+  opacity: 0.6;
+}
+.rf-msg {
+  fill: var(--line);
+}
+.rf-msg.is-vote {
+  fill: var(--l4);
+}
+.rf-msg.is-res {
+  fill: var(--paper);
+  stroke: var(--ink-2);
+  stroke-width: 2;
+}
+.rf-msgline {
+  stroke: var(--line);
+  stroke-width: 3;
+  opacity: 0.5;
+}
+.rf-msgline.is-vote {
+  stroke: var(--l4);
+}
+.rf-isolated {
+  fill: none;
+  stroke: var(--bad);
+  stroke-width: 2;
+  stroke-dasharray: 5 5;
+}
+.rf-timeout {
+  fill: none;
+  stroke: var(--line);
+  stroke-width: 3;
+  opacity: 0.55;
+}
+.rf-node {
+  fill: var(--paper);
+  stroke: var(--line);
+  stroke-width: 3;
+  transition: fill 200ms var(--ease-out), stroke 200ms var(--ease-out);
+}
+.rf-node.is-leader {
+  fill: var(--line);
+  stroke: var(--line);
+  stroke-width: 5;
+}
+.rf-node.is-candidate {
+  stroke: var(--l4);
+  stroke-width: 4;
+}
+.rf-node.is-dead {
+  fill: var(--paper-3);
+  stroke: var(--rule-strong);
+  stroke-dasharray: 4 4;
+}
+.rf-name {
+  font-size: 15px;
+  font-weight: 700;
+  fill: var(--ink);
+  pointer-events: none;
+}
+.rf-term {
+  font-size: 13px;
+  fill: var(--ink-2);
+  pointer-events: none;
+}
+.rf-node.is-leader + .rf-name,
+.rf-node.is-leader + .rf-name + .rf-term {
+  fill: var(--line-on);
+}
+.rf-role {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+.rf-role.is-leader {
+  fill: var(--line-ink);
+}
+.rf-role.is-candidate {
+  fill: var(--l4);
+}
+.rf-readout {
+  display: grid;
+  gap: var(--s-3);
+}
+.rf-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-4) var(--s-5);
+}
+.rf-logs {
+  display: grid;
+  gap: 4px;
+}
+.rf-logrow {
+  display: grid;
+  grid-template-columns: 2rem 1fr;
+  align-items: center;
+  gap: var(--s-2);
+}
+.rf-logrow.is-dead {
+  opacity: 0.5;
+}
+.rf-logname {
+  font-weight: 700;
+  color: var(--ink);
+}
+.rf-cells {
+  display: grid;
+  grid-template-columns: repeat(10, minmax(0, 1.6rem));
+  gap: 3px;
+}
+.rf-cell {
+  display: grid;
+  place-items: center;
+  height: 1.5rem;
+  border-radius: 4px;
+  border: 2px solid var(--line);
+  font-size: 0.75rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+  background: var(--paper);
+}
+.rf-cell.is-committed {
+  background: var(--line);
+  color: var(--line-on);
+}
+.rf-cell.is-noop {
+  border-style: dashed;
+}
+.rf-cell.is-empty {
+  border: 1px dotted var(--rule);
+  background: transparent;
+}
+.rf-legend {
+  font-size: 0.8rem;
+  color: var(--ink-3);
+}

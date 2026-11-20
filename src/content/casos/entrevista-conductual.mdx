@@ -1,0 +1,445 @@
+import { StarAnatomy } from '../../components/widgets/entrevistas/StarAnatomy'
+import { StoryMatrix } from '../../components/widgets/entrevistas/StoryMatrix'
+import { QuestionDeck } from '../../components/widgets/entrevistas/QuestionDeck'
+
+"Cuéntame de una vez que no estuviste de acuerdo con tu equipo." Parece la parte fácil del proceso: no hay código, no hay pizarra, solo una conversación. Por eso mucha gente la prepara la noche anterior, o no la prepara. Y por eso mismo es la ronda donde más candidatos técnicamente buenos se caen: llegan sin historias, improvisan en abstracto ("yo en general trato de escuchar…") y el entrevistador termina la hora sin un solo hecho que anotar.
+
+La entrevista conductual (*behavioral interview*) parte de una idea simple: **la mejor predicción de cómo vas a actuar es cómo actuaste antes**. No te preguntan qué harías, te preguntan qué hiciste. Este tema cubre qué evalúan de verdad, cómo contar una historia con el método STAR, cómo armar un banco de historias que cubra casi cualquier pregunta y los errores que hunden una buena historia. El "háblame de ti" y las preguntas personales tienen [su propio tema](/casos/hablame-de-ti).
+
+<Sketch
+  width={640}
+  height={290}
+  caption="La forma de una buena respuesta: contexto breve, la acción como el bloque más grande y un resultado concreto. La débil invierte las proporciones."
+  items={[
+    { type: 'text', x: 24, y: 32, text: 'respuesta fuerte', size: 22, tone: 'ok' },
+    { type: 'box', x: 24, y: 48, w: 70, h: 60, label: 'S', size: 26 },
+    { type: 'box', x: 100, y: 48, w: 70, h: 60, label: 'T', size: 26 },
+    { type: 'box', x: 176, y: 48, w: 300, h: 60, label: 'A', size: 26, tone: 'line', fill: true },
+    { type: 'box', x: 482, y: 48, w: 134, h: 60, label: 'R', size: 26 },
+    { type: 'text', x: 28, y: 142, text: 'contexto breve', size: 18, tone: 'pencil' },
+    { type: 'text', x: 190, y: 142, text: 'lo que hiciste tú', size: 22, tone: 'line' },
+    { type: 'underline', x: 190, y: 150, w: 170 },
+    { type: 'text', x: 488, y: 142, text: 'con números', size: 18, tone: 'pencil' },
+    { type: 'line', points: [[24, 174], [616, 174]], dashed: true, tone: 'muted' },
+    { type: 'text', x: 24, y: 210, text: 'respuesta débil', size: 22, tone: 'bad' },
+    { type: 'box', x: 24, y: 224, w: 380, h: 50, label: 'contexto, contexto…', size: 20, tone: 'bad' },
+    { type: 'box', x: 410, y: 224, w: 50, h: 50, label: 'A', size: 22, tone: 'bad' },
+    { type: 'cross', x: 494, y: 249, size: 22 },
+    { type: 'text', x: 524, y: 256, text: '¿y el final?', size: 18, tone: 'pencil' },
+  ]}
+/>
+
+## Qué evalúan de verdad
+
+Detrás de cada pregunta conductual hay una o dos competencias que el entrevistador tiene que puntuar en una rúbrica. En la mayoría de las empresas de tecnología son variaciones de estas:
+
+- **Comunicación**: si explicas un problema técnico con claridad a quien lo necesita entender, y si tu propia historia se sigue sin esfuerzo.
+- ***Ownership***: si tomas responsabilidad por resultados, incluidos los malos, o si esperas a que alguien te asigne el problema.
+- **Colaboración**: cómo trabajas con otros equipos, con producto, con QA, con soporte.
+- **Manejo de conflicto**: si eres capaz de estar en desacuerdo sin romper la relación, y de cambiar de opinión cuando el otro tiene razón.
+- **Aprendizaje**: qué haces cuando no sabes algo, y qué cambias después de equivocarte.
+- **Impacto**: si tu trabajo movió algo que le importa al negocio o al equipo, y si sabes medirlo.
+- **Juicio**: cómo decides con información incompleta, qué priorizas y qué dejas fuera a propósito.
+
+Ninguna de estas cosas se puede demostrar con adjetivos. "Soy muy colaborativo" no vale nada en una rúbrica; "cuando el equipo de pagos bloqueó nuestro release, me senté con su líder a revisar el contrato de la API" sí vale.
+
+### La vara cambia con el seniority
+
+Las preguntas suelen ser las mismas para todos los niveles. Lo que cambia es **el tamaño de la historia que se espera** como respuesta.
+
+| Nivel | Qué tiene que mostrar tu historia | Alcance típico |
+|---|---|---|
+| Junior | Que aprendes rápido, pides ayuda a tiempo, aceptas feedback y colaboras | Tu tarea, tu equipo |
+| Semi senior | Que te haces cargo de una funcionalidad de punta a punta y resuelves problemas sin que te los den masticados | Una funcionalidad o un servicio |
+| Senior | Influencia sin autoridad, decisiones con ambigüedad, desacuerdos con otros equipos, mentoría, trade-offs explicados al negocio | Varios equipos, meses de trabajo |
+
+Un senior que responde "¿cuándo lideraste algo?" con "organicé las tareas del sprint" está contando una historia de junior. Un junior que responde con una historia honesta de cómo aprendió a desplegar con la ayuda de alguien más está contando exactamente lo que se le pide. Elige historias **del tamaño del puesto al que postulas**.
+
+### "En general yo…" contra "Una vez…"
+
+Esta es la diferencia más importante de todo el tema. Compara:
+
+> **Débil**: "En general, cuando tengo un desacuerdo, trato de escuchar y llegar a un acuerdo."
+>
+> **Fuerte**: "Una vez, el líder técnico quiso migrar todo a microservicios antes de un lanzamiento. Le pedí media hora…"
+
+La primera es una **respuesta hipotética**: describe tu intención, que nadie puede verificar y que cualquier candidato puede decir. La segunda es un **hecho**: tiene personas, decisiones y consecuencias, y el entrevistador puede repreguntar ("¿qué te contestó?", "¿qué harías distinto?"). Las rúbricas están hechas para puntuar hechos. Si te escuchas decir "normalmente", "en general" o "yo siempre", detente y busca un ejemplo concreto.
+
+<Sketch
+  width={640}
+  height={240}
+  caption="Una intención no se puede puntuar; un hecho sí, y además se puede repreguntar."
+  items={[
+    { type: 'text', x: 24, y: 34, text: '"en general, yo…"', size: 22, tone: 'bad' },
+    { type: 'circle', x: 150, y: 116, rx: 112, ry: 46, label: 'intención', size: 22, tone: 'muted' },
+    { type: 'cross', x: 40, y: 200, size: 22 },
+    { type: 'text', x: 70, y: 208, text: 'nada que anotar', size: 20, tone: 'pencil' },
+    { type: 'line', points: [[312, 20], [312, 224]], dashed: true, tone: 'muted' },
+    { type: 'text', x: 336, y: 34, text: '"una vez…"', size: 22, tone: 'ok' },
+    { type: 'line', points: [[340, 124], [612, 124]], arrow: true, tone: 'line' },
+    { type: 'text', x: 342, y: 108, text: 'quién', size: 20 },
+    { type: 'text', x: 428, y: 108, text: 'qué hice', size: 20, tone: 'line' },
+    { type: 'text', x: 530, y: 108, text: 'qué pasó', size: 20 },
+    { type: 'text', x: 340, y: 176, text: ['hechos que se pueden', 'repreguntar'], size: 20, tone: 'pencil' },
+    { type: 'check', x: 590, y: 196, size: 26 },
+  ]}
+/>
+
+<Callout type="interview" title="Lo que el entrevistador está evaluando aquí">
+
+Mientras hablas, el entrevistador toma notas literales y después las compara con una rúbrica por competencia. Lo que necesita son **señales**: qué hiciste tú, por qué, con qué resultado y qué aprendiste. Si al final de tu respuesta no puede escribir al menos una acción concreta tuya, la pregunta queda sin puntuar o con puntaje bajo, aunque la conversación haya sido agradable.
+
+</Callout>
+
+## El método STAR
+
+STAR es una estructura para contar una historia profesional sin perderte. No es un truco: es simplemente el orden en el que una historia se entiende.
+
+- **S, Situación**: el contexto mínimo para entender lo que sigue. Dónde, qué sistema, qué estaba en juego. Una o dos frases.
+- **T, Tarea**: cuál era tu responsabilidad o el problema concreto que tenías que resolver. Aquí se ve tu rol: ¿te tocaba o lo tomaste tú?
+- **A, Acción**: qué hiciste **tú**, en qué orden y por qué. Las alternativas que descartaste y el criterio. Es el centro de la respuesta.
+- **R, Resultado**: qué cambió, con números si los tienes, y qué aprendiste.
+
+### Las proporciones
+
+Una regla práctica (no hay un número oficial) es que la Situación y la Tarea juntas ocupen como mucho un cuarto del tiempo, la Acción más o menos la mitad o un poco más, y el Resultado el resto. El error clásico es el contrario: tres minutos de contexto sobre la empresa, el producto y el equipo, y treinta segundos para lo que hiciste.
+
+La Acción va **en primera persona**. "Hicimos", "decidimos" y "lo resolvimos entre todos" esconden justo lo que el entrevistador necesita saber. No se trata de quitarle mérito al equipo: puedes decir "el equipo implementó el nuevo flujo; mi parte fue diseñar el esquema de reintentos y convencer a soporte de cambiar el proceso". Lo que importa es que quede claro qué parte fue tuya.
+
+### Resultados medibles, sin inventar
+
+Un buen resultado tiene un antes y un después: "el tiempo de respuesta del endpoint bajó de 2 segundos a 300 ms", "pasamos de tres incidentes al mes por este tema a ninguno en el trimestre siguiente", "el onboarding de una persona nueva bajó de tres semanas a una". Esos números valen **solo si son reales**. Un entrevistador con experiencia repregunta ("¿cómo lo mediste?") y un número inventado se cae en la segunda pregunta.
+
+Si no tienes métricas, describe el efecto observable: "soporte dejó de escalarnos ese tipo de ticket", "el equipo adoptó la guía para todos los tests nuevos", "el cliente renovó el contrato y mencionó esa funcionalidad". Y si el resultado fue malo, dilo: una historia de fracaso con un buen aprendizaje es mejor que una historia de éxito inflada.
+
+### Variantes: CARL y la reflexión
+
+Hay variantes con el mismo esqueleto:
+
+- **CARL** (Contexto, Acción, Resultado, *Learning*): junta Situación y Tarea en "Contexto" y hace explícito el **aprendizaje**. Útil para preguntas de errores y de feedback, donde lo que más importa es qué cambiaste.
+- **STAR + R** (reflexión): el Tech Interview Handbook recomienda agregar una reflexión final para roles senior: qué harías distinto, qué aprendió la organización.
+
+No te obsesiones con la sigla. Lo que importa es que la historia tenga contexto breve, un conflicto real, acciones tuyas y un desenlace.
+
+<StarAnatomy />
+
+<Quiz
+  question="En tu respuesta a «cuéntame de un proyecto difícil», hablas tres minutos sobre la empresa, el producto y la arquitectura, y treinta segundos sobre lo que hiciste. ¿Cuál es el problema principal?"
+  options={[
+    { text: 'Ninguno: el contexto demuestra que entiendes el negocio.', why: 'El contexto es necesario, pero no se puntúa. La rúbrica evalúa tus acciones y su resultado, que quedaron en treinta segundos.' },
+    { text: 'La proporción está invertida: la Acción debería ser el centro y la Situación, una o dos frases.', correct: true, why: 'Es el error más común con STAR. Recorta el contexto a lo indispensable y dedica la mayor parte del tiempo a qué hiciste, por qué y con qué alternativas.' },
+    { text: 'Faltó mencionar más tecnologías para mostrar experiencia técnica.', why: 'Agregar nombres de tecnologías no agrega señales conductuales. Se mencionan solo si explican una decisión.' },
+    { text: 'Debió usar CARL en vez de STAR.', why: 'Cambiar de sigla no arregla la proporción. CARL tiene el mismo problema si el Contexto se come el tiempo.' },
+  ]}
+/>
+
+## Tu banco de historias
+
+Nadie puede preparar una respuesta para cada pregunta posible: hay cientos de variantes. Lo que sí puedes hacer es preparar **6 a 8 historias** que, bien elegidas, cubren casi todas. Una misma historia sobre una migración difícil puede responder a "un desacuerdo técnico", "una decisión con información incompleta" y "el proyecto del que estás más orgulloso", contada desde ángulos distintos.
+
+<Sketch
+  width={640}
+  height={250}
+  caption="Una historia bien elegida responde varias preguntas: los mismos hechos, contados desde otro ángulo."
+  items={[
+    { type: 'text', x: 24, y: 84, text: 'una historia', size: 20, tone: 'pencil' },
+    { type: 'box', x: 24, y: 96, w: 196, h: 64, label: 'la migración', size: 22, tone: 'line', fill: true },
+    { type: 'arrow', from: [222, 120], to: [376, 50], bend: -20, tone: 'line' },
+    { type: 'box', x: 382, y: 26, w: 234, h: 48, label: '¿un desacuerdo?', size: 20 },
+    { type: 'arrow', from: [222, 128], to: [376, 128], tone: 'line' },
+    { type: 'box', x: 382, y: 104, w: 234, h: 48, label: '¿ambigüedad?', size: 20 },
+    { type: 'arrow', from: [222, 136], to: [376, 206], bend: 20, tone: 'line' },
+    { type: 'box', x: 382, y: 182, w: 234, h: 48, label: '¿tu mayor orgullo?', size: 20 },
+    { type: 'text', x: 24, y: 206, text: ['mismos hechos,', 'otro ángulo'], size: 20, tone: 'pencil' },
+    { type: 'underline', x: 24, y: 238, w: 110 },
+  ]}
+/>
+
+### Cómo elegirlas
+
+Repasa los últimos dos o tres años de trabajo y anota todo lo que tenga **tensión**: algo que salió mal, algo en lo que no estabas de acuerdo, algo que no sabías hacer, algo con un plazo apretado. Fuentes típicas:
+
+- Incidentes en producción, sobre todo los que causaste tú.
+- Migraciones, refactors grandes o cambios de arquitectura.
+- Desacuerdos con un compañero, un líder técnico, producto o un cliente.
+- Momentos en que ayudaste a alguien a crecer, o en que alguien te dio un feedback que te costó escuchar.
+- Proyectos donde tuviste que aprender una tecnología en poco tiempo.
+- Si eres junior o vienes de otra carrera: proyectos de la universidad, prácticas, trabajos anteriores fuera de tecnología. Una historia de conflicto en un restaurante sirve si muestra la conducta.
+
+Después quédate con las que cumplen tres condiciones: **hubo un problema real**, **tu papel fue importante** y **puedes contar el resultado**. Prefiere historias recientes (de los últimos dos o tres años): una de hace siete años sugiere que no ha pasado nada interesante desde entonces.
+
+### Cómo prepararlas sin memorizarlas
+
+Memorizar palabra por palabra produce respuestas que suenan leídas y que se desarman con la primera repregunta. Lo que funciona mejor:
+
+<Steps>
+<Step title="Escribe cada historia en viñetas">
+
+Una línea por parte de STAR, más los números y nombres que no quieres olvidar ("2 s → 300 ms", "fueron 6 tests"). No escribas el texto completo.
+
+</Step>
+<Step title="Mapéalas a competencias">
+
+Arma una matriz como la de abajo: historias en las filas, tipos de pregunta en las columnas. Así ves qué historia usar para cada pregunta y dónde tienes huecos.
+
+</Step>
+<Step title="Cuéntalas en voz alta, con reloj">
+
+Grábate o practica con alguien. La meta es contar cada una en unos dos minutos, sin leer, y sentir cuándo te estás yendo por las ramas.
+
+</Step>
+<Step title="Prepara las repreguntas">
+
+Para cada historia, anota qué harías distinto, qué dijeron los demás, qué alternativa descartaste y por qué. Ahí es donde el entrevistador comprueba que la historia es tuya.
+
+</Step>
+</Steps>
+
+<StoryMatrix />
+
+Fíjate en dos cosas de la matriz. Primero, una columna con solo historias "a medias" es tan peligrosa como un hueco: cuando el entrevistador repregunte, la historia se va a quedar corta. Segundo, si una sola historia carga con muchas columnas, en un proceso con varias rondas conductuales vas a tener la tentación de contarla dos veces. Algunas empresas comparan notas entre entrevistadores, y repetir la misma historia les deja menos información sobre ti.
+
+## Las preguntas típicas y lo que buscan
+
+Casi todas las preguntas conductuales caen en ocho familias. Para cada una: cómo suele llegar, qué buscan y la trampa.
+
+### Conflicto o desacuerdo técnico
+
+*"Cuéntame de una vez que no estuviste de acuerdo con un compañero o con tu líder."*
+
+Buscan que sepas estar en desacuerdo **con argumentos y sin romper la relación**, y que puedas comprometerte con una decisión que no era la tuya. La mejor historia tiene un desacuerdo real, una conversación (no una guerra de comentarios en un pull request), criterios explícitos y, idealmente, un momento en que reconociste que el otro tenía parte de razón. La trampa: contar un "conflicto" donde el otro era simplemente un incompetente y tú tenías toda la razón.
+
+### Un fracaso o un error en producción
+
+*"Cuéntame de un error que cometiste." "¿Cuál ha sido tu mayor fracaso?"*
+
+Buscan *ownership* y aprendizaje. El error tiene que ser **tuyo** y **real**: "trabajo demasiado" o un error que en realidad cometió QA no responden la pregunta. Lo que suma es el orden de las acciones (mitigar, comunicar, corregir, prevenir) y un cambio concreto después: un chequeo en CI, un proceso, un hábito. El *postmortem* sin culpables es un buen marco para contarlo.
+
+### Liderazgo sin autoridad
+
+*"Cuéntame de una vez que lideraste algo sin ser el jefe." "¿Cómo convenciste a otros de un cambio?"*
+
+Buscan **influencia**: cómo mueves a personas que no te reportan. Las herramientas creíbles son datos, prototipos, experimentos pequeños, sumar aliados y hacer tú la parte aburrida del trabajo. "Les dije lo que había que hacer y lo hicieron" no es creíble ni es influencia. Para un rol senior, esta es probablemente la pregunta más importante del loop.
+
+### Deadline imposible o prioridades en conflicto
+
+*"Cuéntame de una vez que no ibas a llegar a una fecha." "¿Cómo manejaste dos prioridades urgentes a la vez?"*
+
+Buscan **juicio y comunicación**: que detectes el riesgo temprano, avises a tiempo y llegues con opciones (recortar alcance, mover la fecha, sumar gente, aceptar deuda técnica con un plan). La trampa es la historia heroica de "trabajé tres noches seguidas y lo saqué": muestra esfuerzo, pero también que nadie gestionó el riesgo.
+
+### Feedback difícil, darlo y recibirlo
+
+*"Cuéntame de un feedback que te costó recibir." "¿Alguna vez tuviste que darle un feedback difícil a un compañero?"*
+
+Para **recibirlo**, buscan que no te defiendas y que cambies algo verificable después. Para **darlo**, buscan que lo hagas en privado, con hechos y no con juicios sobre la persona ("en las últimas tres revisiones, los PR llegaron sin tests" en vez de "eres descuidado"), y que hagas seguimiento. Es la columna que más candidatos tienen vacía: prepárala.
+
+### El proyecto del que estás más orgulloso
+
+*"¿De qué proyecto estás más orgulloso?" "Cuéntame del proyecto con más impacto en el que trabajaste."*
+
+Buscan **impacto y profundidad técnica**. Es la pregunta donde más se mezclan lo conductual y lo técnico: prepárate para que te pidan dibujar la arquitectura o explicar una decisión en detalle. Elige un proyecto donde tu aporte sea claro, el problema haya sido difícil y el resultado se pueda contar. Y explica por qué te enorgullece: eso dice mucho de lo que valoras.
+
+### Aprender algo rápido
+
+*"Cuéntame de una vez que tuviste que aprender una tecnología nueva en poco tiempo."*
+
+Buscan **cómo aprendes**: si tienes un método (leer el código existente, armar un prototipo, buscar a quien sabe, leer la documentación oficial) y si sabes cuándo pedir ayuda. Un buen resultado es "a las dos semanas hice mi primer cambio en producción", no "ahora soy experto".
+
+### Ambigüedad
+
+*"Cuéntame de una vez que tuviste que avanzar sin requisitos claros."*
+
+Buscan que no te paralices ni construyas a ciegas: que hagas preguntas, propongas supuestos explícitos, construyas algo pequeño para validar y ajustes. Una historia donde construiste de más y aprendiste a validar antes también sirve, si el aprendizaje es concreto.
+
+### Empresas con marco propio
+
+Algunas empresas organizan toda la entrevista conductual alrededor de sus valores publicados. El ejemplo más conocido es Amazon, cuyos **Leadership Principles** (16 a la fecha, como *Customer Obsession*, *Ownership*, *Dive Deep* o *Have Backbone; Disagree and Commit*) se usan explícitamente para evaluar a los candidatos, y cada entrevistador suele tener asignados algunos principios.
+
+Para prepararte para un marco así:
+
+1. **Lee el texto completo de cada principio o valor** en la página oficial de la empresa. No basta con el nombre: la descripción dice qué conducta esperan.
+2. **Agrega columnas a tu matriz** con esos valores y busca al menos una historia fuerte por cada uno de los más importantes.
+3. **Usa el vocabulario con naturalidad**, sin recitarlo. Decir "acá tuve que estar en desacuerdo y después comprometerme" está bien; decir "aquí demostré el principio número 13" suena a guion.
+4. **Espera más repreguntas**. En estos procesos es común que el entrevistador profundice durante diez o quince minutos en una sola historia.
+
+Aunque la empresa no publique un marco, casi todas tienen una página de valores o de cultura. Léela: te dice qué historias priorizar.
+
+<Quiz
+  question="Te preguntan: «Cuéntame de una vez que tuviste un conflicto con un compañero». Tu historia más fuerte es de cuando tenías razón y el otro estaba equivocado en todo. ¿Qué conviene?"
+  options={[
+    { text: 'Contarla tal cual: demuestra que tienes buen criterio técnico.', why: 'Una historia donde el otro es el villano suele leerse como poca empatía o dificultad para colaborar, que es justo lo que la pregunta evalúa.' },
+    { text: 'Contarla poniendo el foco en cómo manejaste la conversación, qué parte del argumento del otro consideraste y cómo quedó la relación.', correct: true, why: 'La pregunta no evalúa quién tenía razón, sino cómo manejas el desacuerdo. Mostrar que escuchaste, que usaste criterios y que la relación siguió bien es lo que suma.' },
+    { text: 'Decir que nunca has tenido conflictos porque te llevas bien con todos.', why: 'Evita la pregunta. Todos los equipos tienen desacuerdos; negarlo suena a poca experiencia o a evitar temas incómodos.' },
+    { text: 'Contar un conflicto inventado donde todo salió perfecto.', why: 'Las historias inventadas se caen con las repreguntas («¿qué te dijo exactamente?», «¿qué harías distinto?») y mentir descalifica.' },
+  ]}
+/>
+
+## Errores que hunden una buena historia
+
+- **Historias sin conflicto real.** "Me asignaron una tarea y la hice bien" no es una historia, es un día de trabajo. Sin tensión (un riesgo, un desacuerdo, algo que no sabías) no hay decisiones que evaluar.
+- **Culpar a otros.** Al equipo de QA, al PM, al jefe anterior, al cliente. Aunque sea cierto, el entrevistador escucha "esta persona no se hace cargo". Describe los hechos sin adjetivos y habla de lo que tú controlabas.
+- **No tener resultado.** La historia termina en "y bueno, así fue". Si el resultado fue malo o incierto, dilo y cuenta qué aprendiste. Si no sabes cómo terminó porque te fuiste, dilo también.
+- **Hablar ocho minutos.** Una respuesta conductual debería durar alrededor de dos o tres minutos. Pasados los cuatro, el entrevistador pierde el hilo y tú pierdes tiempo para otras preguntas. Cuenta la versión corta y ofrece profundizar: "puedo entrar en el detalle técnico si te sirve".
+- **El "nosotros" permanente.** Si cada acción es plural, el entrevistador no puede puntuar nada tuyo.
+- **Mentir o adornar.** Inflar tu rol, inventar cifras o apropiarte del trabajo de otro. Las repreguntas están diseñadas justo para encontrar esto, y en procesos con verificación de referencias puede salir después. Si una historia necesita adornos para funcionar, elige otra.
+- **Hablar mal de un empleador anterior.** Aunque haya sido terrible. Se entiende como una señal de cómo hablarás de esta empresa mañana.
+
+## En la sala: tiempo, repreguntas y silencios
+
+**Pide un momento para pensar.** "Déjame pensar un segundo en el mejor ejemplo" es una frase completamente normal. Diez segundos de silencio son mejores que empezar una historia que no sirve.
+
+**Anuncia la estructura si te ayuda.** "Te cuento el contexto en una frase y después lo que hice" le da un mapa al entrevistador.
+
+**Contesta la pregunta que te hicieron.** Si te preguntan por un fracaso, no conviertas la historia en un éxito a los veinte segundos. Si te preguntan por un conflicto con tu manager, no cuentes uno con un compañero.
+
+**Espera las repreguntas y no te pongas a la defensiva.** Las más comunes: "¿qué harías distinto hoy?", "¿qué alternativas consideraste?", "¿cómo reaccionó la otra persona?", "¿cómo mediste eso?", "¿qué pasó después?". No son ataques: son la forma de comprobar que la historia es tuya y de ver tu nivel de reflexión.
+
+**Si no tienes una historia para esa pregunta, dilo y ofrece la más cercana.** "No he tenido que despedir a nadie, pero sí tuve que decirle a un compañero que su parte estaba bloqueando el release; ¿te sirve esa?" Es mucho mejor que inventar.
+
+**En remoto**, todo esto pesa más: no hay lenguaje corporal que te ayude a notar si el entrevistador se perdió. Haz pausas al terminar cada parte y mira la cámara, no tus notas. Tener tus viñetas a la vista está bien; leerlas, no.
+
+<QuestionDeck
+  title="Practica"
+  caption="Doce preguntas conductuales frecuentes. Elige una historia de tu banco, cuéntala en voz alta en unos dos minutos y recién ahí revela la respuesta modelo. Las respuestas modelo son historias de ejemplo: la tuya tiene que ser real."
+  cards={[
+    {
+      q: 'Cuéntame de una vez que no estuviste de acuerdo con una decisión técnica.',
+      checks: 'Que discutas con argumentos, escuches y puedas comprometerte con una decisión que no era la tuya.',
+      level: 'semi',
+      answer: <><p>"El líder técnico quería reescribir el módulo de reportes en otro framework antes del cierre de trimestre. Yo creía que el riesgo era alto: el módulo no tenía tests y el cierre dependía de él. Le pedí una reunión y llevé dos cosas: la lista de reportes que usaba finanzas y una estimación de lo que costaba cubrirlos con tests primero. Acordamos escribir los tests ese trimestre y reescribir el siguiente. La reescritura salió sin incidentes en el cierre, y aprendí que llevar el riesgo concreto convence más que decir 'no es el momento'."</p></>,
+      strong: ['Un desacuerdo real con una persona concreta', 'Criterios o datos, no opiniones', 'Un acuerdo que integra las dos posturas'],
+      weak: ['El otro es el villano de la historia', '"Lo hablamos y llegamos a un consenso" sin decir cómo', 'Ganar la discusión como resultado'],
+      followups: ['¿Qué habrías hecho si él no aceptaba?', '¿Alguna vez te comprometiste con una decisión que seguías creyendo equivocada?'],
+    },
+    {
+      q: 'Cuéntame de un error tuyo que llegó a producción.',
+      checks: 'Ownership, orden de las acciones (mitigar, comunicar, corregir, prevenir) y un aprendizaje concreto.',
+      level: 'junior',
+      answer: <><p>"En mi primer año subí un cambio que enviaba dos veces el correo de confirmación de compra. Lo detecté por los reclamos que llegaban a soporte, revertí el despliegue y avisé en el canal del equipo con lo que había pasado. El problema era que el reintento del worker no era idempotente. Con ayuda de mi líder agregué una clave de idempotencia y un test que reproducía el doble envío. Desde entonces, cuando algo se reintenta, lo primero que me pregunto es qué pasa si corre dos veces."</p></>,
+      strong: ['El error es tuyo y lo dices en la primera frase', 'Mitigas antes de investigar', 'Un cambio que evita la repetición'],
+      weak: ['Un error que en realidad fue de otro', '"No me equivoco seguido"', 'Terminar en "y no volvió a pasar" sin decir por qué'],
+      followups: ['¿Cómo te enteraste del problema?', '¿Qué cambiarías en el proceso de despliegue?'],
+    },
+    {
+      q: '¿Cuál ha sido tu mayor fracaso profesional?',
+      checks: 'Que puedas hablar de algo que salió mal de verdad sin desmoronarte ni maquillarlo, y qué aprendiste.',
+      level: 'senior',
+      answer: <><p>"Lideré durante cuatro meses una plataforma de reportes personalizados que casi nadie usó. Construimos lo que pedían dos clientes grandes sin validar con el resto, y cuando lanzamos, el uso fue mínimo. Mi error fue no proponer una versión pequeña para medir antes de comprometer al equipo. Lo planteé en la retrospectiva, apagamos la mitad de la funcionalidad para reducir mantenimiento y desde entonces, antes de cualquier proyecto de más de un mes, propongo un experimento de dos semanas con una métrica de adopción acordada."</p></>,
+      strong: ['Un fracaso con consecuencias reales', 'Tu parte del error, sin repartir culpas', 'Un cambio en tu forma de trabajar que se pueda verificar'],
+      weak: ['Un falso fracaso ("me exigí demasiado")', 'Culpar a los clientes o a producto', 'Sin aprendizaje concreto'],
+      followups: ['¿Qué señales ignoraste en el camino?', '¿Cómo se lo comunicaste a tu manager?'],
+    },
+    {
+      q: 'Cuéntame de una vez que lideraste un cambio sin tener autoridad formal.',
+      checks: 'Influencia: datos, prototipos, aliados, hacer tú la parte aburrida.',
+      level: 'senior',
+      answer: <><p>"Cada equipo desplegaba a su manera y los incidentes por configuraciones distintas eran frecuentes. No tenía autoridad sobre los otros equipos, así que empecé por el mío: armé una plantilla de pipeline, la usamos un mes y medí cuántos despliegues fallidos teníamos antes y después. Con esos números lo presenté en la reunión de líderes técnicos, ofrecí migrar yo el primer servicio de cada equipo y documenté el proceso. En un trimestre, cinco de siete equipos la habían adoptado."</p></>,
+      strong: ['Empezar por algo propio y medible', 'Ofrecer trabajo, no solo ideas', 'Adopción voluntaria como resultado'],
+      weak: ['"Les dije que lo hicieran"', 'Escalar al jefe como primera herramienta', 'Sin medir el efecto'],
+      followups: ['¿Qué pasó con los dos equipos que no lo adoptaron?', '¿Quién se opuso y por qué?'],
+    },
+    {
+      q: 'Cuéntame de una vez que te diste cuenta de que no ibas a llegar a una fecha.',
+      checks: 'Detectar el riesgo temprano, avisar con opciones y ejecutar la decisión.',
+      level: 'semi',
+      answer: <><p>"A mitad de un sprint de lanzamiento vi que la integración con el proveedor de envíos iba a tardar el doble: su API de prueba no tenía los mismos datos que producción. Ese día le escribí al PM con el problema y dos opciones: lanzar con un solo transportista o mover la fecha una semana. Eligió lanzar con uno; yo dejé el código preparado para el segundo y lo activamos diez días después. Desde entonces, en la primera semana pruebo las integraciones externas antes que cualquier otra cosa."</p></>,
+      strong: ['Avisar el mismo día, no al final', 'Llegar con opciones y su costo', 'Un aprendizaje de planificación'],
+      weak: ['El heroísmo de trabajar de noche', 'Avisar el día de la entrega', 'Culpar al proveedor'],
+      followups: ['¿Qué habrías hecho si el PM elegía mover la fecha y el cliente se enojaba?', '¿Cómo estimas ahora?'],
+    },
+    {
+      q: '¿Cómo manejaste una situación con dos prioridades urgentes a la vez?',
+      checks: 'Que no decidas solo lo que no te toca decidir, y que expliques el criterio.',
+      level: 'semi',
+      answer: <><p>"Un lunes llegó un bug crítico de facturación mientras terminaba una funcionalidad comprometida con ventas para el viernes. En vez de elegir yo, le escribí a mi líder con el impacto de cada uno: el bug afectaba a todos los clientes que facturaban ese día; la funcionalidad, a una demo. Acordamos que yo tomaba el bug y que un compañero avanzaba la funcionalidad con mis notas. El bug quedó resuelto en el día y la demo se hizo con una versión reducida."</p></>,
+      strong: ['Impacto como criterio de prioridad', 'Hacer visible el conflicto a quien decide', 'Un resultado para ambos frentes'],
+      weak: ['"Hice las dos cosas trabajando más horas"', 'Elegir en silencio y que el otro frente se entere tarde'],
+      followups: ['¿Y si tu líder no estaba disponible?'],
+    },
+    {
+      q: 'Cuéntame de un feedback que te costó recibir.',
+      checks: 'Que no te defiendas, que entiendas el fondo y que cambies algo verificable.',
+      level: 'junior',
+      answer: <><p>"Mi líder me dijo que mis pull requests eran difíciles de revisar: muy grandes y sin descripción. Al principio me molestó porque sentía que el código estaba bien. Le pedí ejemplos y me mostró uno de 1.200 líneas que tardaron tres días en aprobar. Empecé a dividir los cambios en PR de menos de 300 líneas con una descripción de qué y por qué. En el trimestre siguiente, el tiempo de revisión de mis PR bajó a menos de un día y otro compañero copió la plantilla de descripción."</p></>,
+      strong: ['Admitir la reacción inicial con honestidad', 'Pedir ejemplos concretos', 'Un cambio medible después'],
+      weak: ['Un feedback falso ("me dijeron que trabajo demasiado")', 'Justificarte durante la historia'],
+      followups: ['¿Hubo algún feedback con el que no estuviste de acuerdo?'],
+    },
+    {
+      q: '¿Alguna vez tuviste que darle un feedback difícil a un compañero?',
+      checks: 'En privado, con hechos y no con juicios, y con seguimiento.',
+      level: 'senior',
+      answer: <><p>"Un compañero aprobaba PR sin revisarlos de verdad y dos bugs habían pasado así. Le pedí un café a solas y le mostré los dos casos, sin hablar de su actitud, solo de lo que había pasado. Me contó que estaba sobrecargado con soporte. Llevamos juntos el tema al líder para repartir mejor el soporte, y acordamos una lista corta de qué revisar en cada PR. Un mes después le pregunté cómo iba y las revisiones habían mejorado claramente."</p></>,
+      strong: ['Hechos concretos, no adjetivos', 'Buscar la causa antes de juzgar', 'Seguimiento posterior'],
+      weak: ['Darlo en público o por chat', 'Ir directo al jefe sin hablar con la persona'],
+      followups: ['¿Qué habrías hecho si no cambiaba?'],
+    },
+    {
+      q: '¿De qué proyecto estás más orgulloso?',
+      checks: 'Impacto, profundidad técnica y qué valoras tú.',
+      level: 'semi',
+      answer: <><p>"De la búsqueda de productos de la tienda. Tardaba cerca de dos segundos y soporte recibía quejas a diario. Yo propuse y construí un índice en Elasticsearch alimentado por eventos de cambio de la base, con un plan de migración por porcentaje de tráfico. El tiempo de respuesta quedó por debajo de 300 ms y las quejas desaparecieron. Me enorgullece porque fue mi primera vez diseñando algo de punta a punta, incluido convencer a dos equipos de publicar eventos."</p></>,
+      strong: ['Tu aporte es claro', 'Un antes y después real', 'Dices por qué te importa'],
+      weak: ['Un proyecto donde tu parte fue mínima', 'Recitar tecnologías sin decisiones'],
+      followups: ['Dibújame la arquitectura.', '¿Qué harías distinto hoy?', '¿Cómo manejaste la consistencia entre la base y el índice?'],
+    },
+    {
+      q: 'Cuéntame de una vez que tuviste que aprender algo muy rápido.',
+      checks: 'Tu método para aprender y cuándo pides ayuda.',
+      level: 'junior',
+      answer: <><p>"Me asignaron un servicio en Go sin haber usado el lenguaje. La primera semana hice el tour oficial de Go y leí los tests del servicio para entender qué hacía. Le pedí a quien lo había escrito una sesión de una hora para entender las decisiones raras. La segunda semana tomé un bug pequeño, y mi primer PR tuvo muchos comentarios, que anoté como guía. A las dos semanas y media hice mi primer cambio en producción."</p></>,
+      strong: ['Un método concreto (documentación, tests, personas)', 'Pedir ayuda a tiempo', 'Un hito medible'],
+      weak: ['"Soy autodidacta y aprendo rápido" sin ejemplo', 'Decir que ya eres experto'],
+      followups: ['¿Qué fue lo más difícil del lenguaje?'],
+    },
+    {
+      q: 'Cuéntame de una vez que tuviste que avanzar sin requisitos claros.',
+      checks: 'Preguntas, supuestos explícitos y validación temprana.',
+      level: 'senior',
+      answer: <><p>"Me pidieron 'mejorar la experiencia de devoluciones' sin más detalle. Pasé dos días leyendo tickets de soporte y encontré que la mitad de los casos eran por no saber el estado de la devolución. Escribí un documento de una página con ese hallazgo, tres supuestos y una propuesta mínima: un correo con el estado. Producto la aprobó, la lanzamos en una semana y los tickets de ese tipo bajaron notoriamente el mes siguiente. Después seguimos con lo demás con datos en la mano."</p></>,
+      strong: ['Investigar antes de construir', 'Supuestos por escrito', 'Una primera versión pequeña'],
+      weak: ['Esperar a que alguien defina todo', 'Construir mucho sin validar'],
+      followups: ['¿Qué supuesto resultó falso?'],
+    },
+    {
+      q: 'Cuéntame de una vez que ayudaste a alguien de tu equipo a crecer.',
+      checks: 'Mentoría con intención, no solo "respondía sus dudas".',
+      level: 'senior',
+      answer: <><p>"Llegó una persona junior que venía de soporte. Armamos juntos un plan de 30 días con tareas cada vez más grandes y revisiones de código en pareja dos veces por semana. Al principio le resolvía todo; me di cuenta de que eso no la ayudaba y cambié a hacerle preguntas. A los tres meses tomó sola una funcionalidad completa, y hoy es quien hace el onboarding de los nuevos."</p></>,
+      strong: ['Un plan, no ayuda casual', 'Ajustar tu forma de enseñar', 'Un resultado en la otra persona'],
+      weak: ['Hablar solo de lo que tú hiciste', 'Mentoría sin resultado observable'],
+      followups: ['¿Qué harías distinto con la próxima persona?'],
+    },
+  ]}
+/>
+
+<Quiz
+  question="Una entrevistadora te pregunta por un error en producción y tú cuentas una historia sólida. Al final te pregunta: «¿Qué harías distinto hoy?». ¿Qué está buscando?"
+  options={[
+    { text: 'Una trampa para que admitas que lo hiciste mal y bajarte el puntaje.', why: 'Las repreguntas no son trampas: buscan profundidad. Reconocer lo que harías distinto suma.' },
+    { text: 'Tu capacidad de reflexión: si sacaste un aprendizaje propio, más allá de lo que se arregló en el momento.', correct: true, why: 'Es una de las repreguntas más comunes. Una respuesta concreta («hoy probaría la migración con datos del tamaño de producción antes») muestra madurez; «nada, salió bien» muestra lo contrario.' },
+    { text: 'Que repitas el resultado con más detalle.', why: 'El resultado ya lo contaste. La pregunta apunta al aprendizaje y a cómo cambió tu forma de trabajar.' },
+  ]}
+/>
+
+<Takeaways>
+
+- La entrevista conductual puntúa **hechos**, no intenciones: "una vez…" vale; "en general yo…" no vale casi nada.
+- **STAR** ordena la historia: contexto breve, tu tarea, **acciones en primera persona** como centro, y un resultado real. CARL agrega el aprendizaje explícito.
+- Los resultados medibles suman solo si son verdaderos: un número inventado se cae con la primera repregunta.
+- Prepara **6 a 8 historias** con tensión real y mapéalas en una matriz contra las competencias; busca los huecos antes de la entrevista, no durante.
+- El tamaño de la historia tiene que coincidir con el **seniority** del puesto: un senior necesita historias de influencia, ambigüedad y alcance entre equipos.
+- Si la empresa tiene un marco propio (como los Leadership Principles de Amazon), lee el texto completo de cada valor y agrega esas columnas a tu matriz.
+- Errores que hunden: sin conflicto, culpar a otros, sin resultado, respuestas de ocho minutos, el "nosotros" permanente y adornar.
+
+</Takeaways>
+
+## Fuentes y lecturas
+
+- Tech Interview Handbook, [Behavioral interviews](https://www.techinterviewhandbook.org/behavioral-interview/): STAR con reflexión, banco de historias y las tres preguntas que conviene preparar siempre.
+- Tech Interview Handbook, [Behavioral interview questions](https://www.techinterviewhandbook.org/behavioral-interview-questions/) y [Behavioral interview rubrics](https://www.techinterviewhandbook.org/behavioral-interview-rubrics/).
+- Amazon, [Leadership Principles](https://www.amazon.jobs/content/en/our-workplace/leadership-principles): el texto completo de los principios que usan para evaluar.
+- MIT Career Advising & Professional Development, [The STAR method for behavioral interviews](https://capd.mit.edu/resources/the-star-method-for-behavioral-interviews/).
+- Hello Interview, [Why the Behavioral Interview Matters](https://www.hellointerview.com/learn/behavioral/overview/introduction): por qué esta ronda pesa tanto en las decisiones de nivel senior.
+- Gayle Laakmann McDowell, *Cracking the Coding Interview*, capítulo "Behavioral Questions" (la "grilla de preparación" de historias por proyecto es la misma idea que la matriz de este tema).
+- Will Larson, [Staff Engineer: Archetypes](https://staffeng.com/guides/staff-archetypes/): útil para entender qué alcance esperan de una historia en roles senior y staff.

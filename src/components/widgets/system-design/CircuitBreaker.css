@@ -1,0 +1,82 @@
+.cb-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  align-items: center;
+}
+.cb-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.cb-track {
+  fill: none;
+  stroke: var(--rule-strong);
+  stroke-width: 5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.cb-track--thin {
+  stroke-width: 3;
+  stroke-dasharray: 6 6;
+}
+.cb-track.is-hot {
+  stroke: var(--line);
+}
+.cb-station {
+  fill: var(--paper);
+  stroke: var(--rule-strong);
+  stroke-width: 3;
+  transition: fill 250ms var(--ease-out), stroke 250ms var(--ease-out);
+}
+.cb-station.is-on {
+  fill: var(--line);
+  stroke: var(--ink);
+}
+.cb-station--open.is-on {
+  fill: var(--bad);
+}
+.cb-station--closed.is-on {
+  fill: var(--ok);
+}
+.cb-name {
+  font-size: 17px;
+  font-weight: 700;
+  fill: var(--ink-3);
+}
+.cb-name.is-on {
+  fill: var(--ink);
+}
+.cb-edge {
+  font-size: 14px;
+  fill: var(--ink-3);
+}
+.cb-edge--small {
+  font-size: 13px;
+}
+.cb-cool-bg {
+  fill: var(--paper-3);
+}
+.cb-cool {
+  fill: var(--bad);
+}
+.cb-cell {
+  fill: var(--paper-3);
+  stroke: var(--rule-strong);
+  stroke-width: 1;
+}
+.cb-cell.is-ok {
+  fill: var(--ok);
+}
+.cb-cell.is-fail {
+  fill: var(--bad);
+}
+.cb-readout {
+  display: grid;
+  gap: var(--s-3);
+}
+.cb-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-3) var(--s-5);
+}

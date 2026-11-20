@@ -1,0 +1,566 @@
+import { ChunkSync } from '../../components/widgets/casos-b/ChunkSync'
+
+"Diseña Dropbox" (o Google Drive, o OneDrive) es una de las preguntas más completas que te pueden tocar. Parece un CRUD de archivos con un bucket detrás, pero esconde tres problemas difíciles a la vez: mover **muchos bytes** de forma eficiente y reanudable, mantener **metadatos consistentes** para cientos de miles de millones de archivos, y lograr que varios dispositivos **converjan** al mismo estado aunque editen sin conexión y al mismo tiempo.
+
+Por eso es un clásico: obliga a separar con claridad el plano de datos (bloques de bytes, inmutables, baratos de replicar) del plano de control (metadatos, versiones, permisos, que necesitan transacciones). Quien lo diseña bien casi siempre llega a la misma idea central: **un archivo no es un blob, es una lista ordenada de bloques identificados por su hash**. De ahí salen la deduplicación, las subidas reanudables, la sincronización incremental y buena parte de la respuesta a los conflictos.
+
+En este tema vamos a recorrer la entrevista completa, con números, y a profundizar en lo que separa una respuesta de nivel medio de una de nivel staff: el *chunking*, el protocolo de sincronización y los conflictos.
+
+<Sketch
+  width={640}
+  height={300}
+  caption="Un archivo no es un blob: es una lista de bloques identificados por su hash. Si editas una parte, cambia un bloque y solo ese viaja."
+  items={[
+    { type: 'text', x: 24, y: 34, text: 'un archivo = lista de bloques por hash', size: 20, tone: 'pencil' },
+    { type: 'cells', x: 120, y: 70, values: ['9f2', '44b', 'c0d'], size: 60, label: 'v1' },
+    { type: 'line', points: [[150, 134], [150, 162]], dashed: true, tone: 'muted' },
+    { type: 'line', points: [[270, 134], [270, 162]], dashed: true, tone: 'muted', with: true },
+    { type: 'cells', x: 120, y: 166, values: ['9f2', '7a1', 'c0d'], size: 60, label: 'v2', states: [null, 'line', null] },
+    { type: 'text', x: 338, y: 96, text: ['editas el medio:', 'cambia un bloque'], size: 19, tone: 'pencil' },
+    { type: 'box', x: 446, y: 150, w: 170, h: 64, label: 'almacén' },
+    { type: 'arrow', from: [210, 232], to: [442, 204], bend: 34, tone: 'line', label: 'subes solo 7a1', labelAt: [340, 268] },
+    { type: 'text', x: 24, y: 292, text: 'dedup, subida reanudable y delta sync salen de aquí', size: 19, tone: 'line' },
+  ]}
+/>
+
+## Requisitos
+
+Empieza siempre acotando. El entrevistador quiere ver que sabes qué dejar afuera.
+
+**Funcionales (lo que sí entra):**
+
+1. Subir un archivo desde cualquier dispositivo (escritorio, web, móvil), incluidos archivos grandes (supongamos hasta 50 GB).
+2. Descargar un archivo o una versión anterior.
+3. Sincronizar automáticamente: si cambio un archivo en el portátil, aparece en el teléfono sin hacer nada.
+4. Compartir una carpeta con otros usuarios con permisos de lectura o edición.
+5. Trabajar sin conexión y sincronizar al reconectar.
+
+**No funcionales:**
+
+- **Durabilidad** extrema: perder un archivo de un usuario es el peor fallo posible. Más importante que la latencia.
+- **Disponibilidad** alta para leer y subir. Ante una partición, preferimos aceptar escrituras y resolver conflictos después antes que bloquear al usuario (AP para el contenido, pero con commits de metadatos serializados por carpeta).
+- **Eficiencia de red**: no volver a subir lo que el servidor ya tiene. En móvil la red es cara y lenta.
+- **Latencia de sincronización** baja: que un cambio llegue a otros dispositivos en segundos, no minutos.
+- **Escala**: cientos de millones de usuarios y exabytes de datos.
+
+**Fuera de alcance (dilo en voz alta):** edición colaborativa en tiempo real dentro de un documento (eso es [Google Docs](/casos/google-docs)), búsqueda de texto completo dentro de los archivos, previsualizaciones y miniaturas, facturación y cuotas, antivirus.
+
+<Callout type="tip" title="Una pregunta que vale la pena hacer">
+
+"¿La sincronización es el foco o solo el almacenamiento?" Si el entrevistador dice "solo subir y bajar archivos", el problema se parece más a un S3 con una capa de metadatos. Si dice "como el cliente de escritorio de Dropbox", el centro de gravedad se mueve al protocolo de sync y a los conflictos. Ajusta tu tiempo en consecuencia.
+
+</Callout>
+
+## Estimaciones
+
+Los números de Dropbox reales son públicos solo a grandes rasgos: en 2020 hablaban de "cientos de miles de millones de archivos, billones de revisiones y exabytes de datos" en "cientos de millones de dispositivos"<Sidenote>Del post de Dropbox sobre la reescritura de su motor de sincronización, *Rewriting the heart of our sync engine* (2020).</Sidenote>. Para la entrevista armamos supuestos redondos y coherentes con eso.
+
+**Supuestos:**
+
+- 500 M usuarios registrados, 100 M activos al día (DAU).
+- Cada DAU crea o modifica 2 archivos al día en promedio.
+- Tamaño medio por archivo modificado: 1 MB (la distribución es muy sesgada: muchísimos documentos chicos y pocos videos enormes).
+- Un usuario tiene en promedio 1.000 archivos y 10 GB guardados.
+
+**Escrituras:**
+
+- 100 M × 2 = 200 M commits de archivo al día.
+- 200 M / 86.400 s ≈ **2.300 commits/s** promedio. Con un pico de 3× ≈ **7.000/s**.
+
+**Ancho de banda de subida (antes de deduplicar):**
+
+- 200 M × 1 MB = 200 TB/día ≈ 2,3 GB/s ≈ **18,5 Gbps** promedio.
+- La descarga es mayor: cada cambio se baja a todos los otros dispositivos del usuario y a los colaboradores de carpetas compartidas. Si cada cambio llega en promedio a 2 dispositivos más, son ~37 Gbps de salida.
+
+**Almacenamiento:**
+
+- 500 M × 10 GB = **5 EB** lógicos. Con *erasure coding* (sobrecosto típico de 1,3× a 1,5× en vez del 3× de la replicación triple) quedan ~7 EB físicos.
+- Crecimiento: 200 TB/día brutos ≈ 73 PB/año. La deduplicación y el delta sync reducen bastante esto, pero no lo cuentes como garantía: cifra el ahorro como incógnita.
+
+**Metadatos:**
+
+- 500 M × 1.000 = 500 mil millones de archivos (coherente con "cientos de miles de millones").
+- Supongamos ~1 KB por archivo entre ruta, ids, versión y lista de hashes de bloques (un archivo de 1 MB tiene un solo bloque de 4 MB; uno de 1 GB tiene 256 bloques × 32 bytes de SHA-256 = 8 KB).
+- 500 mil millones × 1 KB ≈ **500 TB de metadatos**, sin contar el historial de versiones. No cabe en una base de datos: hay que particionar.
+
+**Conexiones de notificación:**
+
+- Si la mitad de los DAU tiene un cliente conectado en el pico con ~2 dispositivos cada uno, son ~100 M conexiones abiertas. A ~100 mil conexiones por servidor, unos **1.000 servidores** solo para mantener esas conexiones vivas.
+
+<Callout type="idea" title="Lo que te dicen estos números">
+
+Tres conclusiones guían todo el diseño: (1) los bytes son enormes pero **inmutables**, así que conviene un almacén de objetos barato y replicado; (2) los metadatos son "pequeños" por archivo pero gigantes en total y necesitan **transacciones**, así que van en una base relacional particionada; (3) las notificaciones son un problema de **conexiones concurrentes**, no de throughput.
+
+</Callout>
+
+## Entidades y API
+
+Entidades principales:
+
+- **Usuario** y **dispositivo** (cada cliente instalado).
+- **Namespace**: la raíz de un árbol de archivos. La carpeta personal de cada usuario es un namespace y cada carpeta compartida es otro namespace que se "monta" dentro del árbol de varios usuarios. Dropbox usa justamente este concepto: los commits se hacen "bajo (namespace, ruta)"<Sidenote>Así lo describe el post *Streaming File Synchronization* de Dropbox (2014).</Sidenote>.
+- **Archivo** y **revisión**: una revisión es una versión inmutable con su lista de bloques.
+- **Bloque**: hasta 4 MB de bytes, identificado por su hash SHA-256.
+- **Blocklist**: la lista ordenada de hashes que define el contenido de una revisión.
+
+La API separa el camino de los bytes del camino de los metadatos. El cliente **nunca** sube bytes a través de los servidores de aplicación: pide URLs firmadas y sube directo al almacén de objetos.
+
+```http title="1. Iniciar una subida: ¿qué bloques te faltan?"
+POST /v1/uploads
+Content-Type: application/json
+
+{
+  "namespace_id": "ns_81723",
+  "path": "/Contratos/arriendo-2026.pdf",
+  "size": 9437184,
+  "blocklist": ["9f2c…a1", "44be…07", "c0d3…9e"]
+}
+
+200 OK
+{
+  "upload_id": "up_5f1e",
+  "missing": ["44be…07"],
+  "urls": { "44be…07": "https://blocks.example.com/44be…07?X-Signature=…&Expires=…" }
+}
+```
+
+```http title="2. Subir solo el bloque faltante (directo al almacén)"
+PUT https://blocks.example.com/44be…07?X-Signature=…&Expires=…
+Content-Length: 4194304
+
+<4 MB de bytes>
+
+200 OK
+```
+
+```http title="3. Confirmar la nueva revisión (commit)"
+POST /v1/commits
+Content-Type: application/json
+Idempotency-Key: 3b9a6c1e-…
+
+{
+  "upload_id": "up_5f1e",
+  "namespace_id": "ns_81723",
+  "path": "/Contratos/arriendo-2026.pdf",
+  "parent_rev": "r_1041",
+  "blocklist": ["9f2c…a1", "44be…07", "c0d3…9e"]
+}
+
+200 OK   { "file_id": "f_9921", "rev": "r_1042", "journal_id": 88123 }
+409 Conflict  { "current_rev": "r_1043" }
+```
+
+```http title="4. Sincronizar: cambios desde mi cursor"
+GET /v1/changes?cursor=ns_81723:88120
+
+200 OK
+{
+  "entries": [
+    { "path": "/Contratos/arriendo-2026.pdf", "rev": "r_1042", "blocklist": ["9f2c…a1","44be…07","c0d3…9e"] },
+    { "path": "/Fotos/viejo.jpg", "deleted": true }
+  ],
+  "cursor": "ns_81723:88123",
+  "has_more": false
+}
+```
+
+```http title="5. Esperar cambios sin hacer polling agresivo"
+GET /v1/changes/longpoll?cursor=ns_81723:88123&timeout=90
+
+200 OK   { "changes": true }
+```
+
+Dos detalles que suman puntos:
+
+- `parent_rev` en el commit es **control de concurrencia optimista**: el servidor solo acepta la nueva revisión si la actual sigue siendo la que el cliente vio. Si no, `409` y el cliente sabe que hay un conflicto.
+- El commit lleva `Idempotency-Key`: si la respuesta se pierde y el cliente reintenta, no se crean dos revisiones.
+
+La API pública de Dropbox expone exactamente este patrón para sincronizar: listar con un cursor (`list_folder` / `list_folder/continue`) y esperar cambios con `list_folder/longpoll`, que bloquea hasta que hay novedades o vence un timeout.
+
+## Modelo de datos
+
+Tres almacenes, cada uno elegido por un motivo distinto.
+
+**1. Metadatos: base relacional particionada por `namespace_id`** (MySQL o Postgres con sharding, al estilo Vitess). ¿Por qué relacional? Porque un commit necesita una transacción: verificar `parent_rev`, insertar la revisión, actualizar la entrada del archivo y añadir una línea al journal, todo o nada. Un *rename* de carpeta también debe ser atómico. ¿Por qué particionar por namespace? Porque casi todas las operaciones (listar, commit, cambios desde un cursor) tocan un solo namespace, así que caen en un solo shard y no hay transacciones distribuidas.
+
+```sql title="Esquema de metadatos (simplificado)"
+-- Un registro por evento, append-only: es la fuente de verdad para sincronizar
+CREATE TABLE journal (
+  namespace_id  BIGINT       NOT NULL,
+  journal_id    BIGINT       NOT NULL,      -- monotónico dentro del namespace
+  file_id       BIGINT       NOT NULL,
+  path          TEXT         NOT NULL,
+  rev           BIGINT       NOT NULL,
+  blocklist     BYTEA,                      -- hashes concatenados (32 bytes c/u)
+  size          BIGINT,
+  is_deleted    BOOLEAN      NOT NULL DEFAULT false,
+  device_id     BIGINT,
+  created_at    TIMESTAMPTZ  NOT NULL,
+  PRIMARY KEY (namespace_id, journal_id)
+);
+
+-- Estado actual de cada archivo (lo que ves al listar una carpeta)
+CREATE TABLE files (
+  namespace_id  BIGINT NOT NULL,
+  file_id       BIGINT NOT NULL,
+  path          TEXT   NOT NULL,
+  current_rev   BIGINT NOT NULL,
+  PRIMARY KEY (namespace_id, file_id),
+  UNIQUE (namespace_id, path)
+);
+
+-- Qué namespaces ve cada usuario y dónde están montados
+CREATE TABLE mounts (
+  user_id       BIGINT NOT NULL,
+  namespace_id  BIGINT NOT NULL,
+  mount_path    TEXT   NOT NULL,
+  role          TEXT   NOT NULL,   -- owner | editor | viewer
+  PRIMARY KEY (user_id, namespace_id)
+);
+```
+
+El cursor de sincronización es simplemente `(namespace_id, journal_id)`: "dame todo lo que pasó en este namespace después de la línea 88120". Como el journal es *append-only* y está ordenado, esa consulta es un rango sobre la clave primaria.
+
+**2. Índice de bloques: `hash → ubicación`**. Una tabla clave-valor enorme (cientos de miles de millones de filas) que dice en qué contenedor físico vive cada bloque y cuántas referencias tiene. Se particiona por el propio hash, que distribuye uniforme. En Magic Pocket, el almacén propio de Dropbox, este índice es un cluster de MySQL particionado detrás de una capa RPC<Sidenote>Del post *Inside the Magic Pocket* (2016), que describe bloques inmutables de hasta 4 MB identificados por SHA-256 y agrupados en contenedores lógicos de 1 GB.</Sidenote>.
+
+**3. Bloques: almacén de objetos** (S3, GCS o uno propio como Magic Pocket). Los bloques son inmutables: una vez escritos no cambian nunca, lo que simplifica la replicación, el caché y la consistencia. Se escriben primero replicados y luego se agrupan y se pasan a *erasure coding* para ahorrar espacio.
+
+<Callout type="warn" title="El error más común">
+
+Guardar el archivo entero como un objeto con la ruta como clave (`s3://bucket/user123/Contratos/arriendo.pdf`). Funciona para una demo, pero pierdes la deduplicación, cada edición vuelve a subir todo, un rename de carpeta implica copiar terabytes, y una subida de 50 GB que se corta al 99 % empieza de cero.
+
+</Callout>
+
+## Diseño de alto nivel
+
+Recorre el flujo principal: el usuario edita un archivo en su portátil y el cambio aparece en su teléfono.
+
+<FlowDiagram
+  caption="Subida por bloques con URLs firmadas, commit transaccional de metadatos y notificación a los otros dispositivos."
+  nodes={[
+    { id: 's3', label: 'Almacén bloques', kind: 'storage', x: 2, y: 0, mx: 1, my: 0, sub: 'S3 / Magic Pocket', desc: 'Bloques inmutables de hasta 4 MB, direccionados por su SHA-256. Replicados y luego con erasure coding.' },
+    { id: 'a', label: 'Cliente A', kind: 'client', x: 0, y: 1, mx: 0, my: 1, sub: 'portátil', desc: 'Vigila el disco, parte los archivos en bloques y calcula sus hashes antes de hablar con el servidor.' },
+    { id: 'gw', label: 'API gateway', kind: 'gateway', x: 2, y: 1, mx: 1, my: 1, sub: 'auth, rate limit', desc: 'Autentica, aplica límites y enruta. No pasa bytes de archivos.' },
+    { id: 'b', label: 'Cliente B', kind: 'mobile', x: 4, y: 1, mx: 2, my: 1, sub: 'teléfono', desc: 'Otro dispositivo del mismo usuario. Mantiene un cursor por namespace.' },
+    { id: 'meta', label: 'Metadatos', kind: 'service', x: 2, y: 2, mx: 1, my: 2, sub: 'commits y journal', desc: 'Valida que los bloques existan, aplica control optimista con parent_rev y escribe el journal en una transacción.' },
+    { id: 'notif', label: 'Notificaciones', kind: 'notify', x: 3, y: 2, mx: 2, my: 2, sub: 'long-poll / WebSocket', desc: 'Mantiene millones de conexiones abiertas y avisa "hay cambios en el namespace X". No envía el contenido.' },
+    { id: 'db', label: 'Metadata DB', kind: 'db', x: 1, y: 3, mx: 0, my: 3, sub: 'sharded por namespace', desc: 'Journal append-only, estado actual de archivos e índice de bloques.' },
+    { id: 'q', label: 'Change log', kind: 'stream', x: 3, y: 3, mx: 2, my: 3, sub: 'Kafka', desc: 'Cada commit publica un evento (namespace, journal_id) para notificaciones, búsqueda, auditoría.' },
+  ]}
+  edges={[
+    { from: 'a', to: 's3', label: 'PUT bloque', route: 'straight' },
+    { from: 'a', to: 'gw', label: 'commit' },
+    { from: 'gw', to: 'meta' },
+    { from: 'meta', to: 'db' },
+    { from: 'meta', to: 'q' },
+    { from: 'q', to: 'notif' },
+    { from: 'notif', to: 'b', label: 'hay cambios', dashed: true },
+    { from: 'b', to: 'gw', label: 'GET /changes' },
+    { from: 'b', to: 's3', label: 'GET bloque', route: 'straight' },
+  ]}
+  steps={[
+    { title: 'El cliente detecta el cambio', body: 'El watcher del sistema de archivos avisa que cambió arriendo-2026.pdf. El cliente lo parte en bloques de hasta 4 MB y calcula el SHA-256 de cada uno. Todo esto pasa localmente, antes de tocar la red.', active: ['a'] },
+    { title: 'Pregunta qué bloques faltan', body: 'Envía la blocklist completa. El servicio de metadatos consulta el índice de bloques y responde solo con los hashes que no existen, junto con URLs firmadas para subirlos.', active: ['a', 'gw', 'meta', 'db'], flow: ['a-gw', 'gw-meta', 'meta-db'] },
+    { title: 'Sube solo lo nuevo, directo al almacén', body: 'Con las URLs firmadas, el cliente hace PUT de cada bloque faltante directamente al almacén de objetos. Los servidores de aplicación no tocan los bytes. Si se corta la red, reintenta solo el bloque que falló.', active: ['a', 's3'], flow: ['a-s3'] },
+    { title: 'Commit transaccional', body: 'El cliente confirma la revisión con parent_rev. En una transacción del shard del namespace: se verifica que todos los bloques existan, que parent_rev siga siendo la actual, se inserta la revisión y una línea nueva en el journal.', active: ['a', 'gw', 'meta', 'db'], flow: ['a-gw', 'gw-meta', 'meta-db'] },
+    { title: 'Se publica el evento', body: 'Tras el commit se publica (namespace, journal_id) en el change log. Lo consumen notificaciones y otros sistemas (búsqueda, auditoría). Para no perder eventos si el proceso muere entre el commit y la publicación, se usa un outbox o se lee el binlog.', active: ['meta', 'q', 'notif'], flow: ['meta-q', 'q-notif'] },
+    { title: 'Se despierta al otro dispositivo', body: 'El servidor de notificaciones tiene abierta la conexión del teléfono suscrito a ese namespace y le responde "hay cambios". El mensaje no lleva el contenido: solo es una señal.', active: ['notif', 'b'], flow: ['notif-b'] },
+    { title: 'El otro dispositivo se pone al día', body: 'El teléfono pide los cambios desde su cursor, recibe la nueva blocklist, compara con los bloques que ya tiene en caché y descarga solo los que le faltan.', active: ['b', 'gw', 'meta', 's3'], flow: ['b-gw', 'gw-meta', 'b-s3'] },
+  ]}
+/>
+
+Observa la separación: **los bytes van por un camino** (cliente ↔ almacén de objetos, posiblemente vía CDN para descargas populares) y **el control va por otro** (cliente ↔ metadatos). Esto permite escalar cada uno de forma independiente: el almacén de objetos escala con disco y red; los metadatos escalan con shards.
+
+## Profundizaciones
+
+### 1. Chunking y deduplicación
+
+Partir los archivos en bloques resuelve cuatro cosas de una vez:
+
+- **Subidas reanudables**: si se corta la conexión, solo repites el bloque que estaba en vuelo.
+- **Paralelismo**: puedes subir 4 u 8 bloques a la vez para saturar el ancho de banda.
+- **Delta sync**: si editas una parte del archivo, solo cambian los bloques que tocaste.
+- **Deduplicación**: si dos usuarios suben el mismo instalador de 2 GB, los bloques se guardan una sola vez. Basta con que el hash coincida.
+
+Dropbox usa bloques alineados de hasta 4 MiB<Sidenote>Lo confirman tanto *Inside the Magic Pocket* como el post sobre *Broccoli*, su compresor basado en Brotli, donde además reportan que comprimir los bloques antes de subirlos redujo cerca de un 30 % los bytes enviados.</Sidenote>. ¿Por qué 4 MB y no 64 KB? Es un compromiso: bloques chicos deduplican mejor y reenvían menos al editar, pero multiplican el tamaño del índice (un archivo de 50 GB con bloques de 64 KB son 800 mil entradas) y la cantidad de peticiones. Bloques grandes hacen lo contrario.
+
+Pero el tamaño fijo tiene un problema serio: **el desplazamiento**. Si insertas un byte al principio de un archivo, todos los cortes posteriores se corren un byte, todos los hashes cambian y la deduplicación se pierde. Esto pasa con cualquier formato donde se inserta contenido en el medio: logs, CSV, código, documentos de texto plano.
+
+La solución clásica es el **chunking definido por contenido** (*content-defined chunking*, CDC). En vez de cortar cada N bytes, deslizas una ventana pequeña (por ejemplo, 48 bytes) por el archivo y calculas un hash rodante (*rolling hash*, como la huella de Rabin) en cada posición. Cortas cuando ese hash cumple una condición, por ejemplo "los 13 bits bajos son cero". Como la condición solo depende de los bytes de la ventana, después de una inserción los cortes vuelven a caer en los mismos lugares. Así lo hizo LBFS en 2001, con una ventana de 48 bytes y la condición de los 13 bits bajos en cero, lo que da bloques de ~8 KB en promedio<Sidenote>*A Low-bandwidth Network File System* (Muthitacharoen, Chen y Mazières, SOSP 2001). Algoritmos más modernos como FastCDC reportan ser unas 10× más rápidos que el CDC basado en Rabin con una tasa de deduplicación casi igual.</Sidenote>. Se suele imponer un mínimo y un máximo de tamaño para evitar bloques diminutos o gigantes.
+
+En código, un chunker al estilo de FastCDC (un *gear hash*: cada byte suma un número aleatorio fijo y empuja a los anteriores hacia afuera) cabe en pocas líneas. Con 2 MB aleatorios y un byte insertado al inicio, de 199 bloques se conservan 198: solo cambia el primero.
+
+```java title="Java"
+final class ChunkerPorContenido {
+    private static final int MIN = 2 * 1024;
+    private static final int MAX = 64 * 1024;
+    private static final long MASCARA = (1L << 13) - 1; // corta si los 13 bits bajos son 0: ~8 KB en promedio
+    private static final long[] GEAR = new long[256];   // un número aleatorio fijo por valor de byte
+
+    static {
+        var rnd = new SplittableRandom(42);
+        for (int i = 0; i < GEAR.length; i++) GEAR[i] = rnd.nextLong();
+    }
+
+    private ChunkerPorContenido() {}
+
+    /** Offsets (exclusivos) donde termina cada bloque. */
+    static List<Integer> cortes(byte[] datos) {
+        List<Integer> cortes = new ArrayList<>();
+        long h = 0;
+        int inicio = 0;
+        for (int i = 0; i < datos.length; i++) {
+            // hash rodante: cada byte nuevo desplaza a los anteriores, que salen por la izquierda
+            h = (h << 1) + GEAR[datos[i] & 0xFF];
+            int largo = i - inicio + 1;
+            if ((largo >= MIN && (h & MASCARA) == 0) || largo >= MAX) {
+                cortes.add(i + 1);
+                inicio = i + 1;
+                h = 0;
+            }
+        }
+        if (inicio < datos.length) cortes.add(datos.length);
+        return cortes;
+    }
+}
+```
+
+<Callout type="tip" title="En Java">
+
+`byte` es con signo: `datos[i]` va de -128 a 127, así que para indexar una tabla de 256 posiciones hace falta `datos[i] & 0xFF`. Sin la máscara, el primer byte mayor que 127 lanza `ArrayIndexOutOfBoundsException`. El desplazamiento `h << 1` sobre un `long` descarta los bits viejos por la izquierda: eso es lo que hace que el hash dependa solo de los últimos 64 bytes.
+
+</Callout>
+
+Pruébalo: inserta texto al inicio con bloques fijos y luego cambia a "Por contenido".
+
+<ChunkSync />
+
+<Quiz
+  question="Un usuario agrega una línea al principio de un log de 400 MB y lo guarda. Con bloques fijos de 4 MB, ¿cuánto hay que volver a subir aproximadamente?"
+  options={[
+    { text: 'Solo el primer bloque, 4 MB.', why: 'Eso pasaría si la edición no cambiara la longitud (sobrescribir bytes). Al insertar, todos los cortes posteriores se desplazan.' },
+    { text: 'Casi todo: ~400 MB, porque todos los bloques posteriores cambian de contenido y de hash.', correct: true, why: 'Correcto. Con tamaño fijo, una inserción desplaza cada frontera. Por eso existe el chunking definido por contenido, donde los cortes se resincronizan tras la edición.' },
+    { text: 'Nada, porque la deduplicación detecta que el contenido es casi igual.', why: 'La deduplicación por hash es exacta: un solo byte distinto en un bloque produce un hash completamente distinto. No detecta "casi iguales".' },
+  ]}
+/>
+
+**¿Dónde se hace el chunking?** En el cliente. Así el cliente puede preguntar "¿tienes estos hashes?" antes de mandar un solo byte. El costo es CPU en el dispositivo (hashear 1 GB con SHA-256 toma del orden de segundos en un portátil moderno), que se paga una vez y en segundo plano.
+
+**¿Deduplicación entre usuarios o solo dentro de cada cuenta?** Entre usuarios ahorra más, pero abre un canal lateral: si puedo preguntar "¿existe el bloque con hash X?" y la respuesta llega instantánea, puedo averiguar si alguien más subió un archivo específico. Mitigaciones: deduplicar solo dentro de la cuenta o del equipo, o exigir que el cliente demuestre que tiene el contenido (*proof of ownership*) antes de saltarse la subida. Menciónalo: es un trade-off de privacidad que pocos candidatos ven.
+
+**Recolección de basura.** Si un bloque deja de estar referenciado por cualquier revisión viva (por ejemplo, tras borrar archivos y vencer la retención de versiones), hay que liberarlo. Contar referencias en línea es frágil (un error de conteo borra datos de alguien). Lo habitual es un proceso asíncrono tipo *mark and sweep*: recorrer las blocklists vivas, marcar y borrar lo no marcado con un período de gracia. Como los bloques son inmutables y se agrupan en contenedores, borrar deja huecos que luego hay que compactar.
+
+### 2. Subidas grandes, reanudables y directas
+
+Para un archivo de 50 GB, la secuencia completa es:
+
+<Steps>
+<Step title="Hashear localmente">
+
+El cliente parte el archivo en ~12.800 bloques de 4 MB y calcula sus hashes. Guarda el progreso en una base local (SQLite) para no repetirlo si se reinicia.
+
+</Step>
+<Step title="Negociar">
+
+`POST /v1/uploads` con la blocklist. El servidor devuelve los faltantes y URLs firmadas con expiración corta (por ejemplo, 15 minutos). Para listas enormes se pagina.
+
+</Step>
+<Step title="Subir en paralelo">
+
+4 a 8 PUT concurrentes directo al almacén. Cada bloque se verifica en destino: el almacén recalcula el hash y rechaza el bloque si no coincide con su nombre. Así un bloque corrupto nunca queda registrado.
+
+</Step>
+<Step title="Reanudar si falla">
+
+Si la red cae, el cliente vuelve a preguntar qué falta. Como los bloques son direccionados por contenido, la respuesta es exacta y no hay estado de sesión que perder.
+
+</Step>
+<Step title="Commit">
+
+Cuando no falta nada, el commit hace visible la nueva revisión de forma atómica. Antes de eso, otros dispositivos no ven un archivo a medias.
+
+</Step>
+</Steps>
+
+¿Por qué URLs firmadas y no subir a través del API? Porque 18 Gbps de bytes atravesando tus servidores de aplicación es caro y no aporta nada: los servidores no necesitan ver el contenido. Con una URL firmada, el almacén valida la firma y la expiración, y tus servidores solo procesan metadatos. Es el mismo patrón que la subida multipart de S3, que además permite subir partes en paralelo y reintentar cada parte por separado.
+
+<Details summary="Profundizar: streaming sync">
+
+Originalmente, un dispositivo receptor no podía empezar a descargar hasta que el emisor terminaba de subir y hacía commit. Dropbox observó que esa dependencia no era necesaria: el receptor puede ir bajando bloques mientras el emisor todavía sube los últimos. A esa optimización la llamaron *Streaming Sync* y reportaron mejoras de latencia de sincronización de hasta 2× para archivos grandes. Es una buena idea para mencionar si el entrevistador pregunta "¿cómo reduces el tiempo hasta que el archivo aparece en el otro dispositivo?".
+
+</Details>
+
+### 3. El protocolo de sincronización
+
+Aquí está el corazón del problema. El objetivo: que cada dispositivo converja al estado del servidor, rápido y sin perder cambios locales.
+
+**El servidor: un journal por namespace.** Cada commit agrega una línea con un `journal_id` creciente. Un dispositivo guarda, por cada namespace que ve, el último `journal_id` que aplicó (su **cursor**). Ponerse al día es pedir `journal_id > cursor`. Es la misma idea que un log de replicación: el journal es la fuente de verdad y todo lo demás (lista de archivos, índices de búsqueda) es una vista derivada.
+
+**¿Cómo se entera el dispositivo de que hay algo nuevo?** Tres opciones:
+
+<Compare>
+<Option title="Polling">
+
+Cada dispositivo pregunta cada N segundos. Simple, pero con 100 M dispositivos y N = 30 s son 3,3 M peticiones/s casi siempre vacías. Y la latencia promedio es N/2.
+
+</Option>
+<Option title="Long polling" verdict="Buen default">
+
+El cliente abre una petición que el servidor retiene hasta que hay cambios o vence un timeout (por ejemplo, 90 s). Funciona a través de proxies y firewalls corporativos, es HTTP plano y fácil de balancear. Es lo que expone la API pública de Dropbox.
+
+</Option>
+<Option title="WebSocket">
+
+Una conexión bidireccional persistente. Latencia mínima y menos overhead por mensaje, pero más estado en el servidor y más problemas con proxies. Útil si además quieres presencia o eventos de UI en tiempo real.
+
+</Option>
+</Compare>
+
+En cualquier caso, **la notificación es solo una señal** ("hay cambios en ns_81723"), nunca el cambio en sí. El cliente siempre va a buscar los cambios con su cursor. Esto hace al sistema robusto: si se pierde una notificación, el siguiente long-poll o un poll de respaldo cada pocos minutos recupera el estado. La notificación optimiza la latencia, el cursor garantiza la corrección.
+
+**El cliente: tres árboles.** Del lado del dispositivo, el problema es igual de difícil. Nucleus, el motor de sincronización que Dropbox reescribió en Rust y lanzó en 2020, modela el estado con tres árboles<Sidenote>Descrito en el post *Testing sync at Dropbox* (2020). Sync Engine Classic, el motor anterior, no tenía identificadores estables de archivo que sobrevivieran a un movimiento, lo que complicaba el soporte de carpetas compartidas.</Sidenote>:
+
+- **Remote Tree**: el último estado conocido del servidor.
+- **Local Tree**: el último estado observado en el disco.
+- **Synced Tree**: el último estado en que ambos coincidían. Es la **base de la mezcla** (*merge base*), lo mismo que el ancestro común en un `git merge`.
+
+Con la base puedes saber la **dirección** de cada cambio. Si un archivo existe en Local pero no en Remote, ¿lo creé yo (hay que subirlo) o lo borró otro dispositivo (hay que borrarlo localmente)? Sin la base, es imposible distinguirlo. Con ella: si estaba en Synced, alguien lo borró en remoto; si no estaba, lo creé yo. Un planificador compara los tres árboles y genera operaciones para que converjan.
+
+<Quiz
+  question="Un servidor de notificaciones se reinicia y pierde 30 segundos de avisos. ¿Qué pasa con los dispositivos que debían enterarse de cambios en ese lapso?"
+  options={[
+    { text: 'Pierden esos cambios hasta que el usuario vuelva a editar el archivo.', why: 'Eso ocurriría si la notificación llevara el cambio y fuera la única fuente. En el diseño propuesto, el cambio vive en el journal y el cursor lo recupera.' },
+    { text: 'Los reciben con algo de retraso: al reconectar o en el siguiente long-poll piden cambios desde su cursor y el journal se los entrega.', correct: true, why: 'Correcto. La notificación solo reduce la latencia. La corrección la garantiza el par journal + cursor, que es durable e idempotente.' },
+    { text: 'Hay que reenviar las notificaciones desde Kafka, si no se pierden.', why: 'Reprocesar el log ayuda, pero no es necesario para la corrección: el cliente se pondrá al día con su cursor de todos modos.' },
+  ]}
+/>
+
+### 4. Conflictos
+
+Dos dispositivos editan el mismo archivo sin conexión, o casi al mismo tiempo. Ambos intentan hacer commit con `parent_rev = r_1041`. El shard del namespace serializa los commits: el primero gana y crea `r_1042`; el segundo recibe `409 Conflict`.
+
+¿Y ahora? Para archivos binarios arbitrarios (un PDF, un Photoshop) **no hay mezcla automática posible**: el servidor no entiende el formato. La solución de Dropbox es pragmática y honesta: el perdedor guarda su versión como un archivo aparte, una "copia en conflicto" (*conflicted copy*) con el nombre del dispositivo y la fecha, y deja que el humano decida. Nadie pierde datos.
+
+<CodeTabs>
+
+```java title="Java"
+void commitFile(LocalFile local) {
+    CommitResult res = api.commit(new CommitRequest(
+            local.path(),
+            local.syncedRev(), // la revisión que vimos al sincronizar
+            local.blocklist()));
+    if (res.status() == 409) {
+        // Otro dispositivo ganó. No sobrescribimos su trabajo:
+        // guardamos el nuestro como copia y bajamos la versión ganadora.
+        String copyPath = conflictedCopyName(local.path(), device.name(), Instant.now());
+        api.commit(new CommitRequest(copyPath, null, local.blocklist()));
+        downloadRevision(local.path(), res.currentRev());
+    }
+}
+```
+
+```ts title="TypeScript"
+async function commitFile(local: LocalFile): Promise<void> {
+  const res = await api.commit({
+    path: local.path,
+    parentRev: local.syncedRev, // la revisión que vimos al sincronizar
+    blocklist: local.blocklist,
+  })
+  if (res.status === 409) {
+    // Otro dispositivo ganó. No sobrescribimos su trabajo:
+    // guardamos el nuestro como copia y bajamos la versión ganadora.
+    const copyPath = conflictedCopyName(local.path, device.name, new Date())
+    await api.commit({ path: copyPath, parentRev: null, blocklist: local.blocklist })
+    await downloadRevision(local.path, res.body.currentRev)
+  }
+}
+```
+
+</CodeTabs>
+
+Fíjate en un detalle elegante: la copia en conflicto **no vuelve a subir bytes**. Sus bloques ya están en el almacén; el segundo commit solo apunta la misma blocklist a otra ruta.
+
+Hay conflictos más sutiles que el entrevistador senior puede sacar:
+
+- **Movimientos cruzados**: en el dispositivo A muevo la carpeta `Archivo` dentro de `Enero`, y en B muevo `Enero` dentro de `Archivo`. Aplicar ambos crea un ciclo. El servidor debe validar que un movimiento no cree ciclos y rechazar el segundo; el cliente recibe el conflicto y reconcilia. Dropbox usa un ejemplo muy parecido para explicar por qué reescribió su motor.
+- **Editar vs. borrar**: A borra un archivo y B lo edita. La opción segura es que la edición gane (resucitar el archivo), porque perder trabajo es peor que reaparecer un archivo borrado.
+- **Rutas que difieren en mayúsculas**: `Informe.pdf` e `informe.pdf` conviven en Linux pero no en macOS ni Windows por defecto. El servidor necesita una regla de normalización.
+
+<Callout type="note" title="¿Y si el archivo es texto?">
+
+Para documentos donde sí entiendes el formato, puedes mezclar en vez de duplicar: eso es OT o CRDT y lo vemos en [Google Docs](/casos/google-docs). Dropbox Paper o Google Docs lo hacen para su propio formato. Para "cualquier archivo del disco", la copia en conflicto es la única opción que no pierde datos.
+
+</Callout>
+
+## Cuellos de botella y trade-offs
+
+**Metadatos calientes.** Una carpeta compartida por una empresa de 10 mil personas es un único namespace, y por lo tanto un único shard que serializa todos sus commits. Opciones: limitar el tamaño de un namespace, partir los equipos grandes en varios namespaces, o permitir commits concurrentes en archivos distintos con bloqueo por archivo en vez de por namespace (más complejo, pierdes el orden total del journal).
+
+**Fan-out de notificaciones.** Un commit en esa carpeta compartida genera 10 mil notificaciones y, peor, 10 mil dispositivos pidiendo el mismo cambio y los mismos bloques casi al mismo tiempo. Mitigaciones: agrupar notificaciones (*debounce* de 1–2 s por namespace), añadir jitter aleatorio antes de que los clientes pidan cambios, y servir los bloques populares desde CDN.
+
+**Índice de bloques.** Cada subida consulta cientos de hashes. Un filtro de Bloom en memoria delante del índice responde "seguro que no existe" sin tocar la base para los bloques nuevos (que son la mayoría en las subidas de contenido original).
+
+**Consistencia entre metadatos y bloques.** El commit verifica que los bloques existan, pero ¿qué pasa si un bloque se subió y el commit nunca llegó? Queda huérfano: lo recoge el GC tras un período de gracia (por ejemplo, 24 h). El orden inverso (commit antes de que el bloque sea durable) es inaceptable: tendrías metadatos apuntando a bytes inexistentes.
+
+**Durabilidad vs. costo.** Replicación triple es simple y rápida de reconstruir; *erasure coding* (por ejemplo, 6 fragmentos de datos + 3 de paridad) cuesta 1,5× en vez de 3×, pero reconstruir un disco perdido requiere leer de varios nodos. Lo usual: replicar al escribir (rápido, en al menos dos zonas) y pasar a erasure coding en segundo plano cuando los datos "se enfrían".
+
+<ProsCons
+  pros={[
+    'Bloques inmutables direccionados por hash: dedup, reintentos y caché triviales.',
+    'Metadatos en shards por namespace: transacciones locales, sin 2PC.',
+    'Journal + cursor: sincronización correcta aunque se pierdan notificaciones.',
+    'Bytes fuera del camino de los servidores de aplicación.',
+  ]}
+  cons={[
+    'Namespaces gigantes se vuelven un shard caliente.',
+    'La deduplicación entre usuarios filtra información si no se protege.',
+    'GC de bloques es delicado: un error borra datos de usuarios.',
+    'Copias en conflicto molestan al usuario: es correcto, pero no bonito.',
+  ]}
+/>
+
+## Qué espera el entrevistador
+
+<Callout type="interview" title="Lo que se evalúa según el nivel">
+
+**Mid-level.** Separa metadatos de contenido, usa un almacén de objetos para los bytes y una base de datos para los metadatos, y propone partir archivos en bloques para subidas reanudables. Sabe por qué subir directo con URLs firmadas es mejor que pasar los bytes por el API. Llega a un mecanismo de notificación razonable (long-poll o WebSocket).
+
+**Senior.** Todo lo anterior, más: blocklist con hashes y deduplicación, el problema del desplazamiento con bloques fijos y el chunking por contenido como solución, el journal con cursor como fuente de verdad para sincronizar, control optimista con `parent_rev` y copias en conflicto. Elige la clave de partición (namespace) y justifica por qué evita transacciones distribuidas. Hace estimaciones que guían decisiones (500 TB de metadatos implica sharding).
+
+**Staff.** Discute el modelo de tres árboles del cliente y por qué la base de mezcla es necesaria para inferir la dirección de un cambio. Anticipa los namespaces calientes y el fan-out en carpetas compartidas grandes. Menciona el canal lateral de la deduplicación entre usuarios, la recolección de basura segura, el orden "bloques durables antes del commit", erasure coding vs. replicación y cómo probar un motor de sync (simulación determinista con millones de escenarios aleatorios, como hizo Dropbox con Nucleus).
+
+</Callout>
+
+<Quiz
+  question="¿Por qué particionar los metadatos por namespace_id y no por user_id?"
+  options={[
+    { text: 'Porque hay más namespaces que usuarios y así se reparten mejor.', why: 'La cantidad no es el argumento principal. Lo importante es qué operaciones caen en un solo shard.' },
+    { text: 'Porque una carpeta compartida es un namespace visto por muchos usuarios: si particionas por usuario, cada commit en ella tendría que escribirse en los shards de todos sus miembros.', correct: true, why: 'Correcto. Con namespace como clave, un commit en una carpeta compartida es una transacción en un único shard, y el journal de esa carpeta tiene un orden total que todos los miembros consumen con su cursor.' },
+    { text: 'Porque user_id no es un buen hash y genera hotspots.', why: 'Cualquier id se puede hashear uniformemente. El problema de user_id es semántico: los datos compartidos no pertenecen a un solo usuario.' },
+  ]}
+/>
+
+<Takeaways>
+
+- Un archivo es una **lista ordenada de bloques** identificados por su hash; de ahí salen la deduplicación, las subidas reanudables y el delta sync.
+- **Separa planos**: los bytes van directo cliente ↔ almacén de objetos con URLs firmadas; los metadatos van por un servicio con transacciones.
+- Con bloques de tamaño fijo, una inserción **desplaza todos los cortes**; el chunking definido por contenido (hash rodante) los resincroniza.
+- Particiona los metadatos por **namespace**: los commits de una carpeta, incluida una compartida, caen en un solo shard.
+- **Journal + cursor** garantizan la corrección; las notificaciones (long-poll o WebSocket) solo bajan la latencia.
+- Conflictos en binarios: control optimista con `parent_rev` y **copia en conflicto**, sin perder datos ni volver a subir bytes.
+- Lo difícil está en el borde: carpetas compartidas gigantes, GC de bloques y privacidad de la deduplicación.
+
+</Takeaways>
+
+## Fuentes y lecturas
+
+- Dropbox Tech, [Rewriting the heart of our sync engine](https://dropbox.tech/infrastructure/rewriting-the-heart-of-our-sync-engine) (2020): por qué reescribieron el motor de sync (Nucleus) y los problemas del modelo anterior.
+- Dropbox Tech, [Testing sync at Dropbox](https://dropbox.tech/infrastructure/-testing-our-new-sync-engine) (2020): el modelo de tres árboles (Remote, Local, Synced) y las pruebas por simulación aleatoria.
+- Dropbox Tech, [Streaming File Synchronization](https://dropbox.tech/infrastructure/streaming-file-synchronization) (2014): blocklists de SHA-256, el commit por (namespace, ruta) y Streaming Sync.
+- Dropbox Tech, [Inside the Magic Pocket](https://dropbox.tech/infrastructure/inside-the-magic-pocket) (2016): el almacén de bloques inmutables de Dropbox, el índice de bloques y la replicación entre zonas.
+- Dropbox Tech, [Broccoli: Syncing faster by syncing less](https://dropbox.tech/infrastructure/-broccoli--syncing-faster-by-syncing-less): compresión de bloques antes de subir.
+- Muthitacharoen, Chen y Mazières, [A Low-bandwidth Network File System](https://www.scs.stanford.edu/nyu/02fa/sched/lbfs.pdf) (SOSP 2001): el origen del chunking definido por contenido con huellas de Rabin.
+- Xia et al., [FastCDC: A Fast and Efficient Content-Defined Chunking Approach for Data Deduplication](https://www.usenix.org/conference/atc16/technical-sessions/presentation/xia) (USENIX ATC 2016).
+- AWS, [Uploading objects with presigned URLs](https://docs.aws.amazon.com/AmazonS3/latest/userguide/PresignedUrlUploadObject.html): el patrón de subida directa al almacén.
+- Hello Interview, [Design Dropbox](https://www.hellointerview.com/learn/system-design/problem-breakdowns/dropbox): otra resolución completa del problema en formato entrevista.
+- En esta guía: [IDs, búsqueda, geo y blobs](/system-design/piezas-especiales), [Replicación y sharding](/system-design/replicacion-y-sharding) y [APIs y tiempo real](/system-design/apis).

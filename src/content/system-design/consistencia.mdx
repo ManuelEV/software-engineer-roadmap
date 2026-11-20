@@ -1,0 +1,235 @@
+import { QuorumCalculator } from '../../components/widgets/system-design/QuorumCalculator'
+import { RaftElection } from '../../components/widgets/system-design/RaftElection'
+
+"Consistencia" es una de las palabras más sobrecargadas de la ingeniería de software. En ACID, la C significa que la base respeta tus invariantes (un saldo nunca negativo). En replicación, significa qué tan parecidas son las copias entre sí y qué puede observar un cliente. En el teorema CAP, significa algo muy preciso: **linealizabilidad**. Cuando alguien en una entrevista dice "aquí necesito consistencia fuerte", el entrevistador senior va a preguntar: ¿cuál, para qué operación y a qué costo?
+
+Este tema te da el vocabulario para responder bien: el espectro de modelos de consistencia, CAP explicado sin los mitos de siempre, PACELC (el trade-off que pagas aunque no haya fallas), quórums, consenso con Raft y el detalle que distingue a quien entiende locks distribuidos de quien no: los *fencing tokens*.
+
+## Un espectro, no un interruptor
+
+Un **modelo de consistencia** es un contrato: qué resultados puede devolver el sistema ante operaciones concurrentes. Los modelos fuertes se parecen a "una sola copia de los datos"; los débiles permiten ver estados viejos o en distinto orden. Cuanto más fuerte el modelo, más coordinación necesita, y la coordinación cuesta latencia y disponibilidad.
+
+### Linealizabilidad
+
+Un sistema es **linealizable** si se comporta como si hubiera una sola copia de los datos y cada operación ocurriera atómicamente en algún instante entre que empieza y termina. La consecuencia práctica es la **recencia**: apenas una escritura termina (o apenas alguien lee el valor nuevo), todas las lecturas que empiecen después deben ver ese valor o uno más nuevo.
+
+Ejemplo de violación: Ana mira el stock de unas zapatillas y ve "agotado". Le avisa a Beto, que recarga un segundo después y ve "quedan 2", porque su lectura fue a una réplica atrasada. Cada réplica por separado no hace nada malo; el problema es que el sistema completo no se comporta como una sola copia.
+
+Necesitas linealizabilidad cuando una decisión depende de leer el último valor: elegir un líder, adquirir un lock, garantizar unicidad (un nombre de usuario, un asiento) o descontar inventario sin vender de más.
+
+### Más débiles, más baratos
+
+- **Consistencia causal**: si una operación depende de otra (una respuesta depende de su pregunta), todos las ven en ese orden. Operaciones concurrentes, sin relación, pueden verse en órdenes distintos. Es el modelo más fuerte que puede seguir funcionando durante una partición de red, siempre que cada cliente se quede pegado a las mismas réplicas.
+- **Garantías de sesión**: *read-your-writes*, lecturas monótonas, prefijo consistente. Prometen algo solo dentro de la sesión de un usuario. Las vimos con un simulador en *Replicación y sharding*.
+- **Consistencia eventual**: si dejan de llegar escrituras, todas las réplicas terminan convergiendo. No dice nada de cuándo ni de qué ves mientras tanto. Es muy débil, pero suficiente para contadores de likes, feeds y catálogos.
+
+| Modelo | Qué garantiza | Costo | Úsalo para |
+| --- | --- | --- | --- |
+| Linealizable | Se comporta como una sola copia; recencia | Coordinación con mayoría en cada operación; no disponible en la minoría durante una partición | Locks, elección de líder, unicidad, saldos |
+| Causal | Respeta causa → efecto | Rastrear dependencias (relojes vectoriales, versiones) | Comentarios y respuestas, chats |
+| Sesión (RYW, monótonas) | Coherencia para cada usuario | Enrutar o rastrear posiciones del log | Perfiles, configuraciones del usuario |
+| Eventual | Convergencia algún día | Mínimo | Contadores, feeds, analítica, DNS |
+
+<Callout type="note" title="Serializable no es lo mismo que linealizable">
+
+**Serializabilidad** es una garantía de aislamiento de *transacciones*: el resultado equivale a ejecutarlas una tras otra en *algún* orden, que no tiene por qué respetar el tiempo real. **Linealizabilidad** es una garantía de recencia sobre operaciones individuales. Un sistema que da ambas es **estrictamente serializable**: Spanner lo logra con relojes de alta precisión (TrueTime) y lo llama *consistencia externa*. Los niveles de aislamiento y sus anomalías están en *Bases de datos*.
+
+</Callout>
+
+<Quiz
+  question="¿Cuál de estos requisitos es el que realmente necesita linealizabilidad?"
+  options={[
+    { text: 'Que el contador de vistas de un video sea exacto al segundo.', why: 'Un contador de vistas tolera retraso y aproximación. Se resuelve con agregación eventual; pagar coordinación por cada vista sería absurdo.' },
+    { text: 'Que dos usuarios no puedan registrar el mismo nombre de usuario al mismo tiempo.', correct: true, why: 'La unicidad requiere que el segundo intento vea el primero sin importar a qué réplica llegue. Es una operación de comparar-y-escribir sobre el último valor: necesitas linealizabilidad (o una restricción única en un líder).' },
+    { text: 'Que un usuario vea su propio comentario después de publicarlo.', why: 'Eso es read-your-writes, una garantía de sesión mucho más barata: solo aplica al autor.' },
+    { text: 'Que las respuestas aparezcan después de sus preguntas.', why: 'Eso es consistencia causal (o prefijo consistente). No necesita la recencia global de la linealizabilidad.' },
+  ]}
+/>
+
+## CAP, bien explicado
+
+El teorema CAP (conjetura de Eric Brewer en 2000, demostrada por Gilbert y Lynch en 2002) suele enseñarse como "elige 2 de 3". Esa frase confunde más de lo que ayuda. La versión precisa:
+
+- **C** es linealizabilidad. No "consistencia" en general.
+- **A** significa que *toda* petición que llega a un nodo que no falló recibe una respuesta que no es error. Es una definición mucho más estricta que "alta disponibilidad".
+- **P** es tolerar que la red pierda mensajes entre nodos arbitrariamente.
+
+En un sistema distribuido, las particiones de red **no son opcionales**: cables, switches, configuraciones, pausas largas de GC. Van a ocurrir. Entonces el teorema dice: **mientras hay una partición**, tienes que elegir entre responder (y arriesgar datos viejos o divergentes) o rechazar (y mantener la linealizabilidad). Cuando no hay partición, puedes tener ambas cosas.
+
+<FlowDiagram
+  caption="Una partición entre dos regiones obliga a elegir, para cada operación, entre consistencia y disponibilidad."
+  nodes={[
+    { id: 'ua', label: 'Usuarios A', kind: 'users', x: 0, y: 0, mx: 0, my: 0 },
+    { id: 'A', label: 'Réplica A', kind: 'db', x: 1.3, y: 0, sub: 'us-east', mx: 0, my: 1 },
+    { id: 'B', label: 'Réplica B', kind: 'db', x: 2.7, y: 0, sub: 'eu-west', mx: 0, my: 2.2 },
+    { id: 'ub', label: 'Usuarios B', kind: 'users', x: 4, y: 0, mx: 0, my: 3.2 },
+  ]}
+  edges={[
+    { from: 'ua', to: 'A', label: 'escribe' },
+    { from: 'A', to: 'B', label: 'replicación', bidir: true },
+    { from: 'ub', to: 'B', label: 'lee/escribe' },
+  ]}
+  steps={[
+    { title: 'Sin partición', body: 'Una escritura en A se replica a B. Con coordinación (por ejemplo, confirmar en ambas o en una mayoría) el sistema es linealizable y está disponible.', active: ['ua', 'A', 'B'], flow: ['ua-A', 'A-B'] },
+    { title: 'Se corta la red', body: 'A y B siguen vivas pero no pueden hablarse. B no sabe si A recibió escrituras nuevas. Ahora tiene que decidir qué hacer con cada petición.', active: ['A', 'B'] },
+    { title: 'Opción CP: rechazar', body: 'B (en minoría, o sin poder confirmar con A) devuelve error o timeout. Nadie lee un dato viejo, pero los usuarios de B no pueden operar. Así se comportan etcd, ZooKeeper o un líder Raft aislado.', active: ['ub', 'B'], flow: ['ub-B'] },
+    { title: 'Opción AP: responder igual', body: 'Ambas réplicas aceptan lecturas y escrituras. Todos pueden operar, pero B puede devolver datos viejos y las dos pueden recibir escrituras en conflicto (dos personas compran el último asiento).', active: ['ua', 'A', 'B', 'ub'], flow: ['ua-A', 'ub-B'] },
+    { title: 'La red vuelve', body: 'En CP, B se pone al día y listo. En AP hay que reconciliar: last-write-wins (pierde datos), fusionar versiones, CRDTs o compensar en el negocio (reembolsar o reubicar al pasajero).', active: ['A', 'B'], flow: ['A-B'] },
+  ]}
+/>
+
+Brewer mismo, en "CAP Twelve Years Later" (2012), corrigió la lectura de "2 de 3": las particiones son raras, así que la mayor parte del tiempo no sacrificas nada; la elección se hace **por operación** y no por sistema entero; y las tres propiedades son graduales, no binarias.
+
+Tres mitos que conviene no repetir:
+
+1. **"Este sistema es CA."** En un sistema distribuido no puedes renunciar a P. Un sistema "CA" es, en la práctica, uno que deja de funcionar correctamente cuando hay una partición.
+2. **"MongoDB es CP, Cassandra es AP."** Depende de la configuración y de cada operación. Cassandra con `QUORUM` en lecturas y escrituras se comporta distinto que con `ONE`. Una base con un líder y réplicas asíncronas no es ni CP ni AP según las definiciones estrictas. Kleppmann tiene un artículo entero sobre esto: *Please stop calling databases CP or AP*.
+3. **"Elegir CP significa estar caído seguido."** La A de CAP exige respuesta en *todos* los nodos sanos, incluso en la minoría aislada. Un sistema CP puede tener una disponibilidad altísima para los clientes que llegan al lado mayoritario.
+
+<Callout type="interview" title="Cómo usar CAP sin sonar a libro de texto">
+
+No digas "elijo AP" para todo el sistema. Habla por operación: *"Durante una partición, prefiero que el feed muestre datos viejos (disponibilidad), pero la reserva del asiento tiene que ser consistente: si no puedo confirmar con la mayoría, rechazo y el usuario reintenta"*. Eso demuestra que entiendes que CAP es una decisión de producto, no una etiqueta de base de datos.
+
+</Callout>
+
+## PACELC: el trade-off de todos los días
+
+CAP solo habla de lo que pasa durante una partición. Daniel Abadi señaló en 2012 que el trade-off que más influye en el diseño de bases distribuidas se paga **siempre**: mantener réplicas consistentes requiere coordinación, y la coordinación cuesta latencia. Lo resumió en **PACELC**:
+
+> Si hay Partición (P), elige entre disponibilidad (A) y consistencia (C); si no (Else), elige entre latencia (L) y consistencia (C).
+
+- **PA/EL**: Dynamo, Cassandra y Riak en su configuración por defecto. Durante una partición, responden; en operación normal, responden rápido sin esperar a todas las réplicas.
+- **PC/EC**: sistemas totalmente ACID como VoltDB o Megastore (y hoy Spanner o CockroachDB). Pagan latencia siempre para ser consistentes.
+- Abadi también clasificó casos mixtos: MongoDB como PA/EC y PNUTS de Yahoo como PC/EL.
+
+Para dimensionar el costo de EC: una escritura linealizable necesita al menos una ida y vuelta a una mayoría de réplicas. Si las réplicas están en tres regiones de distintos continentes, eso es la latencia de red entre regiones, del orden de decenas a cientos de milisegundos, en *cada* escritura. Por eso los sistemas globales suelen poner al líder de cada partición cerca de quien más la escribe.
+
+## Quórums: N, R y W
+
+En los sistemas sin líder (estilo Dynamo), cada clave se guarda en **N** réplicas. Una escritura se confirma cuando **W** réplicas la aceptan, y una lectura consulta **R** réplicas y se queda con la versión más nueva. Si `R + W > N`, cualquier conjunto de lectura se cruza con cualquier conjunto de escritura en al menos una réplica, que tiene el último valor.
+
+La configuración típica es N = 3, R = 2, W = 2: toleras una réplica caída tanto al leer como al escribir. Ajustar R y W te deja inclinar la balanza:
+
+- **R = 1, W = N**: lecturas muy rápidas, pero una sola réplica caída bloquea las escrituras.
+- **W = 1, R = N**: escrituras muy rápidas, lecturas caras.
+- **R = 1, W = 1**: lo más rápido y disponible, pero sin garantía de cruce: consistencia eventual.
+
+Juega con los valores y tumba réplicas para ver cuándo dejan de funcionar las lecturas o las escrituras:
+
+<QuorumCalculator />
+
+<Callout type="warn" title="R + W > N no es linealizabilidad">
+
+El cruce de quórums es necesario pero no suficiente. Hay casos borde: con *sloppy quorum* y *hinted handoff*, durante una falla se escribe en nodos que no son de los N dueños y el cruce desaparece; dos escrituras concurrentes con last-write-wins pueden perder una; una escritura que falló en algunas réplicas no se deshace en las que sí la aplicaron; y una lectura concurrente con una escritura puede ver el valor nuevo mientras la siguiente ve el viejo. Para linealizabilidad de verdad necesitas consenso.
+
+</Callout>
+
+En Cassandra, estos parámetros se eligen por operación con el *consistency level*: `ONE`, `QUORUM`, `LOCAL_QUORUM` (mayoría dentro del datacenter local, para no pagar latencia entre regiones) o `ALL`.
+
+<Quiz
+  question="Tienes N = 5. Quieres tolerar 2 réplicas caídas tanto al leer como al escribir y mantener R + W > N. ¿Qué configuración cumple?"
+  options={[
+    { text: 'R = 2, W = 2', why: 'Toleras 3 caídas, pero 2 + 2 = 4 no es mayor que 5: puede no haber cruce.' },
+    { text: 'R = 3, W = 3', correct: true, why: '3 + 3 = 6 > 5, y con 5 réplicas puedes perder 2 y todavía juntar 3 respuestas para leer y para escribir.' },
+    { text: 'R = 1, W = 5', why: 'Hay cruce (6 > 5) pero una sola réplica caída bloquea todas las escrituras.' },
+    { text: 'R = 4, W = 4', why: 'Hay cruce, pero solo toleras 1 caída en cada operación.' },
+  ]}
+/>
+
+## Consenso: que varios nodos acuerden algo
+
+Muchos problemas se reducen a que un conjunto de nodos se ponga de acuerdo en un valor y nunca cambie de opinión: quién es el líder, si una transacción distribuida se confirma, quién tiene un lock, qué nombre de usuario ya está tomado. Eso es **consenso**, y es sorprendentemente difícil: el resultado FLP demuestra que en un sistema asíncrono, donde no puedes distinguir un nodo lento de uno muerto, ningún algoritmo determinista garantiza terminar si un nodo puede fallar. Los algoritmos prácticos usan timeouts para avanzar y nunca violan la seguridad aunque los timeouts se equivoquen.
+
+Los algoritmos que vas a nombrar son **Paxos** (el clásico, famoso por difícil), **Raft** (diseñado en 2014 por Ongaro y Ousterhout para ser entendible) y **Zab** (el de ZooKeeper). etcd, Consul, CockroachDB y el modo KRaft de Kafka usan Raft.
+
+### Raft en tres ideas
+
+1. **Términos y líder.** El tiempo se divide en términos numerados. En cada término hay como mucho un líder. Los seguidores esperan heartbeats del líder; si un seguidor no recibe nada durante su **timeout de elección**, se vuelve candidato, incrementa el término, vota por sí mismo y pide votos. Cada nodo vota una sola vez por término. Quien junta mayoría gana. Los timeouts son **aleatorios** (el paper sugiere, por ejemplo, entre 150 y 300 ms) para que rara vez dos nodos se postulen a la vez; si hay empate, nadie gana y se reintenta en otro término.
+2. **Replicación del log.** El cliente escribe solo en el líder, que agrega la entrada a su log y la envía a los seguidores. Cuando una **mayoría** la tiene, la entrada queda **comprometida** (*committed*) y se aplica a la máquina de estados. Si un seguidor tiene entradas que contradicen al líder, las descarta y copia las del líder.
+3. **Seguridad.** Un candidato solo recibe votos si su log está al menos tan actualizado como el de quien vota. Como cualquier mayoría se cruza con la mayoría que comprometió una entrada, el nuevo líder siempre tiene todas las entradas comprometidas. Una entrada comprometida no se pierde nunca.
+
+Mira cómo funciona. Tumba al líder y observa la nueva elección; después usa "Partición" para aislar al líder con un solo seguidor, escribe y observa que esa escritura nunca se compromete mientras el lado mayoritario elige otro líder con un término más alto:
+
+<RaftElection />
+
+Lo que este simulador hace visible es lo que tienes que poder explicar:
+
+- Con **2f + 1 nodos toleras f fallas**. Tres nodos toleran uno; cinco toleran dos. Con cuatro toleras lo mismo que con tres, así que se usan números impares.
+- Un **líder en la minoría** puede seguir creyéndose líder un rato, pero no puede comprometer nada. Cuando la red sana, ve un término más alto y se degrada; sus entradas no comprometidas se descartan.
+- Toda escritura paga una ronda a la mayoría. Más nodos significan más tolerancia y más latencia; por eso los clústeres de consenso tienen 3 o 5 nodos, no 50.
+
+<Callout type="interview" title="No implementes consenso: úsalo">
+
+En una entrevista nunca propongas escribir tu propio Paxos. Di: *"Para la elección de líder y la configuración del clúster uso un servicio de coordinación como etcd o ZooKeeper, que implementan consenso. Lo mantengo fuera del camino de datos caliente porque cada escritura ahí cuesta una ronda a la mayoría"*. Y si te preguntan cómo funciona por dentro, explica Raft con las tres ideas de arriba.
+
+</Callout>
+
+## Locks distribuidos y fencing tokens
+
+Un caso de uso frecuente: "solo un worker debe procesar este archivo" o "solo un proceso debe renovar este certificado". La herramienta obvia es un lock distribuido con un **lease**: el lock expira después de un tiempo (TTL) para que, si quien lo tenía muere, otro pueda tomarlo.
+
+El problema: el dueño del lock puede **pausarse** sin saberlo. Una pausa de GC, un page fault, una VM migrada o un paquete demorado en la red. Cuando despierta, su lease ya expiró, otro cliente tiene el lock, y el primero escribe igual creyendo que sigue siendo el dueño. Verificar el lease justo antes de escribir no sirve: la pausa puede ocurrir entre la verificación y la escritura.
+
+La solución, que Kleppmann explica en *How to do distributed locking*, es el **fencing token**: cada vez que el servicio de locks otorga el lock, entrega un número que siempre crece. El cliente lo manda con cada escritura, y **el almacenamiento rechaza cualquier token menor al último que vio**.
+
+<FlowDiagram
+  caption="Un lease sin fencing permite dos dueños a la vez. Con fencing, el almacenamiento rechaza al dueño viejo."
+  nodes={[
+    { id: 'c1', label: 'Cliente 1', kind: 'worker', x: 0, y: 0 },
+    { id: 'c2', label: 'Cliente 2', kind: 'worker', x: 0, y: 2 },
+    { id: 'lock', label: 'Gestor de locks', kind: 'auth', x: 2, y: 1, sub: 'etcd / ZooKeeper' },
+    { id: 'st', label: 'Almacenamiento', kind: 'storage', x: 4, y: 1, sub: 'guarda el token máx.' },
+  ]}
+  edges={[
+    { from: 'c1', to: 'lock', label: 'token 33' },
+    { from: 'c2', to: 'lock', label: 'token 34' },
+    { from: 'c1', to: 'st', id: 'c1-st', route: 'hv' },
+    { from: 'c2', to: 'st', id: 'c2-st', route: 'hv' },
+  ]}
+  steps={[
+    { title: 'Cliente 1 obtiene el lock', body: 'El servicio le da un lease de 10 s con el token 33.', active: ['c1', 'lock'], flow: ['c1-lock'] },
+    { title: 'Pausa', body: 'El cliente 1 entra en una pausa larga de GC. El lease expira mientras está congelado; él no se entera.', active: ['c1'] },
+    { title: 'Cliente 2 obtiene el lock y escribe', body: <>El servicio otorga el lock al cliente 2 con el token 34. Escribe y el almacenamiento recuerda <code>max_token = 34</code>.</>, active: ['c2', 'lock', 'st'], flow: ['c2-lock', 'c2-st'] },
+    { title: 'Cliente 1 despierta y escribe', body: <>Escribe con el token 33. Como <code>33 &lt; 34</code>, el almacenamiento lo rechaza. Sin fencing, esta escritura habría pisado la del cliente 2.</>, active: ['c1', 'st'], flow: ['c1-st'] },
+  ]}
+/>
+
+Detalles que importan:
+
+- El token necesita un **servicio con consenso** que lo genere de forma monótona: ZooKeeper (el `zxid` o la versión del znode) o etcd (la *revision*). Kleppmann argumenta que Redlock, el algoritmo de locks sobre varios Redis, no produce tokens así y por eso no es seguro cuando la corrección depende del lock.
+- Distingue el **para qué**. Si el lock es por **eficiencia** (evitar que dos workers hagan el mismo trabajo, y si pasa no es grave), un lock simple en Redis basta. Si es por **corrección** (dos dueños corrompen datos), necesitas consenso más fencing.
+- Muchas veces la mejor opción es **no usar un lock**: una escritura condicional (`UPDATE … WHERE version = 7`, compare-and-set), una restricción única en la base o una operación idempotente resuelven el mismo problema con menos piezas.
+
+<Quiz
+  question="Un job programado corre en 3 instancias y usa un lock en Redis con TTL de 30 s para que solo una cobre las suscripciones del día. A veces se cobra dos veces. ¿Cuál es la causa más probable y el arreglo correcto?"
+  options={[
+    { text: 'El TTL es corto; subirlo a 5 minutos lo resuelve.', why: 'Un TTL más largo reduce la probabilidad, pero una pausa (o un job más lento) igual puede superarlo. Además, si la instancia muere, nadie cobra por 5 minutos.' },
+    { text: 'Una instancia se pausó o tardó más que el TTL, otra tomó el lock y ambas cobraron. Haz el cobro idempotente (clave única por suscripción y día) o usa fencing tokens que la base valide.', correct: true, why: 'El lock con lease no puede garantizar exclusión por sí solo. La protección tiene que estar en el recurso: una restricción única o un token monótono que el almacenamiento verifique.' },
+    { text: 'Redis perdió el lock en un failover; usar Redis Cluster lo arregla.', why: 'Puede pasar también, pero no es la causa principal, y más nodos Redis no generan tokens de fencing ni resuelven las pausas.' },
+    { text: 'Hay que verificar que el lock sigue vigente justo antes de cobrar.', why: 'La pausa puede ocurrir entre la verificación y el cobro. Es exactamente el caso que el fencing resuelve.' },
+  ]}
+/>
+
+<Takeaways>
+
+- "Consistencia" tiene varios significados. En CAP es linealizabilidad: el sistema se comporta como una sola copia y garantiza recencia.
+- Los modelos forman un espectro: linealizable, causal, de sesión y eventual. Elige por operación: unicidad, locks y saldos necesitan el fuerte; feeds y contadores no.
+- CAP: las particiones van a ocurrir; mientras duran, eliges entre rechazar (CP) o responder con riesgo de datos viejos o en conflicto (AP). No existen sistemas distribuidos "CA".
+- PACELC agrega el costo de siempre: aun sin fallas, la consistencia cuesta latencia por la coordinación con una mayoría.
+- `R + W > N` garantiza cruce de quórums, no linealizabilidad. N = 3, R = W = 2 es el punto de partida típico.
+- Raft: términos, timeouts aleatorios, mayoría para elegir y para comprometer. 2f + 1 nodos toleran f fallas. Úsalo vía etcd o ZooKeeper, no lo implementes.
+- Un lock con lease no garantiza exclusión. Para corrección, fencing tokens validados por el almacenamiento, o mejor, escrituras condicionales e idempotencia.
+
+</Takeaways>
+
+## Fuentes y lecturas
+
+- Martin Kleppmann y Chris Riccomini, [*Designing Data-Intensive Applications*, 2.ª ed.](https://www.oreilly.com/library/view/designing-data-intensive-applications/9781098119058/) (O'Reilly, 2026). Capítulos de consistencia, consenso y sistemas distribuidos.
+- Seth Gilbert y Nancy Lynch, [Brewer's Conjecture and the Feasibility of Consistent, Available, Partition-Tolerant Web Services](https://www.comp.nus.edu.sg/~gilbert/pubs/BrewersConjecture-SigAct.pdf) (2002), la demostración formal de CAP.
+- Eric Brewer, [CAP Twelve Years Later: How the "Rules" Have Changed](https://www.infoq.com/articles/cap-twelve-years-later-how-the-rules-have-changed/) (2012).
+- Daniel Abadi, [Consistency Tradeoffs in Modern Distributed Database System Design](https://cs.umd.edu/~abadi/papers/abadi-pacelc.pdf) (IEEE Computer, 2012), el paper de PACELC.
+- Martin Kleppmann, [Please stop calling databases CP or AP](https://martin.kleppmann.com/2015/05/11/please-stop-calling-databases-cp-or-ap.html) (2015).
+- Jepsen, [Consistency Models](https://jepsen.io/consistency/models): mapa de modelos y cuáles pueden seguir disponibles durante una partición.
+- Diego Ongaro y John Ousterhout, [In Search of an Understandable Consensus Algorithm](https://raft.github.io/raft.pdf) y la visualización interactiva en [raft.github.io](https://raft.github.io/).
+- Martin Kleppmann, [How to do distributed locking](https://martin.kleppmann.com/2016/02/08/how-to-do-distributed-locking.html) (2016), sobre leases, pausas y fencing tokens.
+- DeCandia et al., [Dynamo: Amazon's Highly Available Key-value Store](https://www.allthingsdistributed.com/2007/10/amazons_dynamo.html) (2007), origen de los quórums N/R/W en sistemas sin líder.

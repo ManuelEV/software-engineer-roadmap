@@ -1,0 +1,502 @@
+import { SeatReservation } from '../../components/widgets/casos-b/SeatReservation'
+
+Te piden diseñar un sistema de venta de entradas como Ticketmaster: los usuarios buscan eventos, abren el mapa del recinto, eligen asientos, los reservan unos minutos y pagan. Es un clásico de entrevista porque, debajo de una interfaz conocida, esconde el problema de concurrencia más puro que existe: un **inventario finito y único** (cada asiento existe una sola vez) y una demanda que no llega repartida durante el día, sino concentrada en los primeros segundos de la venta.
+
+Lo difícil no es el volumen promedio. Es que conviven tres sistemas con necesidades opuestas. La navegación y la búsqueda son de lectura masiva y toleran datos de hace unos segundos. La reserva necesita consistencia fuerte, porque vender dos veces el mismo asiento es el error que nadie perdona. Y el pico de una venta estrella puede ser cien veces el tráfico normal durante diez minutos. En noviembre de 2022, la preventa del Eras Tour de Taylor Swift generó 3.500 millones de peticiones al sistema, unas cuatro veces su pico previo, y la experiencia se degradó lo suficiente como para terminar en audiencias en el Senado de EE. UU.<Sidenote>Ticketmaster publicó sus cifras: 3,5 millones de registros de Verified Fan, cerca de 1,5 millones de invitados a comprar y más de 2 millones de entradas vendidas el 15 de noviembre, récord para un artista en un día.</Sidenote>
+
+Tu objetivo en la entrevista es mostrar que separas esos tres problemas y que sabes exactamente dónde pones la garantía de "nunca dos veces".
+
+<Sketch
+  width={640}
+  height={300}
+  caption="El problema en un dibujo: millones de fans para decenas de miles de asientos. La sala de espera dosifica el pico y la base garantiza que cada asiento se venda una sola vez."
+  items={[
+    { type: 'box', x: 24, y: 64, w: 150, h: 60, label: '2 M de fans', size: 22, tone: 'bad' },
+    { type: 'arrow', from: [178, 94], to: [240, 94] },
+    { type: 'box', x: 244, y: 64, w: 170, h: 60, label: 'sala de espera', size: 22, tone: 'line', fill: true },
+    { type: 'text', x: 329, y: 150, text: '~83 por segundo', size: 18, anchor: 'middle', tone: 'line' },
+    { type: 'arrow', from: [418, 94], to: [474, 94] },
+    { type: 'box', x: 478, y: 64, w: 138, h: 60, label: 'reservar', size: 22 },
+    { type: 'arrow', from: [547, 128], to: [547, 178], tone: 'muted' },
+    { type: 'cells', x: 420, y: 184, values: ['A1', 'A2', 'A3', 'A4'], size: 46, states: ['ok', 'line', null, null] },
+    { type: 'text', x: 24, y: 200, text: ['33 personas', 'por asiento'], size: 22, tone: 'bad' },
+    { type: 'text', x: 24, y: 36, text: 'el pico no se escala: se dosifica', size: 20, tone: 'pencil' },
+    { type: 'highlight', x: 360, y: 258, w: 262, h: 28, tone: 'ok' },
+    { type: 'text', x: 366, y: 280, text: 'cada asiento, una sola venta', size: 20, tone: 'ok', with: true },
+  ]}
+/>
+
+## Requisitos
+
+Empieza acotando. Este problema se puede inflar con reventa, precios dinámicos y antifraude; si no pones límites, te quedas sin tiempo antes de llegar a lo interesante.
+
+**Funcionales**
+
+1. Ver un evento: fecha, recinto, artista y el **mapa de asientos con disponibilidad**.
+2. Buscar eventos por texto, ciudad, fecha y categoría.
+3. **Reservar** uno o más asientos: quedan apartados para ti durante un tiempo limitado (un *hold*; supongamos 10 minutos) mientras pagas.
+4. **Pagar y confirmar**: al pagar, el hold se convierte en venta; si no pagas, los asientos se liberan solos.
+
+**No funcionales**
+
+- **Consistencia fuerte en la reserva**: un asiento nunca se vende a dos personas. Este requisito manda sobre todo lo demás.
+- **Alta disponibilidad en lectura**: buscar y ver eventos debe funcionar aunque la parte transaccional esté bajo presión. Aquí aceptamos datos con segundos de antigüedad.
+- **Latencia**: búsqueda por debajo de 500 ms en p99; reservar, por debajo de un par de segundos.
+- **Picos extremos**: soportar millones de usuarios concurrentes sobre un único evento.
+- **Justicia y resistencia a bots**: el orden de llegada debe respetarse razonablemente y los revendedores automatizados no deben acaparar el inventario.
+
+**Fuera de alcance**: creación de eventos por parte de organizadores, reventa, precios dinámicos, emisión de entradas físicas y el procesamiento de tarjetas (lo delegamos en un PSP; ver el caso de [pagos](/casos/pagos)).
+
+<Callout type="interview" title="Di la asimetría en voz alta">
+
+"Voy a tratar la lectura como un sistema AP, con caché agresiva, y la reserva como CP, con una sola fuente de verdad transaccional." Esa frase, dicha temprano, ordena toda la entrevista y le muestra al entrevistador que no vas a meter consistencia fuerte donde no hace falta.
+
+</Callout>
+
+## Estimaciones
+
+Los números de este sistema no impresionan en promedio. Impresionan en el pico y, sobre todo, en la **contención por asiento**. Todos son supuestos explícitos:
+
+```text
+Catálogo
+  eventos activos ............ 100.000
+  asientos por evento (prom.)  5.000
+  filas de tickets ........... 100.000 × 5.000 = 500 M
+  tamaño por fila ............ ~120 B → ~60 GB (+ índices ≈ 100 GB)
+
+Día normal
+  usuarios activos diarios ... 20 M, ~10 lecturas cada uno
+  lecturas ................... 200 M/día ≈ 2.300 QPS (pico ×3 ≈ 7.000)
+  escrituras (100:1) ......... ~2 M reservas/día ≈ 25/s
+
+Venta estrella (un estadio)
+  asientos ................... 60.000  (~3 por orden → 20.000 órdenes)
+  fans conectados en T0 ...... 2.000.000
+  contención ................. 2 M / 60.000 ≈ 33 personas por asiento
+  refresco del mapa cada 5 s . 2 M / 5 = 400.000 QPS de lectura
+  si todos reservan en 60 s .. 2 M / 60 ≈ 33.000 intentos/s sobre UN evento
+```
+
+Tres conclusiones salen de esta cuenta, y conviene decirlas:
+
+1. **El almacenamiento no es el problema.** 100 GB caben en una base relacional bien configurada; particionar por evento es por organización y aislamiento, no por capacidad.
+2. **La lectura del pico solo se sirve desde caché.** 400.000 QPS sobre el mapa de un evento no pueden tocar la base. La disponibilidad tiene que ser un objeto pequeño y cacheable: un *bitmap* de 60.000 bits pesa 7,5 KB.
+3. **La escritura del pico no se puede escalar, se tiene que dosificar.** 33.000 intentos por segundo contra las mismas filas calientes de un solo evento no se resuelven agregando réplicas: todas compiten por las mismas filas. Por eso aparece la sala de espera virtual. Y fíjate en el dato incómodo: solo hay 20.000 órdenes posibles para 2 millones de personas. Casi todos se van a ir sin entradas, y el diseño tiene que decírselo pronto y con honestidad.
+
+## Entidades y API
+
+Entidades principales:
+
+- **Event**: id, nombre, fecha, recinto, artista, estado de la venta.
+- **Venue**: el recinto, con su plantilla de secciones y asientos (el dibujo del mapa).
+- **Ticket**: un asiento concreto para un evento concreto. Tiene estado (`available`, `held`, `sold`), precio y una versión. Hay una fila por asiento por evento.
+- **Booking**: la orden del usuario. Agrupa tickets, tiene estado (`pending`, `confirmed`, `expired`) y referencia al pago.
+- **User**: quien compra.
+
+La API separa lo que casi nunca cambia de lo que cambia cada segundo:
+
+```http
+GET /v1/events/{eventId}
+→ 200 { event, venue, performer }            # cacheable minutos u horas (CDN)
+
+GET /v1/events/{eventId}/availability
+→ 200 { version, sections: [{ id, bitmap }] } # cacheable 1–2 s
+
+GET /v1/events/search?q=coldplay&city=santiago&from=2026-12-01&page=2
+→ 200 { results: [...], nextPage }
+
+POST /v1/events/{eventId}/reservations
+Authorization: Bearer ...
+X-Queue-Token: ...                            # solo si el evento tiene sala de espera
+{ "ticketIds": ["T-A12", "T-A13"] }
+→ 201 { reservationId, expiresAt }
+→ 409 { error: "seat_unavailable", unavailable: ["T-A13"] }
+
+POST /v1/reservations/{reservationId}/confirm
+Idempotency-Key: 7f3a…
+{ "paymentMethodToken": "pm_…" }
+→ 202 { status: "processing" }
+
+DELETE /v1/reservations/{reservationId}      # liberar antes de tiempo
+→ 204
+
+POST /v1/webhooks/psp                         # el PSP avisa que el pago se completó
+```
+
+Dos decisiones merecen explicación. Separar `availability` de `events/{id}` permite cachear el recinto en la CDN por horas y la disponibilidad por un segundo. Y dividir la compra en **reservar** y **confirmar** es lo que permite que el usuario tenga tiempo de pagar sin que nadie le quite el asiento.
+
+## Modelo de datos
+
+La reserva necesita transacciones, restricciones de unicidad y locks de fila: una base relacional como **PostgreSQL** es la elección natural para la fuente de verdad. La búsqueda va en un motor de texto (Elasticsearch u OpenSearch) alimentado por CDC. Los holds rápidos y la sala de espera viven en Redis.
+
+```sql
+CREATE TABLE tickets (
+  id              text PRIMARY KEY,           -- 'EVT123:A12'
+  event_id        bigint NOT NULL,
+  seat_id         text   NOT NULL,            -- referencia a la plantilla del venue
+  section_id      text   NOT NULL,
+  price_cents     bigint NOT NULL,
+  status          text   NOT NULL DEFAULT 'available',  -- available | held | sold
+  booking_id      uuid,
+  hold_expires_at timestamptz,
+  version         int    NOT NULL DEFAULT 1,
+  UNIQUE (event_id, seat_id)
+) PARTITION BY HASH (event_id);
+
+CREATE TABLE bookings (
+  id          uuid PRIMARY KEY,
+  user_id     bigint NOT NULL,
+  event_id    bigint NOT NULL,
+  status      text   NOT NULL,                -- pending | confirmed | expired | refunded
+  total_cents bigint NOT NULL,
+  payment_ref text,
+  created_at  timestamptz NOT NULL DEFAULT now(),
+  expires_at  timestamptz NOT NULL
+);
+
+-- Última línea de defensa: un ticket solo puede pertenecer a una orden confirmada.
+CREATE TABLE booking_items (
+  booking_id uuid NOT NULL REFERENCES bookings(id),
+  ticket_id  text NOT NULL,
+  confirmed  boolean NOT NULL DEFAULT false
+);
+CREATE UNIQUE INDEX one_sale_per_ticket ON booking_items (ticket_id) WHERE confirmed;
+```
+
+Por qué así:
+
+- **Particionar por `event_id`** pone toda la contención de un evento en una sola partición. Parece contraintuitivo, pero es lo correcto: las transacciones de una reserva tocan asientos del mismo evento y nunca necesitan coordinarse entre particiones. Un evento caliente no afecta a los otros 99.999.
+- **El índice único parcial** `one_sale_per_ticket` es el cinturón de seguridad. Aunque un bug en la capa de locks deje pasar a dos compradores, la base rechaza la segunda confirmación. La corrección no debe depender de una sola capa.
+- **`hold_expires_at` en la fila** permite que la expiración sea implícita (lo vemos en las profundizaciones): un hold vencido cuenta como disponible sin que nadie tenga que "limpiarlo".
+
+## Diseño de alto nivel
+
+Recorre el diagrama paso a paso. Fíjate en que los caminos de lectura y de escritura casi no se cruzan.
+
+<FlowDiagram
+  caption="Arquitectura de un sistema de venta de entradas: lectura cacheada, búsqueda por índice y reserva transaccional detrás de una sala de espera."
+  nodes={[
+    { id: 'u', label: 'Fans', kind: 'users', x: 0, y: 1.5, sub: 'web · app' },
+    { id: 'cdn', label: 'CDN', kind: 'cdn', x: 1, y: 0, sub: 'recinto · estáticos' },
+    { id: 'gw', label: 'API gateway', kind: 'gateway', x: 1, y: 1.5, sub: 'auth · rate limit' },
+    { id: 'wr', label: 'Sala de espera', kind: 'timer', x: 1, y: 3, sub: 'Redis ZSET' },
+    { id: 'ev', label: 'Event service', kind: 'service', x: 2, y: 0, sub: 'eventos · mapa' },
+    { id: 'sr', label: 'Search service', kind: 'search', x: 2, y: 1.5 },
+    { id: 'bk', label: 'Booking service', kind: 'service', x: 2, y: 3, sub: 'reservar · confirmar', tone: 'line' },
+    { id: 'cache', label: 'Redis caché', kind: 'cache', x: 3, y: 0, sub: 'disponibilidad 1 s' },
+    { id: 'es', label: 'Elasticsearch', kind: 'search', x: 3, y: 1.5 },
+    { id: 'locks', label: 'Redis holds', kind: 'limiter', x: 3, y: 3, sub: 'SET NX PX' },
+    { id: 'pg', label: 'Postgres', kind: 'db', x: 4, y: 2.25, sub: 'tickets · bookings' },
+    { id: 'psp', label: 'PSP', kind: 'payment', x: 4, y: 4, sub: 'Stripe · Adyen' },
+  ]}
+  edges={[
+    { from: 'u', to: 'cdn' },
+    { from: 'u', to: 'gw' },
+    { from: 'u', to: 'wr', label: 'pico' },
+    { from: 'gw', to: 'ev' },
+    { from: 'gw', to: 'sr' },
+    { from: 'gw', to: 'bk' },
+    { from: 'wr', to: 'bk', label: 'token', dashed: true },
+    { from: 'ev', to: 'cache' },
+    { from: 'sr', to: 'es' },
+    { from: 'bk', to: 'locks' },
+    { from: 'bk', to: 'pg' },
+    { from: 'cache', to: 'pg', dashed: true },
+    { from: 'pg', to: 'es', label: 'CDC', dashed: true },
+    { from: 'bk', to: 'psp', bidir: true, label: 'cobro · webhook' },
+  ]}
+  steps={[
+    {
+      title: '1. Ver el evento',
+      body: <>El dibujo del recinto y los datos del evento salen de la CDN (casi inmutables). La disponibilidad la sirve el Event service desde Redis, como un bitmap por sección con TTL de 1 a 2 segundos. Un cache miss lee de una réplica de Postgres, nunca del primario.</>,
+      active: ['u', 'cdn', 'gw', 'ev', 'cache'],
+      flow: ['u-cdn', 'u-gw', 'gw-ev', 'ev-cache'],
+    },
+    {
+      title: '2. Buscar',
+      body: <>La búsqueda va a Elasticsearch, que se alimenta de Postgres por CDC (por ejemplo, Debezium leyendo el WAL). Puede ir unos segundos atrasada, y eso está bien: buscar no promete disponibilidad.</>,
+      active: ['gw', 'sr', 'es', 'pg'],
+      flow: ['gw-sr', 'sr-es', 'pg-es'],
+    },
+    {
+      title: '3. Pico: sala de espera',
+      body: <>Si el evento está marcado como de alta demanda, el usuario entra primero a la sala de espera. Recibe una posición y espera. Cuando le toca, obtiene un token firmado que el Booking service exige para reservar.</>,
+      active: ['u', 'wr', 'bk'],
+      flow: ['u-wr', 'wr-bk'],
+    },
+    {
+      title: '4. Reservar',
+      body: <>El Booking service intenta el hold en Redis con <code>SET ticket:EVT:A12 booking NX PX 600000</code> para cada asiento y, si gana, lo registra en Postgres con un UPDATE condicional. Si cualquiera de los dos falla, responde 409 y deshace lo que tomó.</>,
+      active: ['gw', 'bk', 'locks', 'pg'],
+      flow: ['gw-bk', 'bk-locks', 'bk-pg'],
+    },
+    {
+      title: '5. Pagar',
+      body: <>El cliente tokeniza la tarjeta directamente con el PSP (nosotros nunca vemos el número). El Booking service crea el cobro con una clave de idempotencia derivada del booking id.</>,
+      active: ['bk', 'psp'],
+      flow: ['bk-psp'],
+    },
+    {
+      title: '6. Confirmar',
+      body: <>El webhook del PSP llega al Booking service, que en una transacción pasa los tickets de held a sold (solo si siguen siendo de esta orden) y marca el booking como confirmado. Luego borra las claves de Redis. El próximo refresco del mapa ya muestra los asientos como vendidos.</>,
+      active: ['psp', 'bk', 'pg', 'locks'],
+      flow: ['bk-psp', 'bk-pg', 'bk-locks'],
+    },
+  ]}
+/>
+
+Con esto tienes un diseño que funciona para el 99 % de los eventos. Las profundizaciones son para el 1 % que rompe todo.
+
+## Profundizaciones
+
+### 1. Evitar la doble venta
+
+Este es el corazón de la entrevista. El bug clásico es el **read-then-write**: el servicio lee el estado del asiento, decide en código que está libre y escribe. Entre la lectura y la escritura hay una ventana de milisegundos en la que otra petición puede leer lo mismo. Con 33 personas por asiento, esa ventana se abre constantemente.
+
+Tienes cuatro herramientas. Pruébalas en el simulador antes de leer la comparación: toca asientos con "B compite" activo y cambia la estrategia.
+
+<SeatReservation />
+
+**Bloqueo pesimista** (`SELECT … FOR UPDATE`). Dentro de una transacción, la primera petición toma un lock sobre la fila; la segunda se bloquea hasta que la primera termine y, cuando entra, ve el asiento tomado. Es simple y correcto. La regla de oro: **el lock dura lo que dura la transacción corta de reservar, nunca los 10 minutos del pago**. Mantener una transacción abierta mientras el usuario escribe su tarjeta agota el pool de conexiones y multiplica los deadlocks. Si reservas varios asientos, bloquéalos siempre en el mismo orden (`ORDER BY id`) para evitar que dos transacciones se esperen mutuamente.
+
+```sql
+BEGIN;
+SELECT id, status, hold_expires_at
+  FROM tickets
+ WHERE id = ANY($1)
+ ORDER BY id
+   FOR UPDATE;                 -- bloquea las filas en orden determinista
+-- la aplicación verifica que todas estén libres (o con hold vencido)
+UPDATE tickets
+   SET status = 'held', booking_id = $2, hold_expires_at = now() + interval '10 minutes'
+ WHERE id = ANY($1);
+COMMIT;
+```
+
+Para entradas generales ("dame 2 entradas cualesquiera de la cancha"), `FOR UPDATE SKIP LOCKED` es la variante útil: en lugar de esperar una fila bloqueada, salta a la siguiente libre. Así mil compradores toman mil entradas distintas sin hacer fila uno detrás de otro.
+
+**Concurrencia optimista**. No hay lock explícito: la escritura misma verifica que nada cambió. La forma más limpia es un UPDATE condicional y revisar cuántas filas afectó.
+
+```sql
+UPDATE tickets
+   SET status = 'held', booking_id = $2,
+       hold_expires_at = now() + interval '10 minutes',
+       version = version + 1
+ WHERE id = ANY($1)
+   AND (status = 'available' OR (status = 'held' AND hold_expires_at < now()));
+-- si filas_afectadas < cardinality($1): alguien ganó antes → ROLLBACK y 409
+```
+
+Es atómico porque Postgres evalúa la condición y escribe bajo el lock implícito de la fila. Con una columna `version` obtienes la variante clásica (`WHERE version = $leida`). La crítica habitual al optimismo es que "con mucha contención, muchos fallan". Aquí eso no es un defecto: si el asiento ya es de otro, fallar rápido **es la respuesta correcta**. No hay nada que reintentar salvo elegir otro asiento.
+
+**Hold distribuido con TTL en Redis**. `SET ticket:EVT123:A12 <bookingId> NX PX 600000` crea la clave solo si no existe y la hace expirar sola a los 10 minutos. Es O(1), no toca la base y la expiración es gratis. Para liberarla, borra solo si el valor sigue siendo tuyo (un script Lua que compara y borra), para no soltar un hold que ya expiró y tomó otro.
+
+<Callout type="warn" title="Redis no es tu fuente de verdad">
+
+La replicación de Redis es asíncrona: si el primario cae justo después de aceptar tu `SET`, la réplica promovida puede no tenerlo y otro comprador obtiene el mismo asiento. Además, un proceso puede pausarse (GC, red lenta) más allá del TTL y seguir creyendo que tiene el hold. Martin Kleppmann distingue entre locks de **eficiencia** (si fallan, se repite trabajo) y de **corrección** (si fallan, se corrompen datos), y recomienda no usar Redis solo para los segundos. La solución práctica: Redis filtra el 99,9 % de la contención barato; Postgres garantiza la corrección con el UPDATE condicional y el índice único al confirmar.
+
+</Callout>
+
+Así se ven las dos capas juntas en Java con Spring: Redis primero, como filtro, y el `UPDATE` condicional como garantía, dentro de la misma transacción corta.
+
+```java title="BookingService.java"
+class AsientoNoDisponible extends RuntimeException {
+    AsientoNoDisponible(String ticketId) { super(ticketId); }
+}
+
+class BookingService {
+    private static final Duration HOLD = Duration.ofMinutes(10);
+    private final StringRedisTemplate redis;
+    private final JdbcTemplate jdbc;
+
+    BookingService(StringRedisTemplate redis, JdbcTemplate jdbc) {
+        this.redis = redis;
+        this.jdbc = jdbc;
+    }
+
+    @Transactional // una excepción no capturada hace rollback del UPDATE
+    public Reserva reservar(List<String> ticketIds, UUID bookingId) {
+        List<String> tomados = new ArrayList<>();
+        try {
+            // 1. Filtro barato: un hold con TTL por asiento en Redis, en orden determinista
+            for (String id : ticketIds.stream().sorted().toList()) {
+                Boolean ok = redis.opsForValue().setIfAbsent("ticket:" + id, bookingId.toString(), HOLD);
+                if (!Boolean.TRUE.equals(ok)) throw new AsientoNoDisponible(id);
+                tomados.add(id);
+            }
+            // 2. La garantía: UPDATE condicional en Postgres (hold vencido cuenta como libre)
+            int filas = jdbc.update("""
+                UPDATE tickets
+                   SET status = 'held', booking_id = ?, hold_expires_at = now() + interval '10 minutes',
+                       version = version + 1
+                 WHERE id = ANY(?)
+                   AND (status = 'available' OR (status = 'held' AND hold_expires_at < now()))""",
+                bookingId, ticketIds.toArray(String[]::new));
+            if (filas < ticketIds.size()) throw new AsientoNoDisponible(String.join(",", ticketIds));
+            return new Reserva(bookingId, Instant.now().plus(HOLD));
+        } catch (AsientoNoDisponible e) {
+            tomados.forEach(id -> liberarSiEsMio(id, bookingId)); // compara y borra con un script Lua
+            throw e; // el controlador responde 409
+        }
+    }
+}
+```
+
+<Callout type="tip" title="En Java">
+
+`setIfAbsent` devuelve un `Boolean` que puede ser `null` (por ejemplo, dentro de un pipeline o una transacción de Redis); por eso se compara con `Boolean.TRUE.equals(ok)` y no se desempaqueta con `if (ok)`, que lanzaría `NullPointerException`. Y `@Transactional` hace rollback automático solo ante excepciones no chequeadas: `AsientoNoDisponible` extiende `RuntimeException` a propósito.
+
+</Callout>
+
+<Compare>
+<Option title="FOR UPDATE">
+
+Correcto y fácil de razonar. Con contención alta, las peticiones hacen fila sobre la misma fila y las conexiones se quedan esperando. Bueno para el paso corto de reservar con contención moderada.
+
+</Option>
+<Option title="Optimista" verdict="Default en la base">
+
+Sin esperas: el perdedor recibe 0 filas y responde 409 de inmediato. Ideal cuando el conflicto significa "ya no está", que es justo este dominio.
+
+</Option>
+<Option title="Hold en Redis" verdict="Filtro para picos">
+
+Rapidísimo y con expiración nativa. Descarga a la base en el pico. No basta solo: necesita la verificación en Postgres detrás.
+
+</Option>
+</Compare>
+
+<Quiz
+  question="Tu Booking service usa SET NX PX en Redis para los holds y, al confirmar el pago, hace UPDATE tickets SET status = 'sold' WHERE id = $1 sin más condiciones. ¿Qué puede salir mal?"
+  options={[
+    { text: 'Nada: si Redis dio el hold, el asiento es tuyo.', why: 'Redis puede perder la clave en un failover o el hold puede expirar mientras el pago está en curso. Si al confirmar no verificas en la base, vendes un asiento que ya tomó otro.' },
+    { text: 'Si el hold expiró durante el pago y otro usuario reservó el asiento, la confirmación se lo pisa: doble venta.', correct: true, why: 'Exacto. La confirmación debe ser condicional: WHERE id = $1 AND booking_id = $mio AND status = held. Si afecta 0 filas, el asiento ya no es tuyo y debes reembolsar el cobro, de forma idempotente.' },
+    { text: 'El UPDATE es demasiado lento y el webhook del PSP expira.', why: 'Un UPDATE por clave primaria toma milisegundos. El problema no es rendimiento sino corrección.' },
+    { text: 'Redis no soporta TTL en milisegundos.', why: 'Sí lo soporta: PX recibe milisegundos y EX segundos.' },
+  ]}
+/>
+
+### 2. Holds temporales y su expiración
+
+Un hold necesita tres cosas: que se cree atómicamente, que expire solo y que el mapa refleje su expiración pronto. Hay tres formas de manejar la expiración, de peor a mejor:
+
+1. **Estado `held` + cron que limpia cada minuto.** Funciona, pero un asiento abandonado puede quedar bloqueado hasta un minuto extra. En un pico, eso es inventario congelado justo cuando más se pide.
+2. **Expiración implícita en la consulta.** Un ticket está disponible si `status = 'available'` **o** si `status = 'held' AND hold_expires_at < now()`. No hace falta que nadie lo limpie para que sea correcto; el cron queda solo para orden y métricas. Es la variante del UPDATE condicional que viste arriba.
+3. **TTL en Redis.** La clave desaparece sola al vencer. Para que el mapa se entere sin barrer todas las claves, mantén además un *sorted set* por evento con score igual al instante de expiración: `ZRANGEBYSCORE holds:EVT123 0 <ahora>` te da los holds vencidos de un golpe.
+
+¿Qué pasa si el hold vence **mientras** el usuario paga? Es el borde que separa a un candidato senior. Dos opciones: extender el hold cuando el pago empieza (por ejemplo, al crear el *payment intent*, sumar 5 minutos con un límite), o aceptar la carrera y resolverla al confirmar: si el UPDATE condicional afecta 0 filas, el asiento ya no es tuyo y emites un **reembolso automático** con su propia clave de idempotencia. Lo habitual es combinar ambas: extender reduce la frecuencia, el reembolso cubre lo que queda.
+
+La duración del hold es un trade-off de producto. Demasiado largo (20 minutos) y los abandonos y los bots congelan inventario: el mapa se ve lleno mientras la mitad de los asientos están en carritos que nadie pagará. Demasiado corto (2 minutos) y pierdes compradores reales a mitad de una validación 3-D Secure. Limitar las entradas por cuenta (supongamos un máximo de 6 por orden) acota el daño de los acaparadores.
+
+<Details summary="Profundizar: mantener el mapa fresco sin derribar el sistema">
+
+La disponibilidad se puede calcular como "tickets no vendidos menos holds activos" y guardar como un bitmap por sección en Redis: 1 bit por asiento. Para un estadio de 60.000 asientos son 7,5 KB, y comprimido mucho menos, porque los asientos vendidos se agrupan.
+
+Para eventos normales puedes empujar cambios al cliente por SSE o WebSocket. Para un evento estrella, no: dos millones de conexiones recibiendo cada cambio de cada asiento es una tormenta de *fan-out*. Mejor que el cliente pida la disponibilidad cada pocos segundos, que la respuesta esté cacheada 1 segundo en Redis y en la CDN, y que cada instancia del Event service tenga además una caché local de 1 segundo con *request coalescing* (una sola petición a Redis por clave aunque lleguen mil a la vez). Ver [caché y CDN](/system-design/caching).
+
+Y acepta que el mapa miente un poco: puedes ver libre un asiento que se tomó hace 800 ms. No pasa nada, porque la verdad se decide al reservar.
+
+</Details>
+
+### 3. La sala de espera virtual
+
+Volvamos a la cuenta: 33.000 intentos de reserva por segundo contra las filas de un solo evento. No escalas una base relacional cien veces durante diez minutos, y aunque pudieras, la experiencia sería una lotería de errores 503 donde gana quien tenga el script más rápido. La sala de espera convierte un pico imposible en un **flujo constante y controlado**.
+
+Cómo funciona, siguiendo el modelo que describe Queue-it:
+
+1. **Pre-cola.** Antes de la hora de venta, quien llega espera en una página estática (servida por la CDN, sin costo para tu backend) con una cuenta regresiva.
+2. **Aleatorización en T0.** Al abrir la venta, todos los que estaban en la pre-cola reciben una posición **al azar**. Así no gana quien refrescó en el milisegundo exacto ni quien tiene mejor ping. Quien llega después va al final, en orden de llegada.
+3. **Tasa de salida.** Admites usuarios a un ritmo que el Booking service soporta con holgura. Esa tasa es el número de diseño más importante del sistema.
+4. **Token de admisión.** Al que le toca recibe un token firmado (evento, usuario, vencimiento) que el gateway y el Booking service verifican. Sin token válido, no hay reserva, aunque llames a la API directamente.
+
+```text
+Tasa de salida (supuestos)
+  tiempo de compra por usuario admitido ... ~4 min (elegir + pagar)
+  compradores simultáneos deseados ........ ~20.000
+  tasa de admisión ........................ 20.000 / 240 s ≈ 83 usuarios/s ≈ 5.000/min
+  órdenes disponibles ..................... ~20.000 → agotado en ~4–6 min
+```
+
+Con Redis basta: un *sorted set* `queue:EVT123` con score igual a la posición, `ZRANK` para contestar "vas en el puesto 412.331" y un set `admitted:EVT123` con TTL por usuario. El cliente consulta su posición cada 10 a 30 segundos (no cada segundo: dos millones de clientes son 200.000 QPS si consultan cada 10 s, y eso lo absorbe la CDN si la respuesta es un JSON pequeño cacheable unos segundos).
+
+Hay una mejora que distingue a un buen diseño: **admite según el inventario que queda**. Si quedan 3.000 órdenes posibles, no tiene sentido admitir 50.000 personas más. Cuando el inventario restante (más los holds que pueden expirar) no alcanza para la cola, dile a la gente que está detrás que el evento está agotado o casi, en lugar de tenerla una hora esperando para nada.
+
+Contra los bots, la sala de espera es necesaria pero no suficiente: registro previo verificado (lo que Ticketmaster llama Verified Fan), CAPTCHA al entrar a la cola, límite de entradas por cuenta y por medio de pago, y [rate limiting](/casos/rate-limiter) por cuenta y por dispositivo en el gateway.
+
+<Quiz
+  question="En una venta con sala de espera, ¿qué determina principalmente la tasa a la que admites usuarios?"
+  options={[
+    { text: 'El número de usuarios en la cola: más gente, más rápido debes admitir.', why: 'Admitir más rápido porque hay más gente solo traslada el pico al Booking service, que es exactamente lo que la sala de espera quería evitar.' },
+    { text: 'La capacidad sostenible del camino de reserva y pago, y el inventario que queda.', correct: true, why: 'Correcto. La tasa se calcula hacia atrás desde lo que el Booking service, la base y el PSP soportan con holgura, y se ajusta según el inventario restante para no admitir gente cuando ya no hay qué vender.' },
+    { text: 'La capacidad de la CDN que sirve la página de espera.', why: 'La página de espera es estática y la CDN la sirve casi sin límite. No es el recurso escaso.' },
+    { text: 'Un valor fijo, por ejemplo 1.000 usuarios por minuto, igual para todos los eventos.', why: 'Un valor fijo ignora la duración típica de compra, el tamaño del recinto y la salud del sistema en tiempo real. Debe ser configurable y ajustable durante la venta.' },
+  ]}
+/>
+
+### 4. Búsqueda y lectura a escala
+
+La búsqueda es el camino más cómodo: no requiere consistencia fuerte y se resuelve con piezas conocidas.
+
+- **Elasticsearch** con índice invertido sobre nombre del evento, artista, recinto y ciudad, con *fuzzy matching* para errores de tipeo ("coldpaly"). Un `LIKE '%coldplay%'` en Postgres obliga a recorrer la tabla; un índice GIN sobre `tsvector` ayuda, pero un motor de búsqueda dedicado escala y relevancia mejor. Ver [búsqueda](/system-design/piezas-especiales).
+- **CDC** de Postgres a Elasticsearch para no tener escrituras duales desde la aplicación: si escribes en las dos desde el código, tarde o temprano una falla y quedan desincronizadas.
+- **Caché de resultados** en Redis con la consulta normalizada como clave y TTL de minutos. Las búsquedas siguen una ley de potencia: "taylor swift" en el día de la venta concentra una fracción enorme de las consultas.
+- **CDN** para la página del evento y el dibujo del recinto, que son iguales para todos.
+
+La disponibilidad **no** va en Elasticsearch. El índice de búsqueda dice "este evento existe y hay entradas desde $45.000"; el número exacto de asientos libres lo da el endpoint de disponibilidad.
+
+## Cuellos de botella y trade-offs
+
+**La partición caliente.** Particionar por evento aísla a los eventos entre sí, pero concentra todo el pico en una partición. No puedes repartir un evento entre shards sin perder transacciones locales cuando una orden toma asientos de dos secciones. Si un solo evento supera lo que un primario soporta, la respuesta no es fragmentar más: es dosificar con la sala de espera y filtrar con Redis. Ver [replicación y sharding](/system-design/replicacion-y-sharding).
+
+**Redis como punto crítico.** Si el cluster de holds cae en plena venta, tienes dos opciones: degradar a reservar solo con el UPDATE condicional en Postgres (más lento, pero correcto) o pausar la cola. Lo que no puedes hacer es seguir vendiendo sin ninguna de las dos protecciones.
+
+**Justicia contra throughput.** Aleatorizar la pre-cola es más justo pero frustra a quien llegó dos horas antes. Un FIFO puro premia a los bots. No hay respuesta perfecta; elige y explica.
+
+**Consistencia contra disponibilidad.** La reserva es CP: si Postgres no está disponible, devolvemos error antes que arriesgar una doble venta. La lectura es AP: un mapa con un segundo de atraso es aceptable. Mezclar los dos criterios en el mismo servicio es el error de diseño más común. Ver [consistencia y CAP](/system-design/consistencia).
+
+**Duración del hold.** Más largo mejora la conversión del que paga lento, pero congela inventario y alimenta a los acaparadores. Más corto libera inventario, pero aumenta las carreras de "venció mientras pagaba" y los reembolsos.
+
+**El pago como dependencia externa.** Si el PSP se pone lento, los holds vencen en masa y los reembolsos se disparan. Mide la latencia del PSP y, si se degrada, frena la tasa de admisión de la cola: el sistema entero debe moverse al ritmo de su eslabón más lento.
+
+<Quiz
+  question="Durante una venta estrella, el primario de Postgres llega al 95 % de CPU por la contención de un solo evento. ¿Cuál es la mejor reacción inmediata?"
+  options={[
+    { text: 'Agregar réplicas de lectura y mandar ahí las reservas.', why: 'Las réplicas no aceptan escrituras y, si leyeras ahí el estado para decidir, volverías al bug de read-then-write con datos atrasados.' },
+    { text: 'Reducir la tasa de admisión de la sala de espera.', correct: true, why: 'Correcto. La sala de espera es tu válvula: bajar la tasa reduce la presión sobre el primario en segundos, sin cambiar el diseño en caliente ni arriesgar la corrección.' },
+    { text: 'Re-particionar el evento en varios shards por sección.', why: 'Re-particionar en plena venta es arriesgado y lento, y rompe las órdenes que mezclan secciones. Es una decisión de diseño previa, no una reacción.' },
+    { text: 'Desactivar la verificación en Postgres y confiar solo en Redis.', why: 'Cambias un problema de rendimiento por uno de corrección: dobles ventas en el peor momento posible.' },
+  ]}
+/>
+
+## Qué espera el entrevistador
+
+<Callout type="interview" title="La vara según el nivel">
+
+**Mid-level.** Un modelo de datos claro con tickets, bookings y estados; la API separada en reservar y confirmar; un diseño de alto nivel que funciona; y una solución correcta a la doble venta, aunque sea básica (estado `held` con expiración y una transacción con lock de fila). Que identifiques el read-then-write como el bug principal.
+
+**Senior.** Todo lo anterior y además: comparar pesimista, optimista y Redis con sus trade-offs; usar Redis como filtro y la base como garantía; resolver el hold que vence durante el pago; separar lectura (caché, CDN, Elasticsearch con CDC) de escritura; y proponer la sala de espera con una tasa de admisión justificada con números.
+
+**Staff.** Profundidad real en dos o tres áreas, sin que te las pidan. Por ejemplo: el modelo de fallas de Redis y por qué un lock con TTL no basta para corrección (fencing, índice único como defensa final); la sala de espera como válvula ajustable conectada a la latencia del PSP; admitir según inventario restante y comunicar "agotado" pronto; la estrategia antibots como un problema de producto y de seguridad, no solo técnico; y cómo probarías todo esto con pruebas de carga que simulen la distribución real de un pico.
+
+</Callout>
+
+<Takeaways>
+
+- Separa los tres problemas: lectura masiva (AP, caché agresiva), búsqueda (índice invertido con CDC) y reserva (CP, una sola fuente de verdad).
+- El bug a evitar es el read-then-write. Usa un UPDATE condicional o `SELECT … FOR UPDATE` en una transacción corta, nunca un lock que dure el pago.
+- Redis con `SET NX PX` es un excelente filtro de contención con expiración gratis, pero la corrección final la da la base: confirmación condicional e índice único.
+- La expiración implícita (`hold_expires_at < now()` cuenta como libre) hace que el sistema sea correcto aunque el job de limpieza se atrase.
+- Un pico de escritura sobre un solo evento no se escala: se dosifica. La sala de espera, con aleatorización en T0 y tasa de salida calculada, es tu válvula.
+- Diseña el borde "el hold venció mientras pagaba": extiende el hold al empezar el pago y reembolsa de forma idempotente si aun así pierdes el asiento.
+
+</Takeaways>
+
+## Fuentes y lecturas
+
+- [Hello Interview — Design a Ticket Booking Site Like Ticketmaster](https://www.hellointerview.com/learn/system-design/problem-breakdowns/ticketmaster): el desglose de referencia del problema, con niveles de expectativa por seniority.
+- [Ticketmaster — Taylor Swift | The Eras Tour Onsale Explained](https://business.ticketmaster.com/business-solutions/taylor-swift-the-eras-tour-onsale-explained/) (noviembre de 2022): las cifras del pico real.
+- [Queue-it — The comprehensive guide to virtual waiting rooms](https://queue-it.com/blog/virtual-waiting-room/): pre-cola, aleatorización, tasa de salida y tokens.
+- [Martin Kleppmann — How to do distributed locking](https://martin.kleppmann.com/2016/02/08/how-to-do-distributed-locking.html) (2016): locks de eficiencia contra locks de corrección, fencing tokens y las limitaciones de Redlock.
+- [Redis — SET](https://redis.io/docs/latest/commands/set/): las opciones NX, PX y el patrón de lock con liberación segura por script.
+- [PostgreSQL — Explicit Locking](https://www.postgresql.org/docs/current/explicit-locking.html) y [SELECT (cláusula de locking, SKIP LOCKED)](https://www.postgresql.org/docs/current/sql-select.html): locks de fila y sus modos.
+- Martin Kleppmann, [*Designing Data-Intensive Applications*](https://dataintensive.net/) (O'Reilly), capítulos 7 y 8: transacciones, *write skew* y los problemas de los sistemas distribuidos.

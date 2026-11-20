@@ -1,0 +1,178 @@
+/*
+  Apuntes — design tokens.
+  World: a university notebook of class notes. Squared paper, a red margin rule,
+  one coloured divider per unit (its colour is reused as that unit's highlighter),
+  printed serif for the notes and a handwritten hand for the annotations.
+  `--line` is "the colour of the current unit"; [data-line] scopes set it.
+*/
+
+:root {
+  color-scheme: light;
+
+  /* Ground & ink (warm paper, blue-black ink) */
+  --paper: oklch(97.6% 0.008 85);
+  --paper-2: oklch(95% 0.011 85);
+  --paper-3: oklch(91.5% 0.014 85);
+  --rule: oklch(86% 0.014 85);
+  --rule-strong: oklch(74% 0.016 85);
+  --ink: oklch(23% 0.022 265);
+  --ink-2: oklch(40% 0.02 265);
+  --ink-3: oklch(51% 0.018 265);
+  --card: oklch(99% 0.004 85);
+
+  /* Unit dividers / highlighters */
+  --l1: oklch(55% 0.2 28);        /* Arquitectura — red */
+  --l2: oklch(76% 0.155 78);      /* System Design — amber */
+  --l2-ink: oklch(50% 0.12 65);   /* amber is too light for text on paper */
+  --l3: oklch(47% 0.085 45);      /* Casos — sienna */
+  --l4: oklch(49% 0.16 258);      /* Patrones — blue */
+  --l5: oklch(53% 0.14 152);      /* IA — green */
+
+  /* Semantic */
+  --ok: oklch(52% 0.13 152);
+  --warn: oklch(58% 0.15 60);
+  --bad: oklch(53% 0.19 28);
+
+  /* The current line; pages override this */
+  --line: var(--ink);
+  --line-ink: var(--line);
+  --line-on: oklch(99% 0.004 85);
+  /* Mix ratios for the derived unit tints (see the scope rule at the end) */
+  --mix-tint: 9%;
+  --mix-tint-2: 16%;
+  --mix-hl: 30%;
+  --mix-hl-soft: 18%;
+
+  /* Notebook */
+  --grid: oklch(62% 0.05 240 / 0.16);
+  --grid-size: 24px;
+  --margin-rule: oklch(63% 0.16 20 / 0.55);
+  --pencil: oklch(45% 0.02 265);
+
+  /* Paper texture: fibre grain over the whole sheet, a soft shade at its edges and a
+     faint squared grid behind the page. Set --grain-opacity: 0 to turn the
+     grain off. */
+  --grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='240'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 .25  0 0 0 0 .2  0 0 0 0 .12  0 0 0 2.4 -1.05'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23g)'/%3E%3C/svg%3E");
+  --grain-opacity: 0.3;
+  /* the sheet darkens a touch towards its edges, like a page under a lamp */
+  --paper-shade: oklch(45% 0.04 70 / 0.07);
+  --grid-page: oklch(62% 0.05 240 / 0.075);
+
+  /* Type */
+  --font-read: 'Source Serif 4 Variable', 'Source Serif 4', Georgia, 'Times New Roman', serif;
+  --font-display: 'Source Serif 4 Variable', 'Source Serif 4', Georgia, serif;
+  --font-sign: 'Barlow Semi Condensed', 'Arial Narrow', system-ui, sans-serif;
+  --font-hand: 'Kalam', 'Segoe Print', 'Bradley Hand', cursive;
+  --font-code: 'JetBrains Mono Variable', 'JetBrains Mono', ui-monospace, 'Cascadia Code', Consolas, monospace;
+
+  --step--2: 0.75rem;
+  --step--1: 0.875rem;
+  --step-0: 1.0625rem;
+  --step-1: 1.25rem;
+  --step-2: 1.5rem;
+  --step-3: clamp(1.6rem, 1.35rem + 1vw, 2rem);
+  --step-4: clamp(2.1rem, 1.6rem + 2.2vw, 3.1rem);
+  --step-5: clamp(2.6rem, 1.8rem + 3.6vw, 4.6rem);
+
+  --measure: 68ch;
+
+  /* Space */
+  --s-1: 0.25rem;
+  --s-2: 0.5rem;
+  --s-3: 0.75rem;
+  --s-4: 1rem;
+  --s-5: 1.5rem;
+  --s-6: 2rem;
+  --s-7: 3rem;
+  --s-8: 4rem;
+  --s-9: 6rem;
+
+  --radius: 6px;
+  --radius-lg: 10px;
+  --shadow-1: 0 1px 2px oklch(23% 0.02 265 / 0.06), 0 2px 8px oklch(23% 0.02 265 / 0.05);
+  --shadow-2: 0 2px 6px oklch(23% 0.02 265 / 0.08), 0 12px 32px oklch(23% 0.02 265 / 0.12);
+
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+
+  --topbar-h: 56px;
+
+  /* Code */
+  --code-bg: oklch(95.4% 0.01 85);
+  --code-ink: oklch(27% 0.02 265);
+  --code-comment: oklch(52% 0.02 85);
+  --code-keyword: oklch(50% 0.17 330);
+  --code-string: oklch(47% 0.12 150);
+  --code-fn: oklch(47% 0.15 258);
+  --code-number: oklch(52% 0.15 45);
+  --code-type: oklch(47% 0.1 200);
+}
+
+/* Dark is the default; light applies only when chosen (data-theme='light'). */
+:root:not([data-theme='light']) {
+  color-scheme: dark;
+  --paper: oklch(18.5% 0.016 265);
+  --paper-2: oklch(22% 0.018 265);
+  --paper-3: oklch(26% 0.02 265);
+  --rule: oklch(31% 0.02 265);
+  --rule-strong: oklch(42% 0.02 265);
+  --ink: oklch(93% 0.012 85);
+  --ink-2: oklch(80% 0.012 85);
+  --ink-3: oklch(68% 0.012 85);
+  --card: oklch(21% 0.018 265);
+
+  --l1: oklch(68% 0.17 28);
+  --l2: oklch(80% 0.14 80);
+  --l2-ink: oklch(80% 0.14 80);
+  --l3: oklch(69% 0.08 50);
+  --l4: oklch(70% 0.13 255);
+  --l5: oklch(73% 0.14 152);
+
+  --ok: oklch(73% 0.14 152);
+  --warn: oklch(78% 0.14 70);
+  --bad: oklch(70% 0.16 28);
+
+  --line-on: oklch(17% 0.02 265);
+  --mix-tint: 12%;
+  --mix-tint-2: 22%;
+  --mix-hl: 34%;
+  --mix-hl-soft: 22%;
+  --grid: oklch(80% 0.03 240 / 0.07);
+  --margin-rule: oklch(66% 0.15 20 / 0.5);
+  --pencil: oklch(76% 0.015 85);
+  --grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='240'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 .92  0 0 0 0 .9  0 0 0 0 .86  0 0 0 2.4 -1.05'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23g)'/%3E%3C/svg%3E");
+  --grain-opacity: 0.17;
+  --paper-shade: oklch(5% 0.01 265 / 0.32);
+  --grid-page: oklch(80% 0.03 240 / 0.035);
+
+  --shadow-1: 0 1px 2px oklch(0% 0 0 / 0.3), 0 2px 8px oklch(0% 0 0 / 0.25);
+  --shadow-2: 0 2px 6px oklch(0% 0 0 / 0.35), 0 12px 32px oklch(0% 0 0 / 0.45);
+
+  --code-bg: oklch(21% 0.018 265);
+  --code-ink: oklch(90% 0.012 85);
+  --code-comment: oklch(63% 0.015 265);
+  --code-keyword: oklch(76% 0.13 330);
+  --code-string: oklch(78% 0.12 150);
+  --code-fn: oklch(78% 0.11 250);
+  --code-number: oklch(80% 0.12 60);
+  --code-type: oklch(80% 0.09 200);
+}
+
+/* Unit scopes: set the current unit colour */
+[data-line='arquitectura'] { --line: var(--l1); --line-ink: var(--l1); }
+[data-line='system-design'] { --line: var(--l2); --line-ink: var(--l2-ink); --line-on: oklch(22% 0.03 70); }
+[data-line='casos'] { --line: var(--l3); --line-ink: var(--l3); }
+[data-line='patrones'] { --line: var(--l4); --line-ink: var(--l4); }
+[data-line='ia'] { --line: var(--l5); --line-ink: var(--l5); }
+
+/*
+  Derived tints are declared wherever the unit colour can change, so they
+  follow --line instead of freezing at :root's value.
+*/
+:root,
+[data-line] {
+  --line-tint: color-mix(in oklab, var(--line) var(--mix-tint), var(--paper));
+  --line-tint-2: color-mix(in oklab, var(--line) var(--mix-tint-2), var(--paper));
+  --hl: color-mix(in oklab, var(--line) var(--mix-hl), transparent);
+  --hl-soft: color-mix(in oklab, var(--line) var(--mix-hl-soft), transparent);
+}

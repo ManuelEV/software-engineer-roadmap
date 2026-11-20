@@ -1,0 +1,163 @@
+.gith {
+  display: grid;
+  gap: var(--s-4);
+}
+@media (min-width: 900px) {
+  .gith {
+    grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr);
+    align-items: start;
+  }
+}
+.gith-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: 460px;
+}
+.gith-edge {
+  stroke-width: 2.5;
+  stroke-linecap: round;
+}
+.gith-edge.lane-main {
+  stroke: var(--ink-3);
+}
+.gith-edge.lane-feature {
+  stroke: var(--l2);
+}
+.gith-edge.is-new {
+  stroke: var(--line);
+}
+.gith-edge.is-ghost {
+  stroke: var(--rule-strong);
+  stroke-dasharray: 5 5;
+}
+.gith-dot {
+  stroke-width: 2.25;
+  transition:
+    fill 300ms var(--ease-out),
+    stroke 300ms var(--ease-out);
+}
+.gith-commit.lane-main .gith-dot {
+  fill: var(--card);
+  stroke: var(--ink-2);
+}
+.gith-commit.lane-feature .gith-dot {
+  fill: color-mix(in oklab, var(--l2) 16%, var(--card));
+  stroke: var(--l2);
+}
+.gith-commit.is-new .gith-dot {
+  fill: var(--line);
+  stroke: var(--line);
+}
+.gith-commit.is-ghost .gith-dot {
+  fill: var(--paper-2);
+  stroke: var(--rule-strong);
+  stroke-dasharray: 4 3;
+}
+.gith-tag {
+  font-family: var(--font-sign);
+  font-size: 14px;
+  font-weight: 700;
+  fill: var(--ink);
+}
+.gith-commit.is-new .gith-tag {
+  fill: var(--line-on);
+}
+.gith-hash {
+  font-family: var(--font-code);
+  font-size: 13px;
+  fill: var(--ink-2);
+}
+.gith-commit.is-new .gith-hash {
+  fill: var(--line-ink);
+  font-weight: 700;
+}
+.gith-commit.is-ghost .gith-hash {
+  text-decoration: line-through;
+  fill: var(--ink-3);
+}
+.gith-branch__box {
+  fill: var(--paper-3);
+  stroke: var(--rule-strong);
+  stroke-width: 1.5;
+}
+.gith-branch.br-main .gith-branch__box {
+  fill: var(--ink);
+  stroke: var(--ink);
+}
+.gith-branch__txt {
+  font-family: var(--font-code);
+  font-size: 13px;
+  font-weight: 700;
+  fill: var(--ink);
+}
+.gith-branch.br-main .gith-branch__txt {
+  fill: var(--paper);
+}
+
+.gith-side {
+  display: grid;
+  gap: var(--s-3);
+}
+.gith-box {
+  border: 1.5px solid var(--rule-strong);
+  border-radius: var(--radius-lg);
+  background: var(--card);
+  overflow: hidden;
+}
+.gith-box__title {
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--rule);
+  background: var(--paper-2);
+  font-family: var(--font-code);
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--ink-2);
+}
+.gith-pre {
+  margin: 0;
+  padding: 10px 12px;
+  background: transparent;
+  border: 0;
+  font-family: var(--font-code);
+  font-size: 0.84rem;
+  line-height: 1.6;
+  color: var(--ink);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.gith-log {
+  margin: 0;
+  padding: 8px 12px;
+  list-style: none;
+  font-size: 0.88rem;
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+.gith-log li {
+  padding: 1px 4px;
+  border-radius: 4px;
+  transition: background-color 250ms var(--ease-out);
+}
+.gith-log li.is-new {
+  background: var(--line-tint);
+  color: var(--ink);
+}
+.gith-mono {
+  font-family: var(--font-code);
+  font-size: 0.92em;
+}
+.gith-log__h {
+  color: var(--ink-3);
+}
+.gith-log li.is-new .gith-log__h {
+  color: var(--line-ink);
+  font-weight: 700;
+}
+.gith-warn {
+  padding: 8px 10px;
+  border: 1.5px solid var(--bad);
+  border-radius: var(--radius);
+  background: color-mix(in oklab, var(--bad) 10%, var(--card));
+  color: var(--ink);
+}

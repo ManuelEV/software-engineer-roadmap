@@ -1,0 +1,299 @@
+import { LoadBalancerSim } from '../../components/widgets/system-design/LoadBalancerSim'
+
+En cuanto tienes más de un servidor, alguien tiene que decidir a cuál va cada petición. Ese alguien es el *load balancer*: la puerta de entrada que reparte el tráfico, saca de la rotación a las máquinas enfermas y te deja agregar o quitar capacidad sin que el cliente se entere.
+
+En una entrevista lo dibujas en el primer minuto, casi por reflejo. Lo que distingue a un buen candidato no es dibujarlo, sino saber qué decisiones esconde esa caja: en qué capa trabaja, con qué algoritmo reparte, cómo se entera de que un servidor murió, qué pasa con las sesiones y cómo se balancea entre regiones. Este tema recorre esas decisiones.
+
+## Qué hace un balanceador (y qué no)
+
+Un balanceador tiene cuatro trabajos:
+
+1. **Repartir carga** entre varias réplicas de un servicio, para que ninguna se sature mientras otras están ociosas.
+2. **Detectar fallas** con *health checks* y dejar de mandar tráfico a las réplicas que no responden.
+3. **Ocultar la topología**: el cliente conoce una dirección estable (`api.tienda.com`), no las IP de cada máquina. Eso te permite hacer despliegues, escalar y reemplazar servidores sin coordinar con nadie.
+4. **Absorber trabajo transversal**: terminar TLS, comprimir, agregar cabeceras como `X-Forwarded-For`, aplicar límites o un WAF.
+
+Lo que **no** hace es darte alta disponibilidad por arte de magia. Si pones un solo balanceador delante de diez servidores, acabas de crear un nuevo punto único de falla. Las soluciones clásicas son un par activo-pasivo que comparte una IP flotante (con VRRP, por ejemplo, vía keepalived), o un servicio administrado que en realidad es una flota: un Application Load Balancer de AWS tiene un nodo por zona de disponibilidad, y el DNS del balanceador devuelve las IP de esos nodos con un TTL de 60 segundos para poder remapearlas rápido.<Sidenote>Según la documentación de Elastic Load Balancing, el ALB exige al menos dos zonas habilitadas justamente para que la caída de una no deje sin puerta al servicio.</Sidenote>
+
+<Callout type="idea">
+
+El balanceador es la razón por la que tus servicios deben ser **sin estado**. Si cualquier réplica puede atender cualquier petición, el balanceador puede usar el algoritmo más simple y sacar máquinas sin miedo. Lo vemos en detalle en el tema *Escalar de 1 a millones*.
+
+</Callout>
+
+## L4 vs L7: en qué capa decides
+
+La pregunta más importante sobre un balanceador es **cuánto de la petición mira** antes de decidir.
+
+Un balanceador de **capa 4** (transporte) trabaja con conexiones TCP o flujos UDP. Solo ve la tupla de origen y destino (IP, puerto, protocolo). Elige un servidor cuando se abre la conexión y desde ahí todos los paquetes de esa conexión van al mismo destino. No descifra TLS ni entiende HTTP. Por eso es rapidísimo, barato y sirve para cualquier protocolo: bases de datos, MQTT, juegos, lo que sea. El Network Load Balancer de AWS, por ejemplo, elige destino con un hash del flujo (protocolo, IP y puerto de origen y destino, número de secuencia TCP) y mantiene cada conexión TCP en un solo servidor durante toda su vida.
+
+Un balanceador de **capa 7** (aplicación) termina la conexión del cliente, descifra TLS, lee la petición HTTP y abre su propia conexión al servidor elegido. Como entiende el protocolo, puede enrutar por ruta (`/api/pedidos` a un servicio, `/img` a otro), por host, por cabecera o por cookie; reintentar una petición idempotente en otra réplica; balancear **petición por petición** en lugar de conexión por conexión; y agregar observabilidad (códigos de estado, latencia por ruta). El costo: más CPU, algo más de latencia, gestionar certificados y un componente más complejo en el camino crítico.
+
+<FlowDiagram
+  caption="Una arquitectura típica combina ambas capas: L4 en el borde, L7 detrás."
+  nodes={[
+    { id: 'c', label: 'Cliente', kind: 'client', x: 0, y: 1 },
+    { id: 'l4', label: 'Balanceador L4', kind: 'lb', x: 1, y: 1, sub: 'TCP · hash de flujo', desc: 'Ve IP y puertos. No descifra TLS. Elige destino por conexión.' },
+    { id: 'l7', label: 'Proxy L7', kind: 'gateway', x: 2, y: 1, sub: 'termina TLS', desc: 'Lee la petición HTTP: ruta, host, cabeceras. Elige destino por petición.' },
+    { id: 'ped', label: 'Pedidos', kind: 'service', x: 3, y: 0, sub: '/api/pedidos' },
+    { id: 'cat', label: 'Catálogo', kind: 'service', x: 3, y: 1, sub: '/api/productos' },
+    { id: 'img', label: 'Imágenes', kind: 'storage', x: 3, y: 2, sub: '/img/*' },
+  ]}
+  edges={[
+    { from: 'c', to: 'l4', label: 'TCP + TLS' },
+    { from: 'l4', to: 'l7' },
+    { from: 'l7', to: 'ped' },
+    { from: 'l7', to: 'cat' },
+    { from: 'l7', to: 'img' },
+  ]}
+  steps={[
+    { title: 'El cliente abre una conexión', body: 'El navegador resuelve api.tienda.com y abre TCP + TLS contra una IP del balanceador L4.', active: ['c', 'l4'], flow: ['c-l4'] },
+    { title: 'L4 elige sin mirar adentro', body: 'Con un hash de la tupla de la conexión elige uno de los proxies L7. Todos los paquetes de esa conexión irán al mismo proxy. Los bytes siguen cifrados.', active: ['l4', 'l7'], flow: ['l4-l7'] },
+    { title: 'L7 descifra y lee', body: <>El proxy termina TLS y lee <code>GET /api/pedidos/981</code>. Ahora sí puede decidir por ruta, cabecera o cookie.</>, active: ['l7'] },
+    { title: 'Enrutamiento por petición', body: 'Cada petición de la misma conexión puede ir a una réplica distinta. Pedidos va a su servicio, imágenes a almacenamiento de objetos.', active: ['l7', 'ped', 'img'], flow: ['l7-ped', 'l7-img'] },
+  ]}
+/>
+
+<Compare>
+<Option title="Capa 4" verdict="Rápido y universal">
+
+- Cualquier protocolo sobre TCP o UDP.
+- Muy alto rendimiento y poca latencia añadida.
+- Puede preservar la IP del cliente.
+- Ciego al contenido: no enruta por URL ni reintenta peticiones.
+- Balancea **conexiones**, no peticiones.
+
+</Option>
+<Option title="Capa 7" verdict="Inteligente y más caro">
+
+- Enruta por ruta, host, cabecera, cookie.
+- Balancea cada petición; reintentos, timeouts, *canary*.
+- Termina TLS: ve y registra todo.
+- Más CPU y más latencia por salto.
+- Debe gestionar certificados y entender cada protocolo.
+
+</Option>
+</Compare>
+
+### La trampa de las conexiones largas
+
+Balancear por conexión parece un detalle hasta que usas HTTP/2 o gRPC. Ambos multiplexan muchas peticiones sobre **una sola conexión** de larga duración. Un balanceador L4 asigna esa conexión a un servidor y ahí se queda: si un cliente muy activo abre una conexión, todas sus peticiones caen en la misma réplica, aunque haya diez libres. Lo mismo pasa después de un despliegue: las réplicas nuevas no reciben tráfico porque las conexiones viejas siguen pegadas a las antiguas.
+
+Las salidas son tres: un balanceador L7 que entienda HTTP/2 y reparta cada *stream*; balanceo del lado del cliente (el cliente gRPC conoce la lista de réplicas y elige por petición); o un *service mesh* con un proxy sidecar como Envoy que hace L7 junto a cada servicio. Para WebSockets la afinidad es inevitable, porque la conexión **es** la sesión; ahí lo que importa es repartir bien las conexiones nuevas y poder drenar las viejas.
+
+<Quiz
+  question="Tu servicio interno usa gRPC y lo pusiste detrás de un balanceador L4. Tras escalar de 4 a 12 réplicas, las 8 nuevas casi no reciben tráfico. ¿Qué está pasando?"
+  options={[
+    { text: 'Las réplicas nuevas fallan los health checks.', why: 'Podría pasar, pero el síntoma clásico aquí no requiere ninguna falla: el balanceador está funcionando como fue diseñado.' },
+    { text: 'gRPC multiplexa peticiones sobre conexiones HTTP/2 largas, y un L4 balancea conexiones, no peticiones: las conexiones existentes siguen pegadas a las réplicas viejas.', correct: true, why: 'Exacto. El L4 solo decide al abrir la conexión. Solución: balanceo L7 consciente de HTTP/2, balanceo del lado del cliente o un sidecar como Envoy; también ayuda limitar la edad máxima de las conexiones para forzar reconexiones.' },
+    { text: 'El algoritmo round robin no sirve con más de 4 servidores.', why: 'Round robin funciona con cualquier número de servidores. El problema es la unidad que se balancea (la conexión), no el algoritmo.' },
+    { text: 'Hace falta habilitar sticky sessions.', why: 'Las sticky sessions harían lo contrario: aumentarían la afinidad. El problema ya es exceso de afinidad.' },
+  ]}
+/>
+
+## Algoritmos: cómo elegir el servidor
+
+Hay dos familias. Los algoritmos **estáticos** deciden sin mirar el estado de los servidores; los **dinámicos** usan alguna señal de carga.
+
+**Estáticos:**
+
+- **Round robin**: uno para cada uno, en orden. Simple y justo si todos los servidores son iguales y todas las peticiones cuestan lo mismo. Es el algoritmo por defecto del ALB.
+- **Round robin ponderado**: cada servidor recibe tráfico en proporción a su peso. Útil con flotas heterogéneas (máquinas de distinto tamaño) o para *canary*: un 5 % del tráfico a la versión nueva.
+- **Aleatorio**: sorprendentemente bueno con muchas peticiones, y no necesita coordinación entre balanceadores.
+- **Hash** (de IP de origen, de un ID de usuario, de la URL): la misma clave siempre cae en el mismo servidor. Da afinidad sin cookies y mejora la tasa de aciertos de cachés locales. Con módulo N simple, cambiar el número de servidores remapea casi todas las claves; por eso se usa **hashing consistente** (Envoy ofrece *ring hash* y *Maglev*). Lo vemos a fondo en *Replicación y sharding*.
+
+**Dinámicos:**
+
+- **Menos conexiones** (*least connections*): elige el servidor con menos peticiones en curso. Se adapta solo a servidores lentos y a peticiones pesadas, porque un servidor atascado acumula conexiones y deja de ser elegido.
+- **Menor tiempo de respuesta / EWMA**: pondera la latencia reciente de cada servidor. Reacciona a degradaciones que el conteo de conexiones no ve.
+- **Power of two choices (P2C)**: toma **dos** servidores al azar y manda la petición al menos cargado de los dos. Parece una media tinta, pero no lo es.
+
+<LoadBalancerSim />
+
+Prueba esto en el simulador: con la flota **distinta** y round robin, el servidor de velocidad ½× recibe la misma cuota que los demás y su cola crece sin límite; la latencia p95 se dispara aunque los otros tres estén holgados. Cambia a **menos conexiones** o **P2C** y la cola se reparte sola. Luego prueba **hash de IP**: un cliente detrás de una NAT corporativa genera un tercio del tráfico, y su servidor se convierte en punto caliente.
+
+### Por qué P2C es el favorito de los proxies modernos
+
+*Least connections* necesita saber la carga de **todos** los servidores. Con un solo balanceador eso es barato, pero en un sistema real hay decenas de instancias del balanceador (o miles de clientes haciendo balanceo propio), cada una con una vista parcial y algo atrasada. Si todas eligen "el menos cargado" con la misma información vieja, todas mandan tráfico al mismo servidor a la vez: un **efecto manada**. Ese servidor se satura, todas huyen hacia el siguiente, y así.
+
+La aleatoriedad de P2C rompe la sincronización. Y el resultado teórico es notable: Michael Mitzenmacher demostró que pasar de una elección aleatoria a **dos** da una mejora exponencial en la cola esperada, mientras que pasar de dos a tres aporta mucho menos.<Sidenote>Mitzenmacher, *The Power of Two Choices in Randomized Load Balancing*, IEEE TPDS, 2001. El modelo es el del supermercado: cada cliente mira d cajas al azar y se forma en la más corta.</Sidenote> Envoy usa P2C por defecto en su balanceador *least request* cuando los pesos son iguales.
+
+<Callout type="interview" title="Qué decir sobre el algoritmo">
+
+No te quedes en "round robin". Una buena respuesta corta: "Para un servicio sin estado con réplicas iguales, round robin o P2C. Si las peticiones tienen costos muy distintos, como búsquedas o reportes, prefiero *least request* con P2C porque se adapta a réplicas lentas sin efecto manada. Si necesito afinidad para aprovechar una caché local, hashing consistente por clave". Menciona el trade-off: los algoritmos dinámicos necesitan señales de carga; los estáticos no reaccionan a nada.
+
+</Callout>
+
+## Health checks: saber quién está vivo
+
+El balanceador solo es útil si deja de mandar tráfico a los servidores que fallan. Para eso usa dos mecanismos complementarios:
+
+- **Health checks activos**: cada cierto intervalo, el balanceador pide un endpoint como `GET /health` a cada réplica. Tras N fallas consecutivas la saca de la rotación; tras M éxitos la vuelve a meter. En un ALB, los valores por defecto son un chequeo cada 30 segundos, 2 fallas para declarar un destino enfermo y 5 éxitos para devolverlo.
+- **Health checks pasivos** (*outlier detection*): el balanceador observa el tráfico real. Si una réplica devuelve muchos 5xx o *timeouts* seguidos, la expulsa temporalmente. Detecta fallas más rápido y detecta las que el endpoint de salud no ve.
+
+El tiempo de detección es, aproximadamente, `intervalo × umbral de fallas`. Con los valores por defecto del ALB, eso es alrededor de un minuto durante el cual una fracción del tráfico va a un servidor muerto. En el simulador, apaga un servidor y mira la columna de errores: crece hasta que el balanceador lo saca. Intervalos más cortos detectan antes, pero generan más tráfico de chequeo y más falsos positivos ante una pausa breve, como una recolección de basura larga.
+
+### Qué debe chequear el endpoint de salud
+
+Aquí está el error más caro. Es tentador hacer un *deep health check*: que `/health` verifique la base de datos, la caché y tres servicios más. Si la base de datos tiene un mal minuto, **todas** las réplicas fallan su chequeo a la vez y el balanceador las saca a todas: convertiste una degradación parcial en una caída total.
+
+La práctica recomendada es separar:
+
+- **Liveness**: "el proceso está vivo y puede atender". Barato, sin dependencias. Es lo que debe mirar el balanceador.
+- **Readiness**: "estoy listo para recibir tráfico" (terminé de arrancar, cargué la configuración, calenté la caché). Útil durante despliegues.
+
+Y protegerse del caso extremo. Los balanceadores serios tienen un modo **fail-open**: si todos los destinos están enfermos, el ALB manda tráfico a todos igualmente, asumiendo que el problema es el chequeo y no los servidores. Envoy tiene un *panic threshold* (50 % por defecto): si el porcentaje de réplicas sanas cae por debajo, ignora los health checks y reparte entre todas.
+
+### Drenaje y arranque lento
+
+Dos detalles operativos que suman puntos en una entrevista:
+
+- **Connection draining** (o *deregistration delay*): al sacar un servidor para un despliegue, el balanceador deja de mandarle peticiones nuevas pero espera a que terminen las que están en curso. Sin esto, cada despliegue corta peticiones a la mitad.
+- **Slow start**: una réplica recién arrancada tiene la caché fría y el JIT sin calentar. Si recibe su cuota completa de golpe, se ahoga. El arranque lento le sube el tráfico gradualmente.
+
+<Quiz
+  question="Tu endpoint /health consulta Postgres. Postgres tiene una pausa de 20 segundos por un failover. ¿Qué es lo más probable que pase?"
+  options={[
+    { text: 'Nada grave: las réplicas siguen atendiendo lo que no necesita la base de datos.', why: 'Eso pasaría si el health check no dependiera de Postgres. Como sí depende, todas las réplicas fallan el chequeo al mismo tiempo.' },
+    { text: 'Todas las réplicas fallan el chequeo a la vez y, si el balanceador no tiene fail-open o panic threshold, las saca todas: una caída total por una pausa parcial.', correct: true, why: 'Correcto. Un deep health check correlaciona la salud de todas las réplicas con una dependencia compartida. Usa liveness sin dependencias para el balanceador y reporta las dependencias por métricas y alertas.' },
+    { text: 'El balanceador reparte el tráfico hacia la réplica con Postgres más rápido.', why: 'Las réplicas comparten la misma base de datos; no hay "Postgres más rápido" por réplica.' },
+    { text: 'Las réplicas se reinician automáticamente y el problema desaparece.', why: 'Un balanceador no reinicia nada; solo saca destinos de la rotación. Un orquestador podría reiniciarlos si el liveness probe falla, lo que empeoraría las cosas.' },
+  ]}
+/>
+
+## Sesiones y sticky sessions
+
+Si tu aplicación guarda la sesión del usuario en memoria del servidor, la segunda petición tiene que llegar al mismo servidor que la primera. Los balanceadores lo resuelven con **sticky sessions**: una cookie que identifica la réplica (el ALB la genera por ti) o un hash de la IP del cliente.
+
+Funciona, pero cobra intereses:
+
+- **Desbalance**: los usuarios intensos quedan pegados a una réplica. Las IP compartidas (NAT corporativas, redes móviles con CGNAT) concentran a miles de usuarios en un solo servidor.
+- **Fragilidad**: si esa réplica muere, se pierden sus sesiones. Cada despliegue desconecta a alguien.
+- **Escalado lento**: las réplicas nuevas solo reciben sesiones nuevas; las viejas siguen saturadas.
+
+La alternativa estándar es hacer el servicio **sin estado**: la sesión vive en un almacén compartido (Redis, DynamoDB) o viaja con el cliente en un token firmado (por ejemplo, un JWT con expiración corta). Así cualquier réplica atiende cualquier petición.
+
+Hay casos donde la afinidad sí tiene sentido: conexiones persistentes (WebSockets, juegos en tiempo real), donde la conexión es la sesión; y servicios con **caché local** grande, donde enrutar por hash consistente de la clave hace que cada réplica caliente solo su parte de los datos y la tasa de aciertos suba mucho. Ahí la afinidad no es para guardar sesión, es para aprovechar memoria.
+
+## Balanceo global: DNS, GeoDNS y anycast
+
+Hasta aquí todo pasa dentro de una región. Pero si tienes usuarios en México y en Madrid, quieres que cada uno llegue a la región más cercana, y que una región caída no se lleve a todos sus usuarios con ella.
+
+**DNS** es la primera herramienta. El servidor DNS autoritativo devuelve IP distintas según quién pregunta: por geografía (*GeoDNS*), por latencia medida o por ponderación. Los servicios administrados como Route 53 hacen además health checks y dejan de devolver la IP de una región caída.
+
+El problema es la **caché del DNS**. Los resolvers y los clientes guardan la respuesta durante el TTL, y algunos lo ignoran y la guardan más tiempo. Un failover por DNS tarda, en la práctica, de segundos a varios minutos, y no puedes controlar del todo a los rezagados. Además, el DNS geográfico decide por la ubicación del **resolver**, que no siempre coincide con la del usuario.
+
+**Anycast** ataca el problema desde la red. Varias ubicaciones anuncian por BGP **la misma dirección IP**, y los routers de internet llevan cada paquete a la ubicación "más cercana" según la ruta BGP. Si una ubicación cae, deja de anunciar la ruta y el tráfico converge hacia otra, sin esperar cachés de DNS. Cloudflare, por ejemplo, sirve todo su tráfico por anycast y documentó cómo hacer que TCP funcione bien sobre anycast. La letra chica: "más cercano" en BGP significa menos saltos o mejor política de ruteo, no necesariamente menor latencia.
+
+<FlowDiagram
+  caption="Balanceo global: cada usuario llega a su región, y una región caída se drena hacia otra."
+  nodes={[
+    { id: 'mx', label: 'Usuario MX', kind: 'user', x: 0, y: 0 },
+    { id: 'es', label: 'Usuario ES', kind: 'user', x: 0, y: 2 },
+    { id: 'dns', label: 'DNS geo', kind: 'network', x: 1, y: 1, sub: 'TTL 60 s', desc: 'Devuelve la IP del balanceador más cercano y saca regiones que fallan sus health checks.' },
+    { id: 'lbA', label: 'LB us-east', kind: 'lb', x: 2, y: 0 },
+    { id: 'lbB', label: 'LB eu-west', kind: 'lb', x: 2, y: 2 },
+    { id: 'appA', label: 'App us-east', kind: 'service', x: 3, y: 0 },
+    { id: 'appB', label: 'App eu-west', kind: 'service', x: 3, y: 2 },
+  ]}
+  edges={[
+    { from: 'mx', to: 'dns', dashed: true },
+    { from: 'es', to: 'dns', dashed: true },
+    { from: 'mx', to: 'lbA' },
+    { from: 'es', to: 'lbB' },
+    { from: 'es', to: 'lbA', id: 'failover', dashed: true, label: 'failover' },
+    { from: 'lbA', to: 'appA' },
+    { from: 'lbB', to: 'appB' },
+  ]}
+  steps={[
+    { title: 'Resolución', body: 'Ambos usuarios preguntan por api.tienda.com. El DNS geográfico mira desde dónde viene la consulta (en realidad, la IP del resolver).', active: ['mx', 'es', 'dns'], flow: ['mx-dns', 'es-dns'] },
+    { title: 'Cada uno a su región', body: 'México recibe la IP de us-east y Madrid la de eu-west. Dentro de cada región, un balanceador local reparte entre réplicas.', active: ['mx', 'lbA', 'appA', 'es', 'lbB', 'appB'], flow: ['mx-lbA', 'lbA-appA', 'es-lbB', 'lbB-appB'] },
+    { title: 'Cae eu-west', body: 'Los health checks del DNS fallan para eu-west y deja de devolver esa IP. Pero los clientes que ya la tenían en caché siguen intentando hasta que vence el TTL (o más, si el resolver lo ignora).', active: ['dns', 'lbB'] },
+    { title: 'Failover', body: 'Las nuevas resoluciones de Madrid apuntan a us-east, con más latencia pero servicio. us-east debe tener capacidad de sobra para absorberlo: si no, el failover tumba también a la segunda región.', active: ['es', 'lbA', 'appA'], flow: ['failover', 'lbA-appA'] },
+  ]}
+/>
+
+### Las capas de un frontend a escala
+
+Los sistemas grandes apilan varias capas de balanceo, cada una con una responsabilidad:
+
+<Steps>
+<Step title="DNS o anycast">
+
+Lleva al usuario al punto de presencia o región adecuada.
+
+</Step>
+<Step title="Balanceo L4 en el borde">
+
+Los routers reparten paquetes entre una flota de balanceadores con ECMP (*equal-cost multi-path*). Cada balanceador elige un backend con hashing consistente y seguimiento de conexiones, para que una conexión TCP no cambie de destino si se agrega o quita una máquina. Así funcionan Maglev de Google (en producción desde 2008) y Unimog de Cloudflare.
+
+</Step>
+<Step title="Proxies L7">
+
+Terminan TLS, aplican reglas por ruta, autenticación, límites de tasa y reintentos. Aquí vive el API gateway.
+
+</Step>
+<Step title="Balanceo interno (este-oeste)">
+
+Entre microservicios: balanceo del lado del cliente o un *service mesh* con sidecars, usando *least request* o P2C y descubrimiento de servicios.
+
+</Step>
+</Steps>
+
+Fíjate en el patrón: cuanto más cerca del borde, más simple y rápido (L4, sin estado, hash). Cuanto más adentro, más inteligente (L7, por petición, con señales de carga).
+
+<Quiz
+  question="Quieres que una región caída deje de recibir tráfico en segundos, no en minutos. ¿Qué opción ataca mejor el problema?"
+  options={[
+    { text: 'Bajar el TTL del DNS a 1 segundo.', why: 'Ayuda algo, pero muchos resolvers y clientes imponen un mínimo o ignoran el TTL, y multiplicas la carga del DNS. No te da garantías.' },
+    { text: 'Anycast: la misma IP anunciada desde varias regiones, de modo que la región caída retira su ruta BGP y el tráfico converge a otra sin depender de cachés de DNS.', correct: true, why: 'Correcto. El failover ocurre en la capa de red. El trade-off: más complejidad de red y poco control fino sobre a dónde va cada usuario.' },
+    { text: 'Sticky sessions con cookie de región.', why: 'La afinidad mantendría a los usuarios pegados a la región caída: lo opuesto a lo que buscas.' },
+    { text: 'Un balanceador L7 más grande en la región principal.', why: 'Un balanceador regional no ayuda si la región entera está caída; además es un punto único de falla global.' },
+  ]}
+/>
+
+## Cómo usarlo en la entrevista
+
+En la mayoría de los diseños, el balanceador ocupa una línea: "cliente, balanceador, servicio sin estado con varias réplicas". Está bien; no gastes cinco minutos ahí si nadie lo pide. Pero ten listas las profundizaciones, porque el entrevistador puede tirar del hilo.
+
+<Callout type="interview" title="Frases que muestran criterio">
+
+- "Pongo un balanceador L7 administrado delante del servicio; termina TLS y enruta por ruta. Los servicios son sin estado, así que no necesito sticky sessions; la sesión vive en Redis."
+- "El health check es de liveness, sin dependencias, para no sacar todas las réplicas si la base de datos tiene un problema."
+- "Para conexiones WebSocket uso un L4 o un L7 que soporte upgrade, y repartimos por número de conexiones; al desplegar, drenamos conexiones gradualmente para no reconectar a todos a la vez."
+- "Para multi-región, DNS por latencia con health checks, y cada región dimensionada para absorber el tráfico de la otra si falla."
+
+</Callout>
+
+Errores frecuentes que conviene evitar:
+
+- Dibujar un solo balanceador y declarar el sistema "altamente disponible".
+- Usar sticky sessions para tapar un servicio con estado sin mencionar el costo.
+- Olvidar que el balanceador agrega un salto: en sistemas de baja latencia, a veces se prefiere balanceo del lado del cliente.
+- Proponer DNS como mecanismo de failover rápido sin hablar del TTL.
+- Asumir que el balanceador resuelve la sobrecarga: si toda la flota está saturada, repartir mejor no crea capacidad. Ahí entran el *load shedding* y los límites de tasa que vemos en *Confiabilidad*.
+
+<Takeaways>
+
+- Un balanceador reparte carga, detecta fallas, oculta la topología y absorbe trabajo transversal como TLS. Debe ser redundante él mismo.
+- L4 balancea conexiones y es rápido y universal; L7 entiende HTTP, balancea peticiones y enruta por contenido. Con HTTP/2, gRPC o WebSockets, la diferencia importa mucho.
+- Round robin sirve para réplicas iguales y peticiones parejas; *least request* con *power of two choices* se adapta a réplicas lentas sin efecto manada; hashing consistente da afinidad útil para cachés.
+- Los health checks del balanceador deben ser de liveness, sin dependencias compartidas, y con fail-open o panic threshold para no convertir una degradación en caída total.
+- Las sticky sessions son un parche con costos; prefiere servicios sin estado con la sesión en un almacén externo o en un token.
+- El balanceo global combina DNS (simple, pero lento por las cachés) y anycast (failover en la red); cada región debe poder absorber el tráfico de otra.
+
+</Takeaways>
+
+## Fuentes y lecturas
+
+- [How Elastic Load Balancing works](https://docs.aws.amazon.com/elasticloadbalancing/latest/userguide/how-elastic-load-balancing-works.html), AWS: nodos por zona, TTL del DNS, algoritmos del ALB y del NLB.
+- [Health checks for Application Load Balancer target groups](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/target-group-health-checks.html), AWS: valores por defecto y comportamiento fail-open.
+- [Supported load balancers](https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/upstream/load_balancing/load_balancers), Envoy: round robin ponderado, least request con P2C, ring hash y Maglev.
+- [Panic threshold](https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/upstream/load_balancing/panic_threshold), Envoy.
+- Michael Mitzenmacher, [The Power of Two Choices in Randomized Load Balancing](https://www.eecs.harvard.edu/~michaelm/postscripts/tpds2001.pdf), IEEE TPDS, 2001.
+- Eisenbud et al., [Maglev: A Fast and Reliable Software Network Load Balancer](https://research.google/pubs/pub44824/), NSDI 2016.
+- David Wragg, [Unimog: Cloudflare's edge load balancer](https://blog.cloudflare.com/unimog-cloudflares-edge-load-balancer/), Cloudflare Blog, 2020.
+- [Load Balancing without Load Balancers](https://blog.cloudflare.com/cloudflares-architecture-eliminating-single-p/), Cloudflare Blog: anycast como mecanismo de balanceo.
+- Google SRE Book, [Load Balancing at the Frontend](https://sre.google/sre-book/load-balancing-frontend/) y [Load Balancing in the Datacenter](https://sre.google/sre-book/load-balancing-datacenter/).
+- [ngx_http_upstream_module](https://nginx.org/en/docs/http/ngx_http_upstream_module.html), documentación de NGINX: `least_conn`, `ip_hash`, `hash ... consistent`.
+

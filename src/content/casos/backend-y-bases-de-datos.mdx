@@ -1,0 +1,654 @@
+import { QuestionDeck } from '../../components/widgets/entrevistas/QuestionDeck'
+import { JoinExplorer } from '../../components/widgets/entrevistas/JoinExplorer'
+import { IndexLookup } from '../../components/widgets/entrevistas/IndexLookup'
+
+En una entrevista para backend o full stack, después de la ronda de algoritmos casi siempre viene una conversación más suelta: "¿qué diferencia hay entre 401 y 403?", "¿sesiones o JWT?", "¿por qué esta consulta es lenta?", "escríbeme un SQL que traiga el segundo sueldo más alto". No hay un problema que resolver en 45 minutos, sino una ráfaga de preguntas cortas donde se nota enseguida quién trabajó con estas herramientas y quién solo leyó sobre ellas.
+
+La [unidad de system design](/system-design/apis) ya cubre a fondo las APIs, las [bases de datos](/system-design/bases-de-datos) y la [consistencia](/system-design/consistencia). Este tema no las repite: las aterriza en el formato pregunta-respuesta, con la respuesta que puedes decir en medio minuto, los matices que separan un semi senior de un senior y el SQL que te pueden pedir escribir en vivo.
+
+<Sketch
+  width={640}
+  height={290}
+  caption="El mapa del tema: cada capa del viaje de una petición tiene sus preguntas clásicas, y cada una se responde en medio minuto con un matiz."
+  items={[
+    { type: 'box', x: 24, y: 110, w: 140, h: 56, label: 'navegador', size: 22 },
+    { type: 'arrow', from: [168, 138], to: [236, 138], label: 'HTTP', labelAt: [202, 126] },
+    { type: 'box', x: 240, y: 110, w: 140, h: 56, label: 'tu API', size: 22, tone: 'line', fill: true },
+    { type: 'arrow', from: [384, 138], to: [452, 138], label: 'SQL', labelAt: [418, 126] },
+    { type: 'box', x: 456, y: 110, w: 160, h: 56, label: 'base de datos', size: 22 },
+    { type: 'text', x: 94, y: 56, text: ['¿URL → página?', '¿CORS?'], size: 18, anchor: 'middle', tone: 'pencil' },
+    { type: 'text', x: 310, y: 56, text: ['¿401 o 403?', '¿sesión o JWT?'], size: 18, anchor: 'middle', tone: 'pencil' },
+    { type: 'text', x: 536, y: 56, text: ['¿índice?', '¿aislamiento?'], size: 18, anchor: 'middle', tone: 'pencil' },
+    { type: 'text', x: 310, y: 200, text: '¿N+1?', size: 20, anchor: 'middle', tone: 'bad' },
+    { type: 'text', x: 536, y: 200, text: ['JOIN, GROUP BY,', 'ventanas'], size: 18, anchor: 'middle', tone: 'pencil' },
+    { type: 'highlight', x: 120, y: 252, w: 400, h: 28 },
+    { type: 'text', x: 320, y: 274, text: 'cada respuesta: 30 segundos y un matiz', size: 20, anchor: 'middle', tone: 'line', with: true },
+  ]}
+/>
+
+## HTTP: lo que preguntan siempre
+
+### Métodos, seguridad e idempotencia
+
+Dos propiedades definen a cada método en el RFC 9110 y son la base de casi todas las preguntas:
+
+- **Seguro**: no cambia el estado del servidor. `GET`, `HEAD` y `OPTIONS`.
+- **Idempotente**: hacerlo una vez o diez deja el servidor en el mismo estado. Todos los seguros, más `PUT` y `DELETE`.
+
+`POST` no es ni seguro ni idempotente, y `PATCH` no está garantizado (un `PATCH` que dice "suma 1 al stock" no lo es; uno que dice "pon el email en x" sí). La consecuencia práctica, que es lo que el entrevistador quiere oír: **lo idempotente se puede reintentar sin miedo** tras un timeout; un `POST /pagos` reintentado puede cobrar dos veces, y se protege con una clave de idempotencia (está explicado en [APIs y tiempo real](/system-design/apis)).
+
+<Callout type="tip" title="La trampa del DELETE">
+
+"Si `DELETE` es idempotente, ¿por qué la segunda llamada devuelve 404?". Porque idempotencia habla del **estado del servidor**, no de la respuesta. Después de una o diez llamadas, el pedido 123 sigue borrado. La respuesta puede variar.
+
+</Callout>
+
+### Los códigos de estado que más se preguntan
+
+No te van a pedir la lista completa. Te van a pedir **la diferencia entre dos parecidos**:
+
+| Pareja | La diferencia |
+| --- | --- |
+| `401` contra `403` | `401 Unauthorized` es "no sé quién eres" (falta el token o es inválido); `403 Forbidden` es "sé quién eres y no tienes permiso". El nombre de 401 es un error histórico: debería decir *unauthenticated*. |
+| `400` contra `422` | `400`: la petición está mal formada (JSON roto). `422`: se entendió pero no es válida para el negocio (la fecha de entrega es anterior a hoy). |
+| `404` contra `410` | `410 Gone`: existió y se borró a propósito. Útil para links expirados. |
+| `409` | Conflicto con el estado actual: un username ya tomado, o una versión vieja en control optimista. |
+| `429` | Demasiadas peticiones; va con `Retry-After`. |
+| `500`, `502`, `503`, `504` | `500`: error del propio servidor. `502`: un proxy recibió una respuesta inválida del backend. `503`: no disponible (sobrecarga, mantenimiento). `504`: el proxy se cansó de esperar al backend. |
+| `301`, `302`, `304` | Redirección permanente (cacheable), temporal y "no cambió, usa tu copia" (respuesta a un `GET` condicional con `If-None-Match`). |
+
+### ¿Qué pasa cuando escribes una URL y presionas Enter?
+
+Es la pregunta abierta más clásica del área. Sirve para ver hasta dónde llega tu conocimiento de la pila, y la regla es: recorre todas las capas en orden, y profundiza donde el entrevistador muestre interés.
+
+<FlowDiagram
+  caption="De la barra de direcciones a la página pintada. Recorre los pasos."
+  nodes={[
+    { id: 'u', label: 'Navegador', kind: 'client', x: 0, y: 1 },
+    { id: 'dns', label: 'DNS', kind: 'network', x: 1, y: 0, sub: 'resolver recursivo' },
+    { id: 'lb', label: 'Load balancer', kind: 'lb', x: 2, y: 1, sub: 'termina TLS' },
+    { id: 'app', label: 'Servidor', kind: 'service', x: 3, y: 1, sub: 'tu aplicación' },
+    { id: 'db', label: 'Base de datos', kind: 'db', x: 4, y: 1 },
+    { id: 'cdn', label: 'CDN', kind: 'cdn', x: 2, y: 2.2, sub: 'CSS, JS, imágenes' },
+  ]}
+  edges={[
+    { from: 'u', to: 'dns', label: 'tienda.com?' },
+    { from: 'u', to: 'lb', label: 'GET /' },
+    { from: 'lb', to: 'app' },
+    { from: 'app', to: 'db' },
+    { from: 'u', to: 'cdn', dashed: true },
+  ]}
+  steps={[
+    { title: 'Interpretar la URL', body: <>El navegador separa esquema, dominio y ruta. Si escribiste solo texto, decide si es una búsqueda. Revisa su caché y la lista HSTS, que puede obligarlo a usar <code>https</code> aunque escribas <code>http</code>.</>, active: ['u'] },
+    { title: 'Resolver el nombre (DNS)', body: <>Busca la IP en la caché del navegador, del sistema operativo y del resolver recursivo (el de tu proveedor o 8.8.8.8). Si nadie la tiene, el resolver pregunta a los servidores raíz, luego a los de <code>.com</code> y luego al autoritativo del dominio. Cada respuesta trae un TTL.</>, active: ['u', 'dns'], flow: ['u-dns'] },
+    { title: 'Conectar: TCP y TLS', body: <>Abre una conexión TCP (handshake de tres pasos) y negocia TLS: el servidor presenta su certificado, el navegador verifica la cadena y acuerdan claves. Con TLS 1.3 es un viaje de ida y vuelta. HTTP/3 usa QUIC sobre UDP y combina ambos pasos.</>, active: ['u', 'lb'], flow: ['u-lb'] },
+    { title: 'Enviar la petición HTTP', body: <>Manda <code>GET /</code> con headers (<code>Host</code>, cookies, <code>Accept-Encoding</code>). El load balancer termina TLS y elige una instancia sana.</>, active: ['lb', 'app'], flow: ['lb-app'] },
+    { title: 'El servidor arma la respuesta', body: <>La aplicación autentica, consulta la base de datos o la caché y devuelve <code>200 OK</code> con el HTML, comprimido y con headers de caché.</>, active: ['app', 'db'], flow: ['app-db'] },
+    { title: 'Renderizar', body: <>El navegador parsea el HTML y construye el DOM, descubre CSS, JS e imágenes y los pide (muchas veces a una CDN, reutilizando conexiones con HTTP/2). Arma el CSSOM, ejecuta scripts, calcula el layout y pinta.</>, active: ['u', 'cdn'], flow: ['u-cdn'] },
+  ]}
+/>
+
+<Callout type="interview" title="Lo que el entrevistador está evaluando aquí">
+
+Que tengas el **mapa completo** (DNS, TCP, TLS, HTTP, servidor, render) sin saltarte capas, y que sepas bajar a detalle en al menos una. Un buen cierre: "puedo profundizar en DNS, en el handshake de TLS o en el pipeline de render, ¿cuál te interesa?". Eso convierte un monólogo en una conversación y te deja elegir terreno firme.
+
+</Callout>
+
+## REST, GraphQL y gRPC en una respuesta
+
+La comparación completa está en [APIs y tiempo real](/system-design/apis). En una entrevista conceptual alcanza con el criterio:
+
+> "REST cuando no controlo al cliente: es HTTP estándar, se cachea en CDN y lo entiende cualquiera. gRPC entre servicios internos que controlo, por los contratos tipados en protobuf, el binario compacto, HTTP/2 y los *deadlines*. GraphQL cuando muchos clientes (web, iOS, Android) necesitan formas distintas de los mismos datos y el problema es la cantidad de idas y vueltas. Su costo es que la caché HTTP casi no ayuda y que hay que cuidar el N+1 en los resolvers y el costo de cada consulta."
+
+## Autenticación, sesiones, JWT y OAuth
+
+**Autenticación** es verificar quién eres (usuario y contraseña, un token, una passkey). **Autorización** es decidir qué puedes hacer (roles, permisos, dueño del recurso). Fallar la primera es un `401`; fallar la segunda, un `403`. Parece trivial, pero los bugs de seguridad más comunes en APIs son de autorización: un endpoint que verifica que estás logueado pero no que el pedido 123 sea tuyo. OWASP lo pone primero en su lista de riesgos de APIs (*Broken Object Level Authorization*).
+
+### Sesiones contra JWT
+
+<Compare>
+<Option title="Sesión en el servidor" verdict="Fácil de revocar">
+
+El servidor guarda la sesión (en Redis o en la base) y el navegador solo tiene un ID opaco en una cookie `HttpOnly`, `Secure` y `SameSite`. Cerrar sesión es borrar una fila: efecto inmediato. El costo: cada petición consulta el almacén de sesiones, que pasa a ser una dependencia compartida.
+
+</Option>
+<Option title="JWT" verdict="Verificación sin estado">
+
+Un token firmado con tres partes en base64url: header, payload (*claims* como `sub` y `exp`) y firma. Cualquier servicio con la clave puede verificarlo **sin consultar a nadie**. El costo: es válido hasta que expira. Revocarlo antes no es gratis.
+
+</Option>
+</Compare>
+
+Dos aclaraciones que separan respuestas: un JWT firmado **no está cifrado** (cualquiera lee el payload decodificando base64, así que nada de datos sensibles adentro), y "sesión contra JWT" no es "cookie contra header": un JWT también puede viajar en una cookie `HttpOnly`, que lo protege del robo por XSS mejor que `localStorage`.
+
+### El problema de revocar un JWT
+
+Si el JWT se verifica sin consultar a nadie, ¿cómo cierras la sesión de un usuario al que le robaron el token? No hay una respuesta gratis; hay tres herramientas que se combinan:
+
+<Sketch
+  width={640}
+  height={270}
+  caption="Por qué un JWT robado sigue sirviendo: el servidor no consulta a nadie, así que revocar solo corta el refresh. El access token vive hasta su exp."
+  items={[
+    { type: 'text', x: 24, y: 34, text: 'un access token de 15 minutos', size: 20, tone: 'pencil' },
+    { type: 'arrow', from: [30, 170], to: [616, 170] },
+    { type: 'box', x: 60, y: 120, w: 300, h: 40, label: 'access token', size: 20, tone: 'line' },
+    { type: 'text', x: 60, y: 200, text: 'login', size: 18, anchor: 'middle', tone: 'pencil' },
+    { type: 'text', x: 170, y: 80, text: 'lo roban', size: 20, anchor: 'middle', tone: 'bad' },
+    { type: 'cross', x: 170, y: 100, size: 20 },
+    { type: 'line', points: [[282, 96], [282, 184]], dashed: true, tone: 'ok' },
+    { type: 'text', x: 282, y: 214, text: 'revocas', size: 20, anchor: 'middle', tone: 'ok' },
+    { type: 'highlight', x: 284, y: 122, w: 76, h: 36, tone: 'bad' },
+    { type: 'text', x: 322, y: 250, text: 'ventana de riesgo', size: 18, anchor: 'middle', tone: 'bad', with: true },
+    { type: 'text', x: 400, y: 112, text: ['el refresh ya no', 'sirve: fin'], size: 18, tone: 'pencil' },
+    { type: 'check', x: 590, y: 120, size: 24 },
+  ]}
+/>
+
+1. **Access tokens de vida corta** (por ejemplo, 5 a 15 minutos) más **refresh tokens** guardados en el servidor. Revocar es invalidar el refresh token: el access token muere solo en minutos.
+2. **Rotación de refresh tokens**: cada uso entrega uno nuevo e invalida el anterior. Si alguien reutiliza uno viejo, es señal de robo y se revoca toda la familia.
+3. **Lista de revocación** por `jti` (el ID del token) o una "versión de sesión" por usuario que se compara en cada petición. Funciona, pero reintroduce una consulta de estado, que era justo lo que el JWT evitaba.
+
+<Callout type="example" title="Respuesta modelo (40 segundos)">
+
+"Uso sesiones en el servidor para una app web clásica con un solo backend: son simples y se revocan al instante. Uso JWT cuando varios servicios necesitan verificar identidad sin llamar a un servicio central. El problema del JWT es la revocación: es válido hasta su `exp`. Lo mitigo con access tokens de pocos minutos y refresh tokens rotativos guardados en el servidor, que sí puedo revocar. Y nunca pongo datos sensibles en el payload, porque está firmado, no cifrado."
+
+</Callout>
+
+### OAuth 2.0 a grandes rasgos
+
+OAuth 2.0 (RFC 6749) resuelve **autorización delegada**: que una aplicación acceda a tus datos en otro servicio sin que le des tu contraseña. "Permitir que esta app lea tu calendario de Google" es OAuth. Los roles: el **usuario** (dueño del recurso), el **cliente** (la app), el **servidor de autorización** (Google) y el **servidor de recursos** (la API de Calendar).
+
+El flujo recomendado para apps web y móviles es *authorization code* con PKCE:
+
+<Steps>
+<Step title="Redirigir al servidor de autorización">
+
+La app manda al usuario a Google con su `client_id`, los `scope` que pide (`calendar.readonly`) y un desafío PKCE derivado de un secreto que solo ella conoce.
+
+</Step>
+<Step title="El usuario se autentica y consiente">
+
+Google muestra "esta app quiere leer tu calendario". El usuario acepta. Google redirige de vuelta a la app con un **código** de un solo uso.
+
+</Step>
+<Step title="Canjear el código por tokens">
+
+La app, desde su backend, cambia el código por un access token (y un refresh token), presentando el secreto PKCE original. Un atacante que intercepte el código no puede canjearlo.
+
+</Step>
+<Step title="Llamar a la API">
+
+La app usa el access token en `Authorization: Bearer ...` contra la API de Calendar, que solo permite lo que dicen los scopes.
+
+</Step>
+</Steps>
+
+El matiz que más se pregunta: **OAuth no es autenticación**. Un access token dice "esta app puede leer el calendario", no "este usuario es Ana". El "Iniciar sesión con Google" es **OpenID Connect**, una capa sobre OAuth que agrega un *ID token* (un JWT con la identidad del usuario).
+
+### CORS
+
+El navegador aplica la **política del mismo origen**: un script cargado desde `app.tienda.com` no puede leer respuestas de `api.tienda.com` (otro origen: cambia el host). CORS es el mecanismo para que el **servidor** declare qué orígenes sí pueden: responde con `Access-Control-Allow-Origin: https://app.tienda.com`. Para peticiones "no simples" (un `PUT`, un `Content-Type: application/json`, un header `Authorization`), el navegador manda antes una petición `OPTIONS` de verificación previa (*preflight*).
+
+Tres ideas que demuestran que lo entiendes:
+
+- **CORS lo aplica el navegador, no el servidor.** Por eso la misma petición funciona en Postman o con `curl` y falla en el frontend. El servidor siempre responde; es el navegador el que no le entrega la respuesta a tu script.
+- **CORS no protege tu API.** Cualquiera puede llamarla desde fuera de un navegador. Lo que protege es la autenticación y la autorización.
+- **Con credenciales no vale el comodín.** Si envías cookies (`credentials: 'include'`), el servidor debe nombrar el origen exacto y responder `Access-Control-Allow-Credentials: true`; `*` no se acepta.
+
+<Quiz
+  question="Tu frontend en app.tienda.com llama a api.tienda.com y la consola muestra un error de CORS. Desde Postman la misma petición responde 200. ¿Qué está pasando?"
+  options={[
+    { text: 'La API está caída para el navegador y hay que reiniciarla.', why: 'La API respondió (Postman lo demuestra). El navegador recibe la respuesta pero no se la entrega al script porque faltan los headers de CORS.' },
+    { text: 'El navegador aplica la política del mismo origen; la API debe responder con Access-Control-Allow-Origin para app.tienda.com (y atender el preflight OPTIONS si la petición no es simple).', correct: true, why: 'Correcto. CORS es un acuerdo entre el navegador y el servidor. Postman no es un navegador y no aplica la política, por eso funciona.' },
+    { text: 'Hay que desactivar CORS en el navegador del usuario.', why: 'No puedes pedirles eso a tus usuarios, y desactivarlo eliminaría una protección del navegador. La solución está en los headers del servidor.' },
+    { text: 'Hay que poner Access-Control-Allow-Origin: * y listo, aunque la API use cookies de sesión.', why: 'Con credenciales el navegador rechaza el comodín: hay que nombrar el origen exacto y agregar Access-Control-Allow-Credentials: true.' },
+  ]}
+/>
+
+## SQL contra NoSQL
+
+La respuesta de diez segundos es "relacional para datos con relaciones y transacciones; NoSQL para escalar". La de un senior es otra, porque "NoSQL" agrupa familias muy distintas (documentos, clave-valor, columnas anchas, grafos) y porque las bases relacionales también escalan bastante más de lo que la gente cree. El método completo está en [Bases de datos](/system-design/bases-de-datos).
+
+> "Empiezo por los patrones de acceso: qué consultas hace el sistema y con qué volumen. Si hay relaciones, consultas variadas y necesito transacciones, voy a Postgres, que además cubre JSON y búsqueda básica. Cambio a algo especializado con una razón concreta: un almacén clave-valor como DynamoDB cuando el acceso es siempre por clave y el volumen de escritura no cabe en un nodo, documentos cuando el agregado se lee y escribe completo, columnas anchas para series de tiempo enormes. El costo de salir de SQL suele ser perder JOINs y transacciones entre entidades, que ahora resuelve la aplicación."
+
+## Índices
+
+### Cómo funciona uno
+
+<Sketch
+  width={640}
+  height={290}
+  caption="Sin índice, la base lee fila por fila. Con un B-tree baja unos pocos niveles de un árbol muy ancho y llega directo a la hoja."
+  items={[
+    { type: 'text', x: 24, y: 34, text: 'sin índice', size: 22, tone: 'pencil' },
+    { type: 'cells', x: 24, y: 110, values: [70, 12, 95, 41, 8, 63], size: 40 },
+    { type: 'arrow', from: [30, 96], to: [258, 96], bend: -24, tone: 'bad', label: 'una por una', labelAt: [144, 66] },
+    { type: 'text', x: 24, y: 196, text: 'Seq Scan: n filas', size: 20, tone: 'bad' },
+    { type: 'line', points: [[296, 24], [296, 270]], dashed: true, tone: 'muted' },
+    { type: 'text', x: 320, y: 34, text: 'B-tree: buscar 70', size: 22, tone: 'line' },
+    { type: 'box', x: 420, y: 52, w: 120, h: 40, label: '40 | 80', font: 'code', size: 20 },
+    { type: 'arrow', from: [440, 94], to: [368, 128], tone: 'muted' },
+    { type: 'arrow', from: [480, 94], to: [480, 128], tone: 'line' },
+    { type: 'arrow', from: [520, 94], to: [588, 128], tone: 'muted', with: true },
+    { type: 'box', x: 322, y: 130, w: 92, h: 38, label: '10 20', font: 'code', size: 18 },
+    { type: 'box', x: 434, y: 130, w: 92, h: 38, label: '50 70', font: 'code', size: 18, tone: 'line', fill: true },
+    { type: 'box', x: 546, y: 130, w: 84, h: 38, label: '90 95', font: 'code', size: 18 },
+    { type: 'text', x: 320, y: 214, text: ['pocos niveles, cientos de', 'claves por nodo: O(log n)'], size: 19, tone: 'pencil' },
+    { type: 'check', x: 600, y: 240, size: 24 },
+  ]}
+/>
+
+Un índice es una estructura **ordenada** aparte de la tabla, casi siempre un B-tree (B+ tree, en realidad): un árbol muy ancho y poco profundo donde las hojas guardan los valores de la columna en orden, cada uno con un puntero a su fila. Buscar es bajar unos pocos niveles; con cientos de claves por nodo, tres o cuatro niveles alcanzan para millones de filas. Por estar ordenado, sirve para igualdades, rangos (`BETWEEN`, `>`), `ORDER BY` y prefijos (`LIKE 'abc%'`).
+
+El costo: **cada escritura actualiza cada índice** de la tabla, y cada índice ocupa espacio y memoria. Por eso no se indexa todo.
+
+### Índices compuestos y el orden de las columnas
+
+Un índice sobre `(pais, ciudad)` ordena primero por país y, dentro de cada país, por ciudad, como una guía telefónica ordenada por apellido y luego por nombre. Consecuencia, la **regla del prefijo izquierdo**: sirve para `pais = ?` y para `pais = ? AND ciudad = ?`, pero no para `ciudad = ?` sola. Pruébalo:
+
+<IndexLookup />
+
+La regla práctica para elegir el orden: **primero las columnas que filtras por igualdad, después la de rango u orden**. Para "los pedidos de un cliente en el último mes, del más nuevo al más viejo", el índice es `(cliente_id, creado_en)`: la igualdad fija un tramo y, dentro de él, las fechas ya están ordenadas. Al revés, `(creado_en, cliente_id)`, la base recorrería todos los pedidos del mes de todos los clientes.
+
+### Cuándo un índice no se usa
+
+Es una de las preguntas favoritas, porque se responde con experiencia:
+
+- **Una función sobre la columna**: `WHERE LOWER(email) = ?` o `WHERE DATE(creado_en) = ?`. El índice guarda `email`, no `LOWER(email)`. Solución: indexar la expresión o reescribir como rango (`creado_en >= '2026-11-01' AND creado_en < '2026-11-02'`).
+- **Un comodín al inicio**: `LIKE '%gmail.com'` no puede aprovechar el orden. (Para eso existen índices de trigramas o de texto completo).
+- **Conversión de tipos implícita**: comparar una columna de texto con un número puede obligar a convertir cada fila.
+- **No respetar el prefijo izquierdo** de un índice compuesto.
+- **Baja selectividad**: si la condición trae el 40 % de la tabla, al planificador le sale más barato leer todo secuencialmente que saltar del índice a la tabla fila por fila. No es un bug: es el optimizador haciendo su trabajo.
+- **Estadísticas desactualizadas** o tablas muy chicas.
+
+La herramienta para comprobarlo en vez de adivinar es `EXPLAIN ANALYZE` (PostgreSQL) o `EXPLAIN` (MySQL): muestra si hay un *Seq Scan* o un *Index Scan* y cuántas filas se leyeron de verdad. Y un último concepto que suma: un **índice de cobertura** incluye todas las columnas que pide la consulta, así que la base responde solo con el índice, sin ir a la tabla (*index-only scan*).
+
+## Transacciones, ACID y niveles de aislamiento
+
+Una transacción agrupa varias operaciones con cuatro garantías:
+
+- **Atomicidad**: todo o nada. Si falla el tercer paso, los dos primeros se deshacen.
+- **Consistencia**: la base pasa de un estado válido a otro según tus reglas (claves foráneas, `CHECK`, `UNIQUE`).
+- **Aislamiento**: las transacciones concurrentes no se pisan, en el grado que defina el nivel.
+- **Durabilidad**: lo confirmado sobrevive a un corte de luz (gracias al *write-ahead log*).
+
+La "I" es la que se pregunta en serio. Los niveles se definen por qué anomalías permiten:
+
+- **Lectura sucia**: lees algo que otra transacción escribió y todavía no confirmó, y que quizá deshaga.
+- **Lectura no repetible**: lees la misma fila dos veces y cambia en medio, porque otra transacción la modificó y confirmó.
+- **Fantasma**: repites una consulta con filtro y aparecen o desaparecen filas.
+
+| Nivel (estándar SQL) | Lectura sucia | No repetible | Fantasma |
+| --- | --- | --- | --- |
+| Read uncommitted | posible | posible | posible |
+| Read committed | no | posible | posible |
+| Repeatable read | no | no | posible |
+| Serializable | no | no | no |
+
+Dos matices que demuestran experiencia real: los **defaults** difieren (PostgreSQL usa *Read committed*, MySQL con InnoDB usa *Repeatable read*), y las implementaciones reales no calzan exacto con el estándar (el *Repeatable read* de PostgreSQL es *snapshot isolation* y no permite fantasmas). El tema de [Bases de datos](/system-design/bases-de-datos) tiene un simulador de las cinco anomalías, incluidas la **actualización perdida** y el **write skew**, que son las que más bugs causan en producción.
+
+<Callout type="example" title="Respuesta modelo (45 segundos)">
+
+"Los niveles de aislamiento definen qué anomalías de concurrencia tolera una transacción. En *Read committed*, el default de PostgreSQL, nunca lees datos sin confirmar, pero dos lecturas de la misma fila pueden diferir. *Repeatable read* te da una foto fija durante toda la transacción. *Serializable* garantiza que el resultado equivale a correr las transacciones una tras otra, a cambio de abortos que la aplicación tiene que reintentar. En la práctica, para un caso como descontar stock no subo el nivel: uso un `UPDATE ... SET stock = stock - 1 WHERE stock > 0` atómico, o `SELECT ... FOR UPDATE`, o control optimista con una columna de versión."
+
+</Callout>
+
+En Java con Spring Data JPA, la versión atómica del descuento de stock y el control optimista se ven así. Fíjate en que el método devuelve cuántas filas cambió: ese número es la respuesta a "¿había stock?".
+
+```java title="ProductoRepository.java"
+@Entity
+class Producto {
+    @Id Long id;
+    int stock;
+    @Version long version; // control optimista: Hibernate agrega "where version = ?" al actualizar
+}
+
+interface ProductoRepository extends JpaRepository<Producto, Long> {
+    // La base resta y verifica en una sola sentencia: no hay ventana entre leer y escribir
+    @Modifying
+    @Query("update Producto p set p.stock = p.stock - :n where p.id = :id and p.stock >= :n")
+    int descontar(@Param("id") long id, @Param("n") int n); // 0 filas = sin stock
+}
+```
+
+Con `@Version`, si dos transacciones cargan la misma entidad y ambas la guardan, la segunda falla con `OptimisticLockException` (en Spring, `ObjectOptimisticLockingFailureException`) y decides si reintentar o devolver `409`. El nivel de aislamiento se fija por método con `@Transactional(isolation = Isolation.SERIALIZABLE)`, y el lock pesimista con `@Lock(LockModeType.PESSIMISTIC_WRITE)`, que se traduce en un `SELECT ... FOR UPDATE`.
+
+<Quiz
+  question="Dos usuarios compran la última unidad al mismo tiempo. El código hace SELECT stock, verifica que sea mayor que 0 y luego UPDATE stock = stock_leido - 1. Corre en PostgreSQL con el nivel por defecto. ¿Qué pasa?"
+  options={[
+    { text: 'Nada: las transacciones de PostgreSQL ya evitan este problema.', why: 'Con Read committed, el default, ambas transacciones pueden leer stock = 1, ambas pasan la verificación y ambas escriben 0. Es una actualización perdida: se vendieron dos unidades.' },
+    { text: 'Ambas pueden leer 1 y vender: es una actualización perdida. Se evita con un UPDATE atómico condicionado (WHERE stock > 0), con SELECT ... FOR UPDATE o con control optimista por versión.', correct: true, why: 'Correcto. El ciclo leer-calcular-escribir en la aplicación no está protegido en Read committed. La solución más simple es que la base haga la resta y la verificación en una sola sentencia y revisar cuántas filas se actualizaron.' },
+    { text: 'La base lanza un deadlock y una de las dos falla.', why: 'No hay deadlock: ninguna transacción espera un lock que la otra tenga en un ciclo. Simplemente la segunda escritura pisa a la primera.' },
+  ]}
+/>
+
+## El problema N+1
+
+Es la causa más común de endpoints lentos en aplicaciones con ORM, y se pregunta tanto en backend como en GraphQL. El patrón: una consulta trae una lista de N elementos y luego, al recorrerla, el ORM hace **una consulta más por cada elemento** para cargar una relación. Total: N + 1 consultas donde bastaban una o dos.
+
+<CodeTabs>
+
+```java title="Java"
+// Spring Data JPA + Hibernate
+@Entity
+class Pedido {
+    @Id Long id;
+    Instant creado;
+    @ManyToOne(fetch = FetchType.LAZY) Cliente cliente; // se carga recién al tocarlo
+
+    Cliente getCliente() { return cliente; }
+}
+
+interface PedidoRepository extends JpaRepository<Pedido, Long> {
+    // 1 consulta para los pedidos...
+    List<Pedido> findTop50ByOrderByCreadoDesc();
+
+    // JOIN FETCH: pedidos y clientes en una sola consulta
+    @Query("select p from Pedido p join fetch p.cliente order by p.creado desc")
+    List<Pedido> recientesConCliente(Pageable pagina);
+
+    // Lo mismo, declarando qué relaciones cargar junto con la entidad
+    @EntityGraph(attributePaths = "cliente")
+    @Query("select p from Pedido p order by p.creado desc")
+    List<Pedido> recientesConGrafo(Pageable pagina);
+}
+
+class Listado {
+    static void imprimir(PedidoRepository repo) {
+        for (Pedido p : repo.findTop50ByOrderByCreadoDesc()) {
+            System.out.println(p.getCliente().getNombre()); // ...y 1 más por pedido: 51 en total
+        }
+    }
+}
+```
+
+```python title="Python"
+# Django. 1 consulta para los pedidos...
+pedidos = Pedido.objects.order_by("-creado")[:50]
+for p in pedidos:
+    print(p.cliente.nombre)   # ...y 1 más por cada pedido: 51 en total
+
+# JOIN: 1 sola consulta (relaciones de uno a uno o muchos a uno)
+pedidos = Pedido.objects.select_related("cliente").order_by("-creado")[:50]
+
+# Batch: 2 consultas, la segunda con WHERE pedido_id IN (...) (relaciones uno a muchos)
+pedidos = Pedido.objects.prefetch_related("items").order_by("-creado")[:50]
+```
+
+```ts title="TypeScript"
+// Prisma. 1 consulta para los pedidos...
+const pedidos = await prisma.pedido.findMany({ take: 50, orderBy: { creado: 'desc' } })
+for (const p of pedidos) {
+  // ...y 1 más por cada pedido: 51 en total
+  const cliente = await prisma.cliente.findUnique({ where: { id: p.clienteId } })
+}
+
+// Pedir la relación junto con la lista: Prisma la resuelve con consultas
+// agrupadas o con un JOIN, según la versión y la configuración
+const conCliente = await prisma.pedido.findMany({
+  take: 50,
+  orderBy: { creado: 'desc' },
+  include: { cliente: true },
+})
+```
+
+</CodeTabs>
+
+¿Por qué importa si cada consulta tarda poco? Por los viajes de ida y vuelta. Supongamos 2 ms de red por consulta entre la aplicación y la base: 51 consultas son unos 100 ms solo en latencia, contra 2 a 4 ms con un JOIN. Y crece con N: la página que en desarrollo tenía 5 pedidos en producción tiene 500.
+
+**Cómo se detecta**: el log de consultas del ORM en desarrollo, un APM que muestre decenas de consultas idénticas por petición, o tests que fijan el número de consultas (Django trae `assertNumQueries`; en Java, las estadísticas de Hibernate con `hibernate.generate_statistics` o librerías que cuentan sentencias en los tests). En JPA, además de `join fetch` y `@EntityGraph`, existe la carga por lotes: `@BatchSize` o `hibernate.default_batch_fetch_size` hacen que las relaciones perezosas se carguen de a varias con un `IN (...)`. Ojo con `join fetch` sobre **colecciones** (`@OneToMany`) combinado con paginación: Hibernate no puede aplicar el `LIMIT` en SQL y pagina en memoria, con una advertencia en el log. En GraphQL la solución estándar es **DataLoader**: agrupa todas las cargas por ID de un mismo ciclo y las resuelve con un solo `WHERE id IN (...)`.
+
+## Paginación: offset contra cursor
+
+Está desarrollada, con un simulador, en [APIs y tiempo real](/system-design/apis). La versión de entrevista:
+
+> "`LIMIT 20 OFFSET 10000` obliga a la base a recorrer y descartar 10.000 filas, así que las páginas profundas son lentas, y si se insertan filas mientras paginas, ves duplicados o te saltas elementos. Con cursor (keyset), el cliente manda el último valor que vio y la consulta es `WHERE (creado_en, id) < (?, ?) ORDER BY creado_en DESC, id DESC LIMIT 20`: con un índice sobre esas columnas, cada página cuesta lo mismo y es estable ante inserciones. Lo que pierdes es saltar a la página 37 y el total barato, que para un feed o una API no importan."
+
+## SQL en vivo
+
+Muchos procesos incluyen 10 a 20 minutos de SQL en un editor compartido, sobre todo en roles de backend y de datos. Tres temas cubren casi todo: JOINs, agregaciones y funciones de ventana.
+
+### JOINs
+
+La pregunta típica: "¿qué diferencia hay entre INNER y LEFT JOIN?", seguida de "¿cómo encuentras los empleados que no tienen departamento?". Juega con los tipos y fíjate en qué pasa con Diego (sin departamento) y con Legal (sin empleados):
+
+<JoinExplorer />
+
+Dos detalles que el widget muestra y conviene decir: un JOIN puede **multiplicar filas** (Ventas aparece dos veces porque tiene dos empleados; si después sumas algo de la tabla de departamentos, lo cuentas doble), y `NULL = NULL` no es verdadero en SQL, así que una clave nula nunca calza en un JOIN.
+
+Un error clásico con LEFT JOIN: poner el filtro de la tabla derecha en el `WHERE` en vez de en el `ON`. `LEFT JOIN departamentos d ON e.depto_id = d.id WHERE d.nombre = 'Ventas'` descarta las filas con NULL y convierte el LEFT JOIN en un INNER JOIN sin que te des cuenta.
+
+### GROUP BY, HAVING y el orden de evaluación
+
+```sql title="Departamentos con más de un empleado y su sueldo promedio"
+SELECT d.nombre, COUNT(*) AS empleados, AVG(e.sueldo) AS promedio
+FROM empleados e
+JOIN departamentos d ON d.id = e.depto_id
+WHERE e.activo                 -- filtra FILAS antes de agrupar
+GROUP BY d.nombre
+HAVING COUNT(*) > 1            -- filtra GRUPOS después de agrupar
+ORDER BY promedio DESC;
+```
+
+`WHERE` filtra filas antes de agrupar; `HAVING` filtra grupos y puede usar agregados. Se entiende con el **orden lógico de evaluación**, que no es el orden en que se escribe: `FROM` y `JOIN`, luego `WHERE`, `GROUP BY`, `HAVING`, `SELECT`, `ORDER BY` y por último `LIMIT`. Por eso no puedes usar en el `WHERE` un alias definido en el `SELECT` (todavía no existe), pero sí en el `ORDER BY` en la mayoría de los motores.
+
+### El segundo sueldo más alto
+
+Es [Second Highest Salary](https://leetcode.com/problems/second-highest-salary/) en LeetCode y aparece en todas sus variantes. Antes de escribir, aclara: ¿qué devuelvo si no hay segundo? (`NULL`) ¿Y si dos personas empatan en el máximo? (el segundo **distinto**).
+
+```sql title="Tres formas"
+-- 1. Subconsulta: el máximo entre los menores que el máximo. Devuelve NULL si no hay.
+SELECT MAX(sueldo) AS segundo
+FROM empleados
+WHERE sueldo < (SELECT MAX(sueldo) FROM empleados);
+
+-- 2. DISTINCT + OFFSET, envuelto para devolver NULL en vez de cero filas
+SELECT (SELECT DISTINCT sueldo FROM empleados
+        ORDER BY sueldo DESC LIMIT 1 OFFSET 1) AS segundo;
+
+-- 3. Función de ventana: generaliza al N-ésimo
+SELECT DISTINCT sueldo AS segundo
+FROM (SELECT sueldo, DENSE_RANK() OVER (ORDER BY sueldo DESC) AS r
+      FROM empleados) t
+WHERE r = 2;
+```
+
+La tercera es la que impresiona, porque responde la repregunta obvia ("¿y el N-ésimo?") cambiando un número.
+
+### Funciones de ventana: top 3 por departamento
+
+Una función de ventana calcula algo **sobre un grupo de filas sin colapsarlas**, a diferencia de `GROUP BY`. `PARTITION BY` define el grupo y `ORDER BY` el orden dentro de él. Las tres de ranking se diferencian en los empates, y es la pregunta de seguimiento más común:
+
+| sueldo | `ROW_NUMBER()` | `RANK()` | `DENSE_RANK()` |
+| --- | --- | --- | --- |
+| 9.000 | 1 | 1 | 1 |
+| 8.000 | 2 | 2 | 2 |
+| 8.000 | 3 | 2 | 2 |
+| 7.000 | 4 | 4 | 3 |
+
+```sql title="Department Top Three Salaries (LeetCode 185): los tres sueldos más altos distintos de cada departamento"
+WITH ranking AS (
+  SELECT d.nombre AS departamento,
+         e.nombre AS empleado,
+         e.sueldo,
+         DENSE_RANK() OVER (PARTITION BY e.depto_id ORDER BY e.sueldo DESC) AS r
+  FROM empleados e
+  JOIN departamentos d ON d.id = e.depto_id
+)
+SELECT departamento, empleado, sueldo
+FROM ranking
+WHERE r <= 3;
+```
+
+¿Por qué el filtro va afuera, en una CTE? Porque las funciones de ventana se calculan **después** del `WHERE`: no puedes escribir `WHERE DENSE_RANK() OVER (...) <= 3` en la misma consulta. Si el enunciado dijera "exactamente tres personas por departamento" usarías `ROW_NUMBER()`; si dice "los tres sueldos más altos", `DENSE_RANK()`. El problema original está en [LeetCode](https://leetcode.com/problems/department-top-three-salaries/).
+
+Otras funciones de ventana que conviene tener a mano: `LAG` y `LEAD` (el valor de la fila anterior o siguiente: "variación del total diario respecto del día anterior") y los agregados con ventana (`SUM(monto) OVER (PARTITION BY cliente_id ORDER BY fecha)`, un total acumulado).
+
+<Quiz
+  question="Te piden los tres sueldos más altos de cada departamento. En Ventas los sueldos son 9.000, 8.000, 8.000, 7.000 y 6.000. ¿Qué función usas y cuántas filas salen para Ventas?"
+  options={[
+    { text: 'ROW_NUMBER(): 3 filas (9.000, 8.000, 8.000).', why: 'ROW_NUMBER corta en exactamente tres personas y deja fuera a quien gana 7.000, que es el tercer sueldo distinto. Sirve si piden "tres personas", no "tres sueldos".' },
+    { text: 'RANK(): 3 filas (9.000, 8.000, 8.000).', why: 'Con RANK los empates de 8.000 tienen rango 2 y el 7.000 salta a rango 4, así que también queda fuera el tercer sueldo distinto.' },
+    { text: 'DENSE_RANK(): 4 filas (9.000, 8.000, 8.000 y 7.000).', correct: true, why: 'Correcto. DENSE_RANK no deja huecos: 9.000 es 1, los dos 8.000 son 2 y 7.000 es 3. Por eso es la función para "los N valores más altos distintos".' },
+  ]}
+/>
+
+## Practica en voz alta
+
+<QuestionDeck
+  cards={[
+    {
+      q: '¿Qué diferencia hay entre POST, PUT y PATCH?',
+      level: 'junior',
+      checks: 'Semántica e idempotencia, no solo "crear y actualizar".',
+      answer: <><p><code>POST</code> crea un recurso o ejecuta una acción; no es idempotente, así que reintentarlo puede duplicar efectos. <code>PUT</code> reemplaza el recurso completo en una URL conocida; es idempotente: mandarlo dos veces deja el mismo estado. <code>PATCH</code> modifica parcialmente y puede ser idempotente o no, según la operación.</p><p>La consecuencia práctica es qué puedo reintentar tras un timeout: <code>PUT</code> sí; para un <code>POST</code> de pago uso una clave de idempotencia.</p></>,
+      strong: ['Hablar de idempotencia y reintentos', 'El matiz de PATCH'],
+      weak: ['"POST crea y PUT actualiza" sin más'],
+      followups: ['¿Cómo harías idempotente un POST?', '¿GET con body está permitido?'],
+    },
+    {
+      q: '¿Cuándo devuelves 401 y cuándo 403?',
+      level: 'junior',
+      checks: 'Autenticación contra autorización.',
+      answer: <><p><code>401</code> cuando no sé quién eres: falta el token, expiró o es inválido. El cliente puede autenticarse y reintentar. <code>403</code> cuando sé quién eres pero no tienes permiso, por ejemplo un usuario normal entrando al panel de administración; reintentar con el mismo usuario no sirve.</p><p>A veces devuelvo <code>404</code> en lugar de <code>403</code> para no revelar que el recurso existe.</p></>,
+      strong: ['Asociarlo a autenticación y autorización', 'El caso de 404 para no filtrar información'],
+      weak: ['Usarlos como sinónimos'],
+      followups: ['¿Qué es BOLA o IDOR?'],
+    },
+    {
+      q: '¿Qué pasa cuando escribes una URL en el navegador y presionas Enter?',
+      level: 'semi',
+      checks: 'El mapa completo de la pila, sin saltarse capas.',
+      answer: <><p>El navegador interpreta la URL y revisa cachés y HSTS. Resuelve el dominio por DNS (caché local, resolver recursivo y, si hace falta, raíz, TLD y autoritativo). Abre TCP y negocia TLS, verificando el certificado. Envía la petición HTTP; un load balancer la pasa a una instancia, que consulta caché o base de datos y responde. El navegador parsea el HTML, pide CSS, JS e imágenes, construye DOM y CSSOM, ejecuta scripts, hace layout y pinta.</p><p>Cierro ofreciendo profundizar en la capa que prefieran.</p></>,
+      strong: ['Orden correcto de las capas', 'Mencionar TLS y el render', 'Ofrecer profundizar'],
+      weak: ['Saltar de DNS a "el servidor responde"', 'Perderse en una sola capa'],
+      followups: ['¿Qué cambia con HTTP/3?', '¿Qué es un TTL de DNS y qué problema trae bajarlo?'],
+    },
+    {
+      q: '¿Sesiones o JWT? ¿Cuándo usarías cada uno?',
+      level: 'semi',
+      checks: 'Trade-off entre estado y revocación.',
+      answer: <><p>Sesión en el servidor para una app web con un backend: un ID opaco en una cookie <code>HttpOnly</code> y la sesión en Redis. Revocar es borrar una clave. JWT cuando varios servicios necesitan verificar la identidad sin consultar un almacén central: el token está firmado y se valida localmente.</p><p>El costo del JWT es que no se puede revocar fácil antes de expirar, y que su payload es legible: está firmado, no cifrado.</p></>,
+      strong: ['Revocación como el trade-off central', 'Firmado no es cifrado', 'Cookie HttpOnly contra localStorage'],
+      weak: ['"JWT es más moderno"', 'Guardar datos sensibles en el payload'],
+      followups: ['¿Dónde guardas el JWT en el navegador?', '¿Qué es el ataque alg none?'],
+    },
+    {
+      q: 'Le robaron el token a un usuario. ¿Cómo revocas un JWT?',
+      level: 'senior',
+      checks: 'Conocer las mitigaciones y su costo.',
+      answer: <><p>No hay forma gratis, porque la gracia del JWT es no consultar estado. Combino: access tokens cortos, de minutos; refresh tokens guardados en el servidor y rotativos, que sí puedo revocar, y si alguien reutiliza uno viejo revoco toda la familia. Para cortar de inmediato, una lista de revocación por <code>jti</code> o una versión de sesión por usuario que se verifica en cada petición, aceptando que reintroduzco una consulta, idealmente a una caché.</p></>,
+      strong: ['Access corto más refresh revocable', 'Rotación y detección de reutilización', 'Reconocer que la denylist reintroduce estado'],
+      weak: ['"Se borra el token"', '"Se cambia la clave de firma" como primera opción (cierra la sesión de todos)'],
+      followups: ['¿Y si la clave de firma se filtra?', '¿Cuánto debería durar un access token?'],
+    },
+    {
+      q: '¿Qué es CORS y por qué la petición falla en el navegador pero funciona en Postman?',
+      level: 'semi',
+      checks: 'Que sepas quién aplica CORS y qué protege.',
+      answer: <><p>El navegador aplica la política del mismo origen: un script de un origen no puede leer respuestas de otro. CORS es cómo el servidor declara qué orígenes permite, con <code>Access-Control-Allow-Origin</code>; para peticiones no simples el navegador manda antes un <code>OPTIONS</code> de preflight. Postman no es un navegador y no aplica la política.</p><p>Por eso CORS no protege la API: protege al usuario del navegador. La API se protege con autenticación y autorización.</p></>,
+      strong: ['El navegador como responsable', 'El preflight', 'CORS no es seguridad del servidor'],
+      weak: ['"Es un error del backend que hay que desactivar"'],
+      followups: ['¿Por qué no se permite * con cookies?', '¿Qué es CSRF y en qué se diferencia?'],
+    },
+    {
+      q: 'Explícame OAuth 2.0. ¿Sirve para hacer login?',
+      level: 'semi',
+      checks: 'Autorización delegada contra autenticación.',
+      answer: <><p>OAuth es autorización delegada: que una app acceda a mis datos en otro servicio sin darle mi contraseña. En el flujo de authorization code con PKCE, la app me redirige al servidor de autorización, me autentico y acepto los scopes, vuelvo con un código de un solo uso y la app lo canjea en su backend por un access token, que usa contra la API.</p><p>OAuth no autentica: el access token dice qué puede hacer la app, no quién soy. Para login se usa OpenID Connect, que agrega un ID token.</p></>,
+      strong: ['Nombrar los roles', 'PKCE', 'La diferencia con OpenID Connect'],
+      weak: ['"OAuth es iniciar sesión con Google"'],
+      followups: ['¿Para qué sirve el parámetro state?', '¿Por qué ya no se recomienda el flujo implícito?'],
+    },
+    {
+      q: '¿SQL o NoSQL? ¿Cómo decides?',
+      level: 'junior',
+      checks: 'Criterio basado en patrones de acceso, no en modas.',
+      answer: <><p>Empiezo por las consultas que va a hacer el sistema. Si hay relaciones, consultas variadas y necesito transacciones, uso una base relacional como Postgres, que además escala bastante con índices, réplicas de lectura y particionado. Paso a NoSQL con una razón concreta: acceso siempre por clave y un volumen de escritura que no cabe en un nodo, o documentos que se leen y escriben completos.</p><p>El costo de salir de SQL es perder JOINs y transacciones entre entidades, que pasa a resolver la aplicación.</p></>,
+      strong: ['Patrones de acceso primero', 'NoSQL no es una sola cosa', 'Nombrar el costo'],
+      weak: ['"NoSQL escala y SQL no"'],
+      followups: ['¿Qué es un esquema flexible y cuál es su costo?', '¿Qué es la desnormalización?'],
+    },
+    {
+      q: '¿Cómo funciona un índice y por qué no indexas todas las columnas?',
+      level: 'semi',
+      checks: 'B-tree, rangos y el costo en escrituras.',
+      answer: <><p>Es una estructura ordenada aparte de la tabla, normalmente un B-tree: un árbol ancho y bajo cuyas hojas guardan los valores en orden con un puntero a cada fila. Encontrar un valor es bajar tres o cuatro niveles aunque haya millones de filas, y como está ordenado sirve para rangos y <code>ORDER BY</code>.</p><p>No indexo todo porque cada escritura tiene que actualizar cada índice y cada uno ocupa disco y memoria. Indexo según las consultas reales y lo verifico con <code>EXPLAIN</code>.</p></>,
+      strong: ['Por qué un B-tree es poco profundo', 'Costo en escritura', 'EXPLAIN'],
+      weak: ['"Un índice hace todo más rápido"'],
+      followups: ['¿Qué es un índice de cobertura?', '¿Qué es un índice parcial?'],
+    },
+    {
+      q: 'Tienes un índice sobre (cliente_id, creado_en). ¿Sirve para WHERE creado_en > ayer? ¿Y si lo inviertes?',
+      level: 'senior',
+      checks: 'Prefijo izquierdo y orden de columnas.',
+      answer: <><p>Para <code>creado_en</code> sola, no sirve como búsqueda: el índice está ordenado primero por cliente, así que las fechas recientes están repartidas en todos los tramos. Algunos motores pueden recorrerlo entero o hacer skip scan, pero no saltar directo. Sí sirve para <code>cliente_id = ?</code> y para <code>cliente_id = ? AND creado_en &gt; ?</code>, que es el caso de "los pedidos recientes de un cliente".</p><p>La regla: primero las columnas de igualdad, después la de rango u orden. Si también necesito filtrar solo por fecha, creo un índice aparte.</p></>,
+      strong: ['Explicar el orden físico', 'Igualdad primero, rango después', 'Mencionar skip scan como matiz'],
+      weak: ['"Sí, porque la columna está en el índice"'],
+      followups: ['¿Qué otras cosas impiden usar un índice?', '¿Cómo lo comprobarías?'],
+    },
+    {
+      q: '¿Qué son los niveles de aislamiento? Dame un ejemplo de anomalía.',
+      level: 'semi',
+      checks: 'Anomalías concretas y defaults reales.',
+      answer: <><p>Definen qué efectos de otras transacciones concurrentes puedes ver. Lectura sucia: leer algo no confirmado. No repetible: leer la misma fila dos veces y que cambie. Fantasma: que una consulta con filtro devuelva otras filas al repetirla. Read committed, el default de PostgreSQL, evita solo la primera; Serializable evita todas a cambio de abortos que hay que reintentar.</p><p>La que más veo en producción es la actualización perdida: dos transacciones leen el stock, restan en la aplicación y la segunda pisa a la primera.</p></>,
+      strong: ['Ejemplos concretos', 'Defaults de PostgreSQL y MySQL', 'Actualización perdida o write skew'],
+      weak: ['Recitar los niveles sin anomalías'],
+      followups: ['¿Cómo evitas la actualización perdida sin Serializable?', '¿Qué es MVCC?'],
+    },
+    {
+      q: '¿Qué es el problema N+1 y cómo lo detectas?',
+      level: 'semi',
+      checks: 'Experiencia real con ORMs.',
+      answer: <><p>Una consulta trae N filas y luego el ORM hace una consulta más por cada una para cargar una relación: N+1 viajes a la base cuando bastaban uno o dos. Con 50 pedidos y unos 2 ms por viaje son 100 ms solo de red, y empeora con el volumen.</p><p>Lo detecto con el log de consultas en desarrollo, con un APM que muestre consultas repetidas por petición o con tests que fijan el número de consultas. Lo arreglo con un JOIN (<code>select_related</code>, <code>include</code>) o con carga por lotes (<code>prefetch_related</code>, DataLoader en GraphQL).</p></>,
+      strong: ['El costo en viajes de red', 'JOIN contra batch', 'Detección automática'],
+      weak: ['No saber cómo lo resuelve su ORM'],
+      followups: ['¿Cuándo es mejor batch que JOIN?', '¿Cómo funciona DataLoader?'],
+    },
+    {
+      q: '¿Qué diferencia hay entre WHERE y HAVING?',
+      level: 'junior',
+      checks: 'Orden lógico de evaluación de SQL.',
+      answer: <><p><code>WHERE</code> filtra filas antes de agrupar; <code>HAVING</code> filtra grupos después del <code>GROUP BY</code> y por eso puede usar agregados como <code>COUNT(*) &gt; 1</code>. Sale del orden lógico: FROM y JOIN, WHERE, GROUP BY, HAVING, SELECT, ORDER BY y LIMIT.</p><p>Por rendimiento, lo que se puede filtrar en el WHERE conviene filtrarlo ahí, para agrupar menos filas.</p></>,
+      strong: ['El orden de evaluación', 'El consejo de rendimiento'],
+      weak: ['"Son lo mismo pero HAVING es para GROUP BY"'],
+      followups: ['¿Por qué no puedo usar un alias del SELECT en el WHERE?'],
+    },
+    {
+      q: '¿Paginación con offset o con cursor?',
+      level: 'senior',
+      checks: 'Costo de páginas profundas y estabilidad ante inserciones.',
+      answer: <><p>Offset es simple y permite saltar a cualquier página, pero <code>OFFSET 10000</code> obliga a recorrer y descartar diez mil filas, y si alguien inserta mientras pagino veo duplicados o me salto elementos. Con cursor filtro por el último valor visto, <code>WHERE (creado_en, id) &lt; (?, ?)</code>, con un índice sobre esas columnas: cada página cuesta lo mismo y es estable.</p><p>Uso cursor para feeds y APIs; offset para un backoffice con tablas chicas que necesita "ir a la página 37".</p></>,
+      strong: ['El desempate con id', 'Cursor opaco', 'Cuándo offset sigue siendo válido'],
+      weak: ['Ordenar solo por fecha, sin desempate'],
+      followups: ['¿Cómo muestras el total de resultados con cursor?'],
+    },
+  ]}
+/>
+
+<Takeaways>
+
+- Seguro significa que no cambia estado; idempotente, que repetirlo deja el mismo estado. Lo idempotente se reintenta sin miedo; un `POST` necesita clave de idempotencia.
+- Las preguntas de códigos de estado son de **pares**: 401 contra 403, 400 contra 422, 502 contra 504. Y "¿qué pasa cuando escribes una URL?" se responde capa por capa: DNS, TCP, TLS, HTTP, servidor, render.
+- Sesiones se revocan al instante; JWT se verifica sin estado pero vive hasta su `exp`. Access tokens cortos y refresh tokens rotativos son la mitigación estándar. OAuth autoriza; OpenID Connect autentica. CORS lo aplica el navegador y no protege tu API.
+- Un índice es un árbol ordenado: sirve para igualdades, rangos y orden, cuesta en cada escritura y se ignora con funciones sobre la columna, comodines al inicio o sin el prefijo izquierdo. Compruébalo con `EXPLAIN`.
+- Conoce las anomalías (lectura sucia, no repetible, fantasma, actualización perdida) y los defaults reales. Para el stock, un `UPDATE` atómico o un lock de fila antes que subir el nivel.
+- N+1 es el endpoint lento más común: se arregla con JOIN o carga por lotes y se detecta contando consultas. En SQL en vivo, domina JOINs, `GROUP BY` con `HAVING` y `DENSE_RANK` con `PARTITION BY`.
+
+</Takeaways>
+
+## Fuentes y lecturas
+
+- IETF, [RFC 9110: HTTP Semantics](https://www.rfc-editor.org/rfc/rfc9110) (métodos seguros e idempotentes, códigos de estado).
+- MDN Web Docs, [HTTP request methods](https://developer.mozilla.org/en-US/docs/Web/HTTP/Methods) y [Cross-Origin Resource Sharing (CORS)](https://developer.mozilla.org/en-US/docs/Web/HTTP/CORS).
+- Alex Gaynor y colaboradores, [What happens when...](https://github.com/alex/what-happens-when): la respuesta larga a la pregunta de la URL.
+- IETF, [RFC 6749: The OAuth 2.0 Authorization Framework](https://datatracker.ietf.org/doc/html/rfc6749), [RFC 7636: PKCE](https://datatracker.ietf.org/doc/html/rfc7636) y [RFC 7519: JSON Web Token](https://datatracker.ietf.org/doc/html/rfc7519).
+- OWASP, [API Security Top 10 (2023)](https://owasp.org/API-Security/editions/2023/en/0x11-t10/) y [JSON Web Token Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/JSON_Web_Token_Cheat_Sheet.html).
+- Markus Winand, [Use The Index, Luke](https://use-the-index-luke.com/): índices compuestos, funciones y paginación sin offset.
+- PostgreSQL, [Multicolumn Indexes](https://www.postgresql.org/docs/current/indexes-multicolumn.html), [Transaction Isolation](https://www.postgresql.org/docs/current/transaction-iso.html) y [Window Functions](https://www.postgresql.org/docs/current/tutorial-window.html).
+- Spring Data JPA, [documentación de referencia](https://docs.spring.io/spring-data/jpa/reference/) (`@Query`, `@EntityGraph`, `@Modifying`, `@Lock`).
+- Django, [`select_related` y `prefetch_related`](https://docs.djangoproject.com/en/stable/ref/models/querysets/#select-related), y GraphQL, [DataLoader](https://github.com/graphql/dataloader).
+- LeetCode, [Second Highest Salary](https://leetcode.com/problems/second-highest-salary/) y [Department Top Three Salaries](https://leetcode.com/problems/department-top-three-salaries/).
+- Martin Kleppmann, *Designing Data-Intensive Applications* (O'Reilly, 2017), capítulos 3 y 7, y [Hermitage](https://github.com/ept/hermitage), sus pruebas de niveles de aislamiento por motor.
+

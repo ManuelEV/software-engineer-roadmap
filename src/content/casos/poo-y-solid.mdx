@@ -1,0 +1,862 @@
+import { QuestionDeck } from '../../components/widgets/entrevistas/QuestionDeck'
+import { SolidSmellSpotter } from '../../components/widgets/entrevistas/SolidSmellSpotter'
+import { InheritanceBreaker } from '../../components/widgets/entrevistas/InheritanceBreaker'
+
+"¿Cuáles son los pilares de la programación orientada a objetos?" es probablemente la pregunta técnica más repetida en entrevistas para puestos junior y semi senior de Latinoamérica. Y "explícame SOLID" la sigue de cerca. Parecen preguntas de memoria, y por eso mucha gente las responde como si recitara un glosario: "encapsulamiento es ocultar los datos, herencia es reutilizar código". Esa respuesta no está mal, pero tampoco te diferencia de nadie.
+
+Lo que el entrevistador busca es otra cosa: que entiendas **para qué sirve** cada idea, que sepas cuándo **no** aplicarla y que puedas aterrizarla en código que escribiste. Este tema es la versión de entrevista de lo que la [unidad de patrones](/patrones/introduccion) cubre a fondo: cómo se pregunta, respuestas que se pueden decir en 30 a 60 segundos y ejemplos lo bastante cortos para escribirlos en una pizarra.
+
+<Sketch
+  width={640}
+  height={300}
+  caption="La forma de una buena respuesta conceptual: la definición sola suena igual que todas; lo que te diferencia es el ejemplo propio y, sobre todo, el criterio."
+  items={[
+    { type: 'text', x: 24, y: 34, text: '¿qué es polimorfismo?', size: 22, tone: 'pencil' },
+    { type: 'box', x: 24, y: 58, w: 236, h: 54, label: 'recitar el glosario', size: 22, tone: 'bad' },
+    { type: 'cross', x: 296, y: 85, size: 24 },
+    { type: 'text', x: 336, y: 92, text: 'suena a todos', size: 20, tone: 'pencil' },
+    { type: 'box', x: 24, y: 158, w: 170, h: 56, label: 'definición', size: 22 },
+    { type: 'arrow', from: [198, 186], to: [232, 186] },
+    { type: 'box', x: 236, y: 158, w: 170, h: 56, label: 'ejemplo propio', size: 22 },
+    { type: 'arrow', from: [410, 186], to: [444, 186] },
+    { type: 'box', x: 448, y: 158, w: 170, h: 56, label: 'criterio', size: 22, tone: 'line', fill: true },
+    { type: 'text', x: 109, y: 240, text: 'una frase', size: 18, anchor: 'middle', tone: 'pencil' },
+    { type: 'text', x: 321, y: 240, text: 'código tuyo', size: 18, anchor: 'middle', tone: 'pencil' },
+    { type: 'text', x: 533, y: 240, text: 'cuándo NO usarlo', size: 18, anchor: 'middle', tone: 'line' },
+    { type: 'highlight', x: 438, y: 260, w: 190, h: 28, tone: 'ok' },
+    { type: 'text', x: 533, y: 282, text: 'lo que te diferencia', size: 20, anchor: 'middle', tone: 'ok', with: true },
+    { type: 'text', x: 24, y: 282, text: '30 a 60 segundos', size: 20, tone: 'pencil' },
+  ]}
+/>
+
+## Cómo se pregunta (y qué están evaluando)
+
+Estas preguntas aparecen en cuatro formatos, y conviene reconocerlos porque cada uno pide una respuesta distinta:
+
+1. **Definición directa.** "¿Qué es polimorfismo?", "¿interfaz o clase abstracta?". Responde con una definición de una frase, un ejemplo concreto y un matiz. Treinta segundos.
+2. **Comparación.** "Composición contra herencia", "DI contra DIP". El entrevistador quiere el criterio para elegir, no dos definiciones paralelas.
+3. **Código para revisar.** Te muestran una clase y preguntan "¿qué le cambiarías?". Aquí SOLID funciona como lente para diagnosticar, no como lista para recitar.
+4. **Conductual-técnica.** "¿Cómo aplicaste SOLID en un proyecto?". Quieren una historia real con un antes, un después y un resultado.
+
+<Callout type="interview" title="Lo que el entrevistador está evaluando aquí">
+
+Tres cosas: que la definición sea **correcta** (muchos confunden abstracción con encapsulamiento, o inversión con inyección de dependencias), que puedas dar un **ejemplo propio** en lugar del de animales y figuras, y que muestres **criterio**: cuándo un principio ayuda y cuándo agrega complejidad. En semi senior y senior, el tercer punto pesa más que los otros dos.
+
+</Callout>
+
+## Los cuatro pilares, sin glosario
+
+### Encapsulamiento: proteger invariantes
+
+Encapsular no es "poner los atributos privados y generar getters y setters". Es que el objeto **controle sus propias reglas**: que nadie desde afuera pueda dejarlo en un estado inválido. Una clase con todos sus campos privados y un setter por campo no encapsula nada; solo agrega ceremonia.
+
+<Sketch
+  width={640}
+  height={270}
+  caption="Encapsular es tener una sola puerta: las operaciones con reglas. Nadie desde afuera puede escribir el estado directamente."
+  items={[
+    { type: 'text', x: 320, y: 50, text: 'Cuenta', size: 24, anchor: 'middle', font: 'serif' },
+    { type: 'box', x: 220, y: 66, w: 200, h: 100, label: 'saldo = 100', font: 'code', size: 22, tone: 'line', fill: true },
+    { type: 'arrow', from: [24, 116], to: [212, 116], tone: 'bad', label: 'setSaldo(-50)', labelAt: [110, 104] },
+    { type: 'cross', x: 196, y: 142, size: 22 },
+    { type: 'arrow', from: [616, 116], to: [428, 116], tone: 'ok', label: 'retirar(30)', labelAt: [526, 104] },
+    { type: 'check', x: 520, y: 140, size: 24 },
+    { type: 'text', x: 320, y: 200, text: 'retirar() valida: 0 < monto ≤ saldo', size: 20, anchor: 'middle', tone: 'pencil' },
+    { type: 'underline', x: 150, y: 246, w: 340 },
+    { type: 'text', x: 320, y: 240, text: 'el invariante vive en un solo lugar', size: 20, anchor: 'middle', tone: 'line', with: true },
+  ]}
+/>
+
+<CodeTabs>
+
+```java title="Java"
+public class Cuenta {
+    private long saldo; // privado: el único camino para cambiarlo es retirar()
+
+    public Cuenta(long saldoInicial) {
+        if (saldoInicial < 0) throw new IllegalArgumentException("Saldo inicial negativo");
+        this.saldo = saldoInicial;
+    }
+
+    public long getSaldo() {
+        return saldo;
+    }
+
+    public void retirar(long monto) {
+        if (monto <= 0) throw new IllegalArgumentException("El monto debe ser positivo");
+        if (monto > saldo) throw new IllegalStateException("Saldo insuficiente");
+        saldo -= monto;
+    }
+}
+```
+
+```python title="Python"
+class Cuenta:
+    def __init__(self, saldo_inicial: int) -> None:
+        self._saldo = saldo_inicial  # convención: no lo toques desde afuera
+
+    @property
+    def saldo(self) -> int:
+        return self._saldo
+
+    def retirar(self, monto: int) -> None:
+        if monto <= 0:
+            raise ValueError("el monto debe ser positivo")
+        if monto > self._saldo:
+            raise ValueError("saldo insuficiente")
+        self._saldo -= monto
+```
+
+```ts title="TypeScript"
+class Cuenta {
+  #saldo: number // privado de verdad en runtime (campo # de JavaScript)
+
+  constructor(saldoInicial: number) {
+    this.#saldo = saldoInicial
+  }
+
+  get saldo() {
+    return this.#saldo
+  }
+
+  retirar(monto: number) {
+    if (monto <= 0) throw new Error('El monto debe ser positivo')
+    if (monto > this.#saldo) throw new Error('Saldo insuficiente')
+    this.#saldo -= monto
+  }
+}
+```
+
+</CodeTabs>
+
+El invariante ("el saldo nunca es negativo") vive en un solo lugar. Si existiera `setSaldo()`, cualquier parte del sistema podría romperlo. Un buen matiz para decir en voz alta: en Java `private` lo hace cumplir el compilador (aunque la reflexión puede saltárselo), en Python la privacidad es una **convención** (el guion bajo) y en TypeScript el modificador `private` desaparece al compilar, mientras que los campos `#` de JavaScript sí son privados en tiempo de ejecución.
+
+### Abstracción: exponer el qué, esconder el cómo
+
+Abstraer es elegir qué detalles importan para quien usa algo. `PasarelaDePago.cobrar(cliente, monto)` es una abstracción: el checkout no sabe si detrás hay Stripe, MercadoPago o un fake de tests. La diferencia con el encapsulamiento es sutil y la preguntan: **la abstracción decide qué mostrar** (el diseño del contrato), **el encapsulamiento impide tocar lo que no se muestra** (la protección del estado).
+
+### Herencia: "es un", con contrato
+
+La herencia permite que una clase reutilice y especialice a otra. Es la herramienta más sobreutilizada de la POO porque se enseña primero y con ejemplos donde funciona (`Perro extends Animal`). En código real, la herencia acopla a la subclase con los **detalles internos** de la base, y eso trae los problemas que verás más abajo.
+
+### Polimorfismo: dinámico y estático
+
+Polimorfismo es que el mismo mensaje produzca comportamientos distintos según quién lo recibe. Hay dos formas, y separarlas es una buena señal:
+
+- **Dinámico** (de subtipos): se decide en **tiempo de ejecución** qué método corre, según el tipo real del objeto. Es la sobrescritura (*override*). Una lista de `Notificador` puede tener emails y SMS, y `n.enviar()` llama al correcto.
+- **Estático** (*ad hoc* y paramétrico): se decide en **tiempo de compilación**. La sobrecarga (*overloading*: mismo nombre, distintos parámetros) y los genéricos (`List<T>`).
+
+<CodeTabs>
+
+```java title="Java"
+import java.time.LocalDate;
+import java.util.List;
+
+interface Notificador {
+    void enviar(String mensaje);
+}
+
+class Email implements Notificador {
+    @Override
+    public void enviar(String mensaje) {
+        System.out.println("email: " + mensaje);
+    }
+}
+
+class Sms implements Notificador {
+    @Override
+    public void enviar(String mensaje) {
+        System.out.println("sms: " + mensaje.substring(0, Math.min(160, mensaje.length())));
+    }
+}
+
+class Avisos {
+    static void avisar(List<Notificador> canales) {
+        for (Notificador n : canales) n.enviar("Tu pedido salió"); // dinámico: decide el objeto
+    }
+}
+
+class Formato {
+    // Sobrecarga real: el compilador elige según el tipo del argumento
+    static String formatear(double valor) {
+        return String.format("%.2f", valor);
+    }
+
+    static String formatear(LocalDate fecha) {
+        return fecha.toString();
+    }
+}
+```
+
+```python title="Python"
+from functools import singledispatch
+
+class Notificador:
+    def enviar(self, mensaje: str) -> None: ...
+
+class Email(Notificador):
+    def enviar(self, mensaje: str) -> None:
+        print(f"email: {mensaje}")
+
+class Sms(Notificador):
+    def enviar(self, mensaje: str) -> None:
+        print(f"sms: {mensaje[:160]}")
+
+for n in [Email(), Sms()]:
+    n.enviar("Tu pedido salió")   # dinámico: decide el objeto
+
+# Python no tiene sobrecarga real: la última definición gana.
+# singledispatch elige la función según el tipo del primer argumento.
+@singledispatch
+def formatear(valor) -> str:
+    return str(valor)
+
+@formatear.register
+def _(valor: float) -> str:
+    return f"{valor:.2f}"
+```
+
+```ts title="TypeScript"
+interface Notificador {
+  enviar(mensaje: string): void
+}
+class Email implements Notificador {
+  enviar(mensaje: string) { console.log(`email: ${mensaje}`) }
+}
+class Sms implements Notificador {
+  enviar(mensaje: string) { console.log(`sms: ${mensaje.slice(0, 160)}`) }
+}
+
+for (const n of [new Email(), new Sms()]) n.enviar('Tu pedido salió') // dinámico
+
+// Sobrecarga en TS: varias firmas, UNA implementación que distingue en runtime
+function formatear(valor: number): string
+function formatear(valor: Date): string
+function formatear(valor: number | Date): string {
+  return valor instanceof Date ? valor.toISOString() : valor.toFixed(2)
+}
+```
+
+</CodeTabs>
+
+El matiz por lenguaje vale puntos: Java y C# tienen sobrecarga real, resuelta por el compilador. TypeScript solo tiene **firmas** sobrecargadas sobre una única implementación. Python no tiene sobrecarga: `typing.overload` solo informa al chequeador de tipos, y en tiempo de ejecución se usa `functools.singledispatch`.
+
+<Callout type="example" title="Respuesta modelo (45 segundos)">
+
+"Los cuatro pilares son encapsulamiento, abstracción, herencia y polimorfismo. Encapsular es que el objeto proteja sus invariantes: una `Cuenta` no deja que nadie le ponga saldo negativo, porque el único camino es `retirar()`, que valida. Abstraer es exponer solo lo que el cliente necesita, como una interfaz `PasarelaDePago` que esconde si detrás está Stripe. La herencia reutiliza y especializa una clase, aunque en la práctica prefiero la composición. Y el polimorfismo es que `notificador.enviar()` haga cosas distintas según el objeto real, lo que me deja agregar un canal nuevo sin tocar el código que los recorre."
+
+</Callout>
+
+<Quiz
+  question="Una clase Pedido tiene todos sus campos privados y un getter y un setter público para cada uno, incluido setEstado(). ¿Está bien encapsulada?"
+  options={[
+    { text: 'Sí: ningún campo es público.', why: 'La visibilidad de los campos es un medio, no el fin. Con un setter por campo, cualquiera puede pasar el pedido de "entregado" a "pendiente" sin ninguna validación.' },
+    { text: 'No: los setters exponen el estado igual que un campo público. Encapsular sería ofrecer operaciones con reglas, como pagar(), despachar() o cancelar(), que validan las transiciones.', correct: true, why: 'Exacto. El encapsulamiento protege invariantes. Las operaciones con nombre de negocio son el único camino para cambiar el estado, y cada una sabe qué transiciones son válidas.' },
+    { text: 'Depende del lenguaje: en Java sí, en Python no.', why: 'La idea es la misma en cualquier lenguaje. Lo que cambia es el mecanismo de privacidad (private, guion bajo, campos #), no qué significa encapsular.' },
+  ]}
+/>
+
+## Interfaz contra clase abstracta
+
+La respuesta corta: **una interfaz define un contrato** (qué se puede hacer) y **una clase abstracta comparte una implementación parcial** (estado y código común) entre subclases que son de la misma familia. Una clase puede cumplir varios contratos, pero en Java y TypeScript solo puede heredar de una clase.
+
+La respuesta que suma puntos agrega los matices del lenguaje, porque cambiaron con el tiempo:
+
+| | Java | TypeScript | Python |
+| --- | --- | --- | --- |
+| Interfaz | `interface`. Desde Java 8 admite métodos `default` y `static`, pero no estado de instancia. Una clase implementa varias. | `interface`: solo existe para el compilador y desaparece en el JavaScript generado. Es **estructural**: cumple quien tenga la forma, sin `implements`. | No hay palabra clave. `typing.Protocol` define un contrato estructural que verifica el chequeador de tipos (mypy, pyright). |
+| Clase abstracta | `abstract class`: puede tener estado, constructor y métodos `protected`. Herencia simple. | `abstract class`: existe en tiempo de ejecución y puede tener implementación. Herencia simple. | `abc.ABC` con `@abstractmethod`: no se puede instanciar si falta implementar un método. Python permite herencia múltiple. |
+
+Cuándo usar cada una:
+
+- **Interfaz** cuando tipos no relacionados comparten una capacidad: `Comparable`, `Exportable`, `PasarelaDePago`. Es lo que inyectas y lo que mockeas en tests.
+- **Clase abstracta** cuando hay un esqueleto común con pasos que cambian. Es el patrón [*Template Method*](/patrones/comportamiento-2): `Reporte.generar()` arma encabezado, cuerpo y pie, y cada subclase solo define `cuerpo()`.
+
+<Callout type="tip" title="El matiz de Java 8">
+
+Si te preguntan "¿y ahora que las interfaces tienen métodos `default`, qué diferencia queda?", la respuesta es el **estado**: una interfaz no puede tener campos de instancia ni constructor. Los métodos `default` existen para evolucionar interfaces sin romper a quienes ya las implementan (así se agregó `forEach` a `Iterable` en Java 8), no para reemplazar a las clases abstractas.
+
+</Callout>
+
+<Callout type="tip" title="En Java">
+
+Una clase que no fue diseñada para heredarse debería ser `final` (*Effective Java*, ítem 19: "diseña y documenta para la herencia, o prohíbela"). Desde Java 17 existe un punto intermedio: las clases e interfaces `sealed`, que enumeran exactamente quién puede extenderlas (`sealed interface Pago permits Tarjeta, Transferencia`). Es un buen matiz para cerrar la respuesta.
+
+</Callout>
+
+## Composición contra herencia
+
+"Prefiere la composición sobre la herencia" viene del libro del GoF de 1994, y el tema de [introducción a patrones](/patrones/introduccion) lo desarrolla. Para la entrevista necesitas dos cosas: un ejemplo de herencia que se rompe y un criterio para cuándo sí heredar.
+
+### El ejemplo clásico: la clase base frágil
+
+Joshua Bloch lo usa en *Effective Java* (ítem 18 de la tercera edición). Quieres contar cuántos elementos se agregaron a un `HashSet`, así que heredas y sobrescribes los dos métodos que agregan:
+
+```java title="InstrumentedHashSet.java"
+public class InstrumentedHashSet<E> extends HashSet<E> {
+    private int addCount = 0;
+
+    @Override public boolean add(E e) {
+        addCount++;
+        return super.add(e);
+    }
+
+    @Override public boolean addAll(Collection<? extends E> c) {
+        addCount += c.size();
+        return super.addAll(c);
+    }
+
+    public int getAddCount() { return addCount; }
+}
+
+var s = new InstrumentedHashSet<String>();
+s.addAll(List.of("a", "b", "c"));
+s.getAddCount(); // 6, no 3
+```
+
+¿Por qué 6? Porque la implementación de `addAll` que hereda `HashSet` llama internamente a `add` por cada elemento, y ese `add` es el tuyo, que vuelve a contar. Tu subclase depende de un **detalle de implementación** de la clase base que no está en su contrato y que puede cambiar en la próxima versión del JDK. Eso es la *clase base frágil*.
+
+La solución con composición: una clase que **tiene** un `Set` y le reenvía las llamadas. Sus `add` y `addAll` cuentan y delegan; lo que el `Set` interno haga por dentro ya no importa.
+
+```java title="InstrumentedSet.java"
+public class InstrumentedSet<E> extends ForwardingSet<E> { // ForwardingSet delega todo en un Set interno
+    private int addCount = 0;
+    public InstrumentedSet(Set<E> s) { super(s); }
+
+    @Override public boolean add(E e) { addCount++; return super.add(e); }
+    @Override public boolean addAll(Collection<? extends E> c) { addCount += c.size(); return super.addAll(c); }
+}
+```
+
+Ahora `super.addAll` llama al `addAll` del set envuelto, que llama a **su propio** `add`, no al tuyo. Y de yapa, `InstrumentedSet` funciona con cualquier `Set`: `HashSet`, `TreeSet` o el que sea.
+
+### El otro problema: varios ejes de variación
+
+El segundo argumento contra la herencia aparece cuando el sistema crece en más de una dimensión. Recorre el widget: cada requisito nuevo es razonable, y aun así la jerarquía explota.
+
+<InheritanceBreaker />
+
+Fíjate en el requisito 4. Además de la explosión combinatoria, la herencia fija el comportamiento **al crear el objeto**: un repartidor no puede pasar de moto a bici sin convertirse en otro objeto. Con composición, el comportamiento es un campo que se puede reemplazar en tiempo de ejecución. Esa es exactamente la idea del patrón [*Strategy*](/patrones/comportamiento-1).
+
+**¿Cuándo sí heredar?** Cuando la relación es un "es un" estable, la subclase respeta por completo el contrato de la base (Liskov) y quieres reutilizar un esqueleto controlado por la base, como en Template Method o en los frameworks que te piden extender una clase (`Exception`, un `Activity` de Android, un `TestCase`). Cuando la base es **de otro equipo o de una librería** y no fue diseñada para extenderse, la composición casi siempre es más segura.
+
+<Callout type="example" title="Respuesta modelo (50 segundos)">
+
+"La herencia acopla la subclase a los detalles internos de la base y fija el comportamiento al crear el objeto. Si la base cambia cómo se implementa algo, la subclase puede romperse sin haber cambiado: el ejemplo clásico es heredar de `HashSet` para contar inserciones, donde `addAll` llama a `add` y cuentas el doble. Y cuando hay dos ejes de variación, como vehículo y tipo de carga, la herencia necesita una subclase por combinación. Con composición, el objeto tiene sus comportamientos como campos, cada eje varía por separado y puedo cambiarlos en tiempo de ejecución. Heredo cuando hay un 'es un' estable y la base está diseñada para extenderse, como un Template Method."
+
+</Callout>
+
+## SOLID en versión de entrevista
+
+Los cinco principios están explicados con código antes y después en [Qué es un patrón (y SOLID)](/patrones/introduccion), con un widget que muestra cuántos archivos toca cada cambio. Aquí va la versión compacta: una definición que puedas decir de memoria, un ejemplo mínimo y el error típico al explicarlo.
+
+### S: responsabilidad única
+
+**Definición:** un módulo debería tener una sola razón para cambiar; en la formulación de Robert C. Martin, responder a **un solo actor** (un grupo de personas que pide cambios).
+
+<CodeTabs>
+
+```java title="Java"
+// Antes: Finanzas, Diseño e Infraestructura piden cambios a la misma clase
+interface FacturaTodoEnUno {
+    BigDecimal total();
+    byte[] aPdf();
+    void guardar();
+}
+
+// Después: la factura son datos y cada actor tiene su módulo
+record Factura(List<Linea> lineas) {}
+interface CalculadoraFactura { BigDecimal total(Factura f); }
+interface PdfFactura { byte[] generar(Factura f); }
+interface RepositorioFacturas { void guardar(Factura f); }
+```
+
+```ts title="TypeScript"
+// Antes: Finanzas, Diseño e Infraestructura piden cambios a la misma clase
+class Factura { total() {} aPdf() {} guardar() {} }
+// Después: cada actor tiene su módulo
+class CalculadoraFactura { total(f: Factura) {} }
+class PdfFactura { generar(f: Factura) {} }
+class RepositorioFacturas { guardar(f: Factura) {} }
+```
+
+</CodeTabs>
+
+**Error típico:** decir "una clase debe hacer una sola cosa". ¿Qué es una cosa? Con esa regla, cada método termina en su propia clase.
+
+### O: abierto/cerrado
+
+**Definición:** abierto a extensión, cerrado a modificación. Cuando aparece un caso nuevo, lo **agregas** en lugar de editar código que ya funciona.
+
+<CodeTabs>
+
+```java title="Java"
+class Envios {
+    // Antes: cada transportista nuevo edita este switch
+    static int costo(Pedido p) {
+        return switch (p.transportista()) {
+            case "dhl" -> 50 + p.pesoKg() * 4;
+            case "fedex" -> 45 + p.pesoKg() * 5;
+            default -> throw new IllegalArgumentException(p.transportista());
+        };
+    }
+
+    // Después: un transportista nuevo es una clase nueva
+    static final Map<String, Transportista> TRANSPORTISTAS = Map.of("dhl", new Dhl(), "fedex", new Fedex());
+}
+
+interface Transportista {
+    int costo(Pedido p);
+}
+```
+
+```ts title="TypeScript"
+// Antes: cada transportista nuevo edita este switch
+function costo(p: Pedido) { switch (p.transportista) { case 'dhl': /* ... */ } }
+// Después: un transportista nuevo es una clase nueva
+interface Transportista { costo(p: Pedido): number }
+const transportistas: Record<string, Transportista> = { dhl: new Dhl(), fedex: new Fedex() }
+```
+
+</CodeTabs>
+
+**Error típico:** abrir todos los ejes por adelantado. Solo se abre un eje que ya cambió o que el negocio anunció.
+
+### L: sustitución de Liskov
+
+**Definición:** si `S` es subtipo de `T`, cualquier código que funciona con un `T` debe seguir funcionando con un `S`, sin sorpresas.
+
+<CodeTabs>
+
+```java title="Java"
+class Pago {
+    void reembolsar(long monto) { /* devuelve el dinero */ }
+}
+
+class PagoGiftCard extends Pago {
+    @Override
+    void reembolsar(long monto) {
+        throw new UnsupportedOperationException("No soportado"); // rompe el contrato de Pago
+    }
+}
+```
+
+```ts title="TypeScript"
+class Pago { reembolsar(monto: number) { /* ... */ } }
+class PagoGiftCard extends Pago {
+  reembolsar() { throw new Error('No soportado') } // rompe el contrato de Pago
+}
+```
+
+</CodeTabs>
+
+**Señal para reconocerlo:** un `if (x instanceof Subclase)` en el código cliente (en Java, también un `UnsupportedOperationException` en un método heredado). **Error típico:** quedarse en el ejemplo del cuadrado y el rectángulo sin poder dar uno propio.
+
+### I: segregación de interfaces
+
+**Definición:** ningún cliente debería depender de métodos que no usa. Las interfaces se diseñan desde quien las consume.
+
+<CodeTabs>
+
+```java title="Java"
+// ReporteVentas solo necesita esto, no el repositorio de 8 métodos
+interface PedidosPorFecha {
+    List<Pedido> buscar(LocalDate desde, LocalDate hasta);
+}
+```
+
+```ts title="TypeScript"
+// ReporteVentas solo necesita esto, no el repositorio de 8 métodos
+interface PedidosPorFecha { buscar(desde: Date, hasta: Date): Pedido[] }
+```
+
+</CodeTabs>
+
+**Error típico:** confundirlo con SRP. SRP mira **dentro** de la clase (quién le pide cambios); ISP mira **desde el cliente** (de qué contrato depende).
+
+### D: inversión de dependencias
+
+**Definición:** los módulos de alto nivel (el negocio) no dependen de los de bajo nivel (SDKs, bases de datos). Ambos dependen de una abstracción, y la abstracción **la define el alto nivel**.
+
+<CodeTabs>
+
+```java title="Java"
+// El dominio define el contrato con su vocabulario...
+interface PasarelaDePago {
+    String cobrar(String clienteId, long centavos);
+}
+
+class Checkout {
+    private final PasarelaDePago pagos;
+
+    Checkout(PasarelaDePago pagos) {
+        this.pagos = pagos;
+    }
+
+    String pagar(String clienteId, long centavos) {
+        return pagos.cobrar(clienteId, centavos);
+    }
+}
+
+// ...y la infraestructura lo implementa
+class StripeGateway implements PasarelaDePago {
+    @Override
+    public String cobrar(String clienteId, long centavos) {
+        return "pi_123"; // aquí iría la llamada al SDK de Stripe
+    }
+}
+```
+
+```ts title="TypeScript"
+// El dominio define el contrato con su vocabulario...
+interface PasarelaDePago { cobrar(clienteId: string, centavos: number): Promise<string> }
+class Checkout { constructor(private pagos: PasarelaDePago) {} }
+// ...y la infraestructura lo implementa
+class StripeGateway implements PasarelaDePago { /* usa el SDK de Stripe */ }
+```
+
+</CodeTabs>
+
+<Sketch
+  width={640}
+  height={300}
+  caption="Inversión de dependencias: la flecha de dependencia deja de apuntar al SDK y pasa a apuntar a una interfaz que es del dominio."
+  items={[
+    { type: 'text', x: 24, y: 32, text: 'antes', size: 22, tone: 'pencil' },
+    { type: 'box', x: 24, y: 48, w: 150, h: 52, label: 'Checkout', font: 'code', size: 20 },
+    { type: 'arrow', from: [178, 74], to: [256, 74], tone: 'bad' },
+    { type: 'box', x: 260, y: 48, w: 190, h: 52, label: 'SDK de Stripe', size: 22, tone: 'bad' },
+    { type: 'cross', x: 490, y: 74, size: 22 },
+    { type: 'line', points: [[24, 128], [616, 128]], dashed: true, tone: 'muted' },
+    { type: 'text', x: 24, y: 164, text: 'después', size: 22, tone: 'line' },
+    { type: 'box', x: 24, y: 180, w: 140, h: 52, label: 'Checkout', font: 'code', size: 20 },
+    { type: 'arrow', from: [168, 206], to: [206, 206], tone: 'line' },
+    { type: 'box', x: 210, y: 180, w: 210, h: 52, label: 'PasarelaDePago', font: 'code', size: 20, tone: 'line', fill: true },
+    { type: 'arrow', from: [462, 206], to: [424, 206], tone: 'line' },
+    { type: 'box', x: 466, y: 180, w: 158, h: 52, label: 'StripeGateway', font: 'code', size: 18 },
+    { type: 'text', x: 24, y: 274, text: 'Stripe depende del dominio, no al revés', size: 20, tone: 'pencil' },
+  ]}
+/>
+
+**Error típico:** decir que DIP es "usar inyección de dependencias". Son cosas distintas; lo vemos en la sección siguiente.
+
+Ahora ponlo a prueba. Cada fragmento trae el síntoma que lo hace doler, que es como aparece en una entrevista de revisión de código:
+
+<SolidSmellSpotter />
+
+<Quiz
+  question="En una revisión de código ves: if (notificador instanceof NotificadorSms) { mensaje = mensaje.slice(0, 160) }. ¿Qué principio está en juego y qué propones?"
+  options={[
+    { text: 'Responsabilidad única: separar el recorte en otra clase.', why: 'Mover el recorte a otra clase no quita el instanceof. El problema es que el cliente necesita saber qué subtipo concreto tiene.' },
+    { text: 'Liskov (y de paso abierto/cerrado): el cliente no puede tratar a todos los notificadores igual. Que cada notificador se encargue de adaptar su mensaje dentro de enviar().', correct: true, why: 'Correcto. El instanceof es la señal clásica de que un subtipo no es sustituible sin ayuda del cliente. Al mover la regla dentro de NotificadorSms, el cliente vuelve a usar solo la interfaz, y un canal nuevo no obliga a agregar otro if.' },
+    { text: 'Segregación de interfaces: dividir Notificador en dos interfaces.', why: 'La interfaz no tiene métodos de más. Dividirla no resuelve que el cliente tenga que conocer el tipo concreto.' },
+  ]}
+/>
+
+### "¿Cómo aplicaste SOLID en un proyecto?"
+
+Esta pregunta es conductual disfrazada de técnica. La respuesta débil suena así:
+
+> "Siempre aplico SOLID. Uso interfaces para todo y cada clase tiene una sola responsabilidad. También uso inyección de dependencias."
+
+No hay un problema, no hay un antes ni un después, no hay resultado, y "interfaces para todo" es una pequeña bandera roja. La respuesta fuerte cuenta un caso concreto con la estructura de una historia corta (la desarrollamos en [la entrevista conductual](/casos/entrevista-conductual)):
+
+> "En una plataforma de e-commerce teníamos un `CheckoutService` que instanciaba directamente el cliente de MercadoPago. Cuando el negocio decidió agregar Stripe para clientes de Estados Unidos, el cambio tocaba la clase más crítica del sistema, y además no podíamos testearla sin llamar a la API de sandbox, así que los tests tardaban varios minutos y fallaban por red. Propuse definir una interfaz `PasarelaDePago` en el dominio, con el vocabulario nuestro (cobrar, reembolsar), y dos adaptadores. Es inversión de dependencias. Agregar Stripe pasó a ser un archivo nuevo más una línea en la configuración, y los tests de checkout pasaron a correr con un fake en memoria. Lo que **no** hice fue abstraer el envío de emails, que tenía un solo proveedor y nadie planeaba cambiar."
+
+Fíjate en el cierre: mostrar dónde **decidiste no aplicar** un principio es lo que convence a un entrevistador senior de que lo entiendes.
+
+## Inyección de dependencias e inversión de control
+
+Tres términos que se confunden siempre, y que conviene separar con precisión:
+
+- **Inversión de dependencias (DIP)** es un principio de diseño: hacia dónde apuntan las dependencias. El negocio define la interfaz; la infraestructura la implementa.
+- **Inyección de dependencias (DI)** es una técnica: un objeto **recibe** sus colaboradores (por constructor, normalmente) en lugar de crearlos. Puedes inyectar una clase concreta y no estar aplicando DIP.
+- **Inversión de control (IoC)** es la idea más general: el control del flujo lo tiene un framework, no tu código. "No nos llames, nosotros te llamamos". Un contenedor de DI (Spring, NestJS, .NET) es una forma de IoC; un framework web que llama a tus *handlers* es otra.
+
+<CodeTabs>
+
+```java title="Java"
+interface Notificador {
+    void enviar(String destino, String mensaje);
+}
+
+class ServicioPedidos {
+    private final RepositorioPedidos repo;
+    private final Notificador notificador;
+
+    // DI por constructor: recibe sus dependencias, no las crea
+    ServicioPedidos(RepositorioPedidos repo, Notificador notificador) {
+        this.repo = repo;
+        this.notificador = notificador;
+    }
+
+    void despachar(String pedidoId) {
+        Pedido pedido = repo.buscar(pedidoId);
+        pedido.despachar();
+        repo.guardar(pedido);
+        notificador.enviar(pedido.email(), "Tu pedido va en camino");
+    }
+}
+
+// composition root: el único lugar que conoce las clases concretas
+class App {
+    public static void main(String[] args) {
+        var servicio = new ServicioPedidos(new PostgresPedidos(dataSource()), new NotificadorSes(clienteSes()));
+        // en tests, sin red ni base de datos:
+        // new ServicioPedidos(new PedidosEnMemoria(), new NotificadorFalso())
+    }
+}
+```
+
+```python title="Python"
+from typing import Protocol
+
+class Notificador(Protocol):
+    def enviar(self, destino: str, mensaje: str) -> None: ...
+
+class ServicioPedidos:
+    # DI por constructor: recibe sus dependencias, no las crea
+    def __init__(self, repo: "RepositorioPedidos", notificador: Notificador) -> None:
+        self._repo = repo
+        self._notificador = notificador
+
+    def despachar(self, pedido_id: str) -> None:
+        pedido = self._repo.buscar(pedido_id)
+        pedido.despachar()
+        self._repo.guardar(pedido)
+        self._notificador.enviar(pedido.email, "Tu pedido va en camino")
+
+# composition root: el único lugar que conoce las clases concretas
+servicio = ServicioPedidos(PostgresPedidos(pool), NotificadorSes(cliente_ses))
+
+# en tests, sin red ni base de datos
+servicio_test = ServicioPedidos(PedidosEnMemoria(), NotificadorFalso())
+```
+
+```ts title="TypeScript"
+interface Notificador {
+  enviar(destino: string, mensaje: string): Promise<void>
+}
+
+class ServicioPedidos {
+  // DI por constructor: recibe sus dependencias, no las crea
+  constructor(
+    private readonly repo: RepositorioPedidos,
+    private readonly notificador: Notificador,
+  ) {}
+
+  async despachar(pedidoId: string) {
+    const pedido = await this.repo.buscar(pedidoId)
+    pedido.despachar()
+    await this.repo.guardar(pedido)
+    await this.notificador.enviar(pedido.email, 'Tu pedido va en camino')
+  }
+}
+
+// composition root: el único lugar que conoce las clases concretas
+const servicio = new ServicioPedidos(new PostgresPedidos(pool), new NotificadorSes(ses))
+
+// en tests, sin red ni base de datos
+const servicioTest = new ServicioPedidos(new PedidosEnMemoria(), new NotificadorFalso())
+```
+
+</CodeTabs>
+
+En Spring Boot, el contenedor hace este cableado por ti: anotas las implementaciones con `@Service` o `@Repository` y, si la clase tiene un solo constructor, Spring le inyecta los beans sin necesidad de `@Autowired`. Puntos que suman en la respuesta: prefiere **inyección por constructor** (las dependencias quedan explícitas y el objeto nunca existe a medio configurar) sobre la inyección por setter o por campo; un contenedor de DI es **opcional**, y en proyectos medianos armar el grafo a mano en un `main` es perfectamente válido; y el patrón opuesto, el *Service Locator* (pedir dependencias a un registro global desde dentro de la clase), esconde las dependencias y complica los tests. El tema de [patrones de aplicación](/patrones/patrones-aplicacion) tiene más detalle.
+
+## Demeter, DRY, KISS, YAGNI y sus excesos
+
+Estos cuatro principios aparecen como preguntas cortas ("¿qué es la Ley de Demeter?") o como argumento en una revisión de código. La diferencia entre una respuesta junior y una senior está en conocer **el exceso** de cada uno.
+
+**Ley de Demeter** (o "principio del mínimo conocimiento"). Un método solo debería hablar con sus "amigos inmediatos": sus propios campos, sus parámetros y los objetos que crea. Nada de recorrer la estructura interna de otros.
+
+<CodeTabs>
+
+```java title="Java"
+// Viola Demeter: esta clase conoce la forma interna de cuatro objetos
+String codigo = pedido.getCliente().getDireccion().getPais().getCodigo();
+// Mejor: pregúntale al pedido lo que necesitas
+String pais = pedido.paisDeDestino();
+```
+
+```ts title="TypeScript"
+// Viola Demeter: esta clase conoce la forma interna de cuatro objetos
+const codigo = pedido.cliente.direccion.pais.codigo
+// Mejor: pregúntale al pedido lo que necesitas
+const pais = pedido.paisDeDestino()
+```
+
+</CodeTabs>
+
+*Exceso:* llenar las clases de métodos que solo reenvían (`pedido.codigoPaisDelClienteDelPedido()`). Y no confundir con las APIs fluidas: `query.where(...).orderBy(...).limit(10)` encadena llamadas sobre el mismo tipo de objeto y no expone estructura interna.
+
+**DRY** (*Don't Repeat Yourself*, de *The Pragmatic Programmer*). Cada pieza de **conocimiento** debe tener una representación única. No habla de líneas de texto parecidas, sino de reglas de negocio: si el IVA se calcula en tres lugares, el día que cambie vas a olvidar uno. *Exceso:* unificar dos fragmentos que se parecen por casualidad. Como dice Sandi Metz, la duplicación es mucho más barata que la abstracción equivocada. Si dos funciones se parecen pero cambian por motivos distintos, no son la misma.
+
+**KISS** (*Keep It Simple*). La solución más simple que resuelve el problema real. *Exceso:* usarlo como excusa para no modelar nada ("un script de 2.000 líneas es simple").
+
+**YAGNI** (*You Aren't Gonna Need It*). No construyas flexibilidad para un futuro imaginado. *Exceso:* ignorar decisiones caras de revertir. YAGNI aplica a funcionalidad especulativa; no te exime de pensar en el formato de los datos, la API pública o la seguridad, que son caros de cambiar después.
+
+<Callout type="warn" title="SOLID contra YAGNI">
+
+Hay una tensión real entre "abierto a extensión" y "no lo vas a necesitar", y es una excelente pregunta senior. La forma de resolverla: aplica SOLID **cuando aparece el dolor** (el segundo transportista, el test que no puedes escribir), no por anticipado. Con un solo caso, la función simple gana; con el segundo, extraer la interfaz es un refactor de minutos y lo haces con información real.
+
+</Callout>
+
+<Quiz
+  question="Dos endpoints validan el RUT de un cliente con el mismo código de 15 líneas copiado. Otros dos endpoints formatean fechas con código parecido pero no idéntico: uno para un PDF legal y otro para la UI. ¿Qué haces?"
+  options={[
+    { text: 'Extraes ambas duplicaciones a funciones compartidas: DRY.', why: 'La validación del RUT es una sola regla de negocio y conviene unificarla. Pero el formato del PDF legal y el de la UI cambian por motivos distintos (normativa contra diseño): unirlos crea una abstracción equivocada.' },
+    { text: 'Unificas la validación del RUT, que es una sola pieza de conocimiento, y dejas separados los formateos de fecha, que responden a actores distintos.', correct: true, why: 'Exacto. DRY habla de conocimiento, no de texto parecido. Dos fragmentos similares que cambian por razones distintas no son duplicación real.' },
+    { text: 'No tocas nada: la duplicación nunca es un problema real.', why: 'La validación del RUT duplicada sí es un riesgo: si cambia la regla, alguien va a actualizar un lugar y olvidar el otro.' },
+  ]}
+/>
+
+## Practica en voz alta
+
+<QuestionDeck
+  cards={[
+    {
+      q: '¿Cuáles son los cuatro pilares de la programación orientada a objetos?',
+      level: 'junior',
+      checks: 'Que no recites un glosario: que cada pilar venga con su para qué y un ejemplo.',
+      answer: <><p>Encapsulamiento, abstracción, herencia y polimorfismo. Encapsular es que el objeto proteja sus invariantes: una <code>Cuenta</code> solo cambia su saldo con <code>retirar()</code>, que valida. Abstraer es exponer solo lo necesario, como una interfaz <code>PasarelaDePago</code>. La herencia reutiliza y especializa una clase. El polimorfismo hace que <code>n.enviar()</code> se comporte según el objeto real.</p><p>Agregaría que en la práctica uso más composición que herencia, porque acopla menos.</p></>,
+      strong: ['Un ejemplo de dominio real por pilar', 'Distinguir abstracción de encapsulamiento', 'Un matiz propio sobre la herencia'],
+      weak: ['Definiciones de libro sin ejemplo', '"Encapsular es poner getters y setters"', 'Usar solo el ejemplo de Animal y Perro'],
+      followups: ['¿Qué diferencia hay entre abstracción y encapsulamiento?', '¿Un setter público rompe el encapsulamiento?'],
+    },
+    {
+      q: '¿Qué diferencia hay entre sobrecarga y sobrescritura?',
+      level: 'junior',
+      checks: 'Polimorfismo estático contra dinámico, y si conoces cómo lo hace tu lenguaje.',
+      answer: <><p>La <b>sobrescritura</b> (override) es redefinir en una subclase un método heredado, con la misma firma; qué versión corre se decide en tiempo de ejecución según el tipo real del objeto. La <b>sobrecarga</b> (overload) es tener varios métodos con el mismo nombre y distintos parámetros en la misma clase; el compilador elige cuál según los argumentos.</p><p>Java y C# tienen sobrecarga real. TypeScript solo tiene varias firmas sobre una implementación, y Python no tiene sobrecarga: se usa <code>singledispatch</code> o argumentos opcionales.</p></>,
+      strong: ['Tiempo de ejecución contra tiempo de compilación', 'Conocer el caso de su lenguaje principal'],
+      weak: ['Invertir los términos', 'Decir que Python tiene sobrecarga como Java'],
+      followups: ['¿Qué pasa en Java si sobrecargas con un parámetro Object y otro String y pasas null?', '¿Qué es el despacho dinámico?'],
+    },
+    {
+      q: '¿Cuándo usarías una interfaz y cuándo una clase abstracta?',
+      level: 'semi',
+      checks: 'Contrato contra implementación compartida, y los matices del lenguaje.',
+      answer: <><p>La interfaz define un contrato que pueden cumplir tipos no relacionados; es lo que inyecto y lo que reemplazo en tests. La clase abstracta comparte estado y código entre subclases de una misma familia, como un esqueleto de Template Method. En Java y TypeScript una clase implementa varias interfaces pero hereda de una sola clase.</p><p>Desde Java 8 las interfaces tienen métodos <code>default</code>, pero siguen sin estado ni constructor. En TypeScript la interfaz desaparece al compilar y es estructural; en Python el equivalente es <code>Protocol</code>, y la clase abstracta es <code>abc.ABC</code>.</p></>,
+      strong: ['Mencionar herencia simple contra múltiples interfaces', 'El matiz de los métodos default', 'Ejemplo de Template Method'],
+      weak: ['"Las interfaces no tienen código" (falso desde Java 8)', 'No poder dar un caso de uso de cada una'],
+      followups: ['¿Qué problema resuelven los métodos default?', '¿Qué es el tipado estructural?'],
+    },
+    {
+      q: '¿Por qué se dice que hay que preferir composición sobre herencia? ¿Cuándo sí heredarías?',
+      level: 'semi',
+      checks: 'Que conozcas un caso real de herencia que se rompe, no solo el eslogan.',
+      answer: <><p>La herencia acopla la subclase a los detalles internos de la base: si la base cambia cómo implementa algo, la subclase se rompe sin haber cambiado. El ejemplo clásico es heredar de <code>HashSet</code> para contar inserciones: <code>addAll</code> llama a <code>add</code> y cuentas el doble. Además, con dos ejes de variación necesitas una subclase por combinación, y no puedes cambiar el comportamiento en tiempo de ejecución.</p><p>Heredo cuando hay un "es un" estable, la subclase respeta el contrato completo y la base está diseñada para extenderse, como un Template Method o una clase de framework.</p></>,
+      strong: ['El ejemplo de la clase base frágil', 'La explosión combinatoria', 'Un criterio claro para heredar'],
+      weak: ['"La herencia es mala" sin matices', 'No poder explicar qué se rompe'],
+      followups: ['¿Qué patrón de diseño reemplaza a una jerarquía por composición?', '¿Cómo se relaciona esto con Liskov?'],
+    },
+    {
+      q: '¿Qué es encapsulamiento? ¿Es lo mismo que tener getters y setters?',
+      level: 'junior',
+      checks: 'Invariantes contra ceremonia.',
+      answer: <><p>Encapsular es que el objeto controle su propio estado y sus reglas, de modo que nadie pueda dejarlo en un estado inválido. No es lo mismo que getters y setters: si cada campo tiene un setter público, cualquiera puede cambiar el estado sin validación, y el resultado es casi igual a tener los campos públicos.</p><p>Un pedido bien encapsulado no tiene <code>setEstado()</code>; tiene <code>pagar()</code>, <code>despachar()</code> y <code>cancelar()</code>, y cada una valida que la transición sea posible.</p></>,
+      strong: ['Hablar de invariantes', 'Operaciones con nombre de negocio en vez de setters'],
+      weak: ['Reducirlo a modificadores de acceso'],
+      followups: ['¿Cómo es la privacidad en Python?', '¿Qué es un modelo anémico?'],
+    },
+    {
+      q: 'Explícame SOLID.',
+      level: 'semi',
+      checks: 'Definiciones correctas, un ejemplo por principio y saber que son heurísticas.',
+      answer: <><p>Son cinco heurísticas para que el código sea barato de cambiar. <b>S</b>: un módulo responde a un solo actor. <b>O</b>: los casos nuevos se agregan sin editar lo que funciona, como transportistas detrás de una interfaz. <b>L</b>: un subtipo debe poder reemplazar a su base sin sorpresas; si ves un <code>instanceof</code> en el cliente, algo falla. <b>I</b>: ningún cliente depende de métodos que no usa. <b>D</b>: el negocio define las interfaces y la infraestructura las implementa.</p><p>No los aplico como checklist: los uso para diagnosticar un cambio que duele.</p></>,
+      strong: ['SRP como "un actor", no "una cosa"', 'La señal del instanceof para Liskov', 'Cerrar con criterio'],
+      weak: ['Recitar los nombres sin ejemplo', 'Confundir D con inyección de dependencias'],
+      followups: ['¿Cuál te parece el más importante y por qué?', '¿Cuál es la diferencia entre SRP e ISP?'],
+    },
+    {
+      q: 'Dame un ejemplo real de una violación del principio de Liskov.',
+      level: 'senior',
+      checks: 'Que vayas más allá del cuadrado y el rectángulo.',
+      answer: <><p>Un caso típico: una clase <code>Pago</code> con <code>reembolsar()</code> y una subclase <code>PagoGiftCard</code> que lanza "no soportado". Compila, pero el módulo de devoluciones termina con un <code>if (pago instanceof PagoGiftCard)</code>. Otro, discutido desde hace años: las listas de <code>Collections.unmodifiableList</code> en Java implementan <code>List</code> y lanzan error en <code>add()</code>; el JDK lo resuelve declarando esos métodos como operaciones opcionales.</p><p>La solución es que la jerarquía refleje las capacidades reales: una interfaz <code>Reembolsable</code> que solo implementan los medios que pueden reembolsar.</p></>,
+      strong: ['Ejemplo de dominio propio', 'Mencionar precondiciones más fuertes o postcondiciones más débiles', 'Proponer la corrección'],
+      weak: ['Solo el cuadrado y el rectángulo', 'Decir que Liskov es "usar herencia bien"'],
+      followups: ['¿Las excepciones forman parte del contrato?', '¿Cómo detectarías una violación en revisión de código?'],
+    },
+    {
+      q: '¿Qué diferencia hay entre inyección de dependencias, inversión de dependencias e inversión de control?',
+      level: 'semi',
+      checks: 'Separar principio, técnica e idea general.',
+      answer: <><p>Inversión de dependencias es un principio: el negocio define las abstracciones y los detalles dependen de ellas. Inyección de dependencias es una técnica: un objeto recibe sus colaboradores por constructor en vez de crearlos. Puedo inyectar una clase concreta sin aplicar DIP. Inversión de control es la idea más amplia: el framework llama a mi código, no al revés; un contenedor de DI es un caso de IoC.</p><p>En la práctica, combino DIP con inyección por constructor y armo el grafo en una composition root.</p></>,
+      strong: ['Dar un ejemplo de DI sin DIP', 'Preferir inyección por constructor'],
+      weak: ['Usar los tres términos como sinónimos'],
+      followups: ['¿Necesitas un contenedor de DI?', '¿Qué problema tiene el Service Locator?'],
+    },
+    {
+      q: '¿Cuándo aplicar SOLID te lleva a un diseño peor?',
+      level: 'senior',
+      checks: 'Criterio: costo de las abstracciones.',
+      answer: <><p>Cuando se aplica por anticipado. Interfaces con una sola implementación que nunca va a tener otra, clases de tres líneas para cumplir SRP al extremo, o puntos de extensión para variaciones que nadie pidió. El código se vuelve difícil de navegar y la abstracción suele tener la forma equivocada, porque se diseñó sin casos reales.</p><p>Mi regla es esperar al dolor: el segundo caso, el test que no puedo escribir, el cambio que toca seis archivos. Ahí extraigo la abstracción con información real.</p></>,
+      strong: ['Mencionar YAGNI o la abstracción equivocada', 'Una regla práctica para decidir'],
+      weak: ['"SOLID siempre mejora el código"'],
+      followups: ['¿Una interfaz con una sola implementación tiene sentido alguna vez?', '¿Conoces alguna crítica a SOLID?'],
+    },
+    {
+      q: '¿Qué es la Ley de Demeter?',
+      level: 'semi',
+      checks: 'Acoplamiento a la estructura interna de otros objetos.',
+      answer: <><p>Un método solo debería hablar con sus colaboradores directos: sus campos, sus parámetros y lo que crea. Una cadena como <code>pedido.cliente.direccion.pais.codigo</code> acopla mi código a la estructura interna de cuatro objetos; si cambia cómo se guarda la dirección, me rompo. Mejor pedirle al pedido lo que necesito: <code>pedido.paisDeDestino()</code>.</p><p>No aplica a APIs fluidas que devuelven el mismo tipo, como un query builder, y llevada al extremo produce clases llenas de métodos que solo reenvían.</p></>,
+      strong: ['Explicar el costo del acoplamiento', 'Mencionar la excepción de las APIs fluidas'],
+      weak: ['"No usar más de un punto" como regla mecánica'],
+      followups: ['¿Qué es "Tell, don’t ask"?'],
+    },
+    {
+      q: '¿Cómo aplicaste SOLID en un proyecto?',
+      level: 'senior',
+      checks: 'Una historia real con problema, decisión, resultado y límites.',
+      answer: <><p>Cuenta un caso concreto: el problema (un <code>CheckoutService</code> que instanciaba el SDK de MercadoPago, imposible de testear sin red), el disparador (había que agregar Stripe), la decisión (una interfaz <code>PasarelaDePago</code> en el dominio y un adaptador por proveedor), el resultado (agregar Stripe fue un archivo nuevo y los tests corrieron con un fake en memoria) y un límite (no abstraje el envío de emails porque tenía un solo proveedor).</p></>,
+      strong: ['Problema y resultado concretos', 'Nombrar el principio sin forzarlo', 'Mostrar dónde decidiste no aplicarlo'],
+      weak: ['"Siempre aplico SOLID"', 'Interfaces para todo', 'Historia sin resultado'],
+      followups: ['¿Qué harías distinto hoy?', '¿Cómo convenciste al equipo?'],
+    },
+    {
+      q: 'DRY: ¿siempre hay que eliminar la duplicación?',
+      level: 'semi',
+      checks: 'Conocimiento contra texto parecido.',
+      answer: <><p>No. DRY habla de que cada pieza de <b>conocimiento</b> tenga una sola representación, no de eliminar todo texto parecido. Si la regla del IVA está en tres lugares, hay que unificarla. Pero si dos funciones se parecen y cambian por motivos distintos, como el formato de fecha de un PDF legal y el de la UI, unirlas crea una abstracción equivocada que después se llena de parámetros y condicionales.</p><p>Uso la regla de tres: a la tercera repetición real, refactorizo.</p></>,
+      strong: ['Distinguir conocimiento de coincidencia', 'Citar la abstracción equivocada o la regla de tres'],
+      weak: ['"Nunca hay que repetir código"'],
+      followups: ['¿Qué haces si ya existe una abstracción equivocada?'],
+    },
+    {
+      q: '¿Un Singleton viola algún principio?',
+      level: 'senior',
+      checks: 'Estado global, dependencias ocultas y testabilidad.',
+      answer: <><p>El problema no es tener una sola instancia, sino el <b>acceso global</b>. Si una clase llama a <code>Config.getInstance()</code> por dentro, depende de un detalle concreto que no aparece en su constructor: va contra la inversión de dependencias, esconde el acoplamiento y complica los tests, porque el estado se comparte entre ellos.</p><p>Si necesito una sola instancia, la creo una vez en la composition root y la inyecto. El ciclo de vida lo decide quien arma la aplicación, no la clase.</p></>,
+      strong: ['Separar "una instancia" de "acceso global"', 'Proponer inyectarlo'],
+      weak: ['"Singleton es un antipatrón" sin explicar por qué'],
+      followups: ['¿Y en un servidor con varios hilos?', '¿Dónde viste un Singleton justificado?'],
+    },
+  ]}
+/>
+
+<Takeaways>
+
+- Cada pilar tiene un para qué: **encapsular** protege invariantes (no es poner getters y setters), **abstraer** decide qué exponer, **heredar** especializa y **polimorfismo** permite agregar casos sin tocar a quien los usa.
+- **Interfaz** es un contrato que cumplen tipos no relacionados; **clase abstracta** comparte estado y esqueleto. Conoce los matices de tu lenguaje: `default` en Java 8, interfaces estructurales en TypeScript, `Protocol` y `ABC` en Python.
+- La herencia se rompe por la **clase base frágil** y por la **explosión combinatoria** cuando hay varios ejes. La composición deja variar cada eje por separado y en tiempo de ejecución.
+- Para cada principio SOLID, ten una definición precisa, un ejemplo propio y su error típico. SRP es "un actor", la señal de Liskov es el `instanceof` y DIP no es lo mismo que inyección de dependencias.
+- A "¿cómo aplicaste SOLID?" se responde con una historia: problema, decisión, resultado y dónde decidiste **no** aplicarlo.
+- Demeter, DRY, KISS y YAGNI tienen excesos. Saber nombrarlos es lo que distingue una respuesta senior.
+
+</Takeaways>
+
+## Fuentes y lecturas
+
+- Joshua Bloch, [*Effective Java*, 3.ª edición](https://www.oreilly.com/library/view/effective-java-3rd/9780134686097/) (Addison-Wesley, 2018), ítem 18: "Favor composition over inheritance".
+- Gamma, Helm, Johnson y Vlissides, [*Design Patterns*](https://www.oreilly.com/library/view/design-patterns-elements/0201633612/) (1994): los dos principios del capítulo 1.
+- Robert C. Martin, [*The Single Responsibility Principle*](https://blog.cleancoder.com/uncle-bob/2014/05/08/SingleReponsibilityPrinciple.html) (2014).
+- Barbara Liskov y Jeannette Wing, [*A Behavioral Notion of Subtyping*](https://dl.acm.org/doi/10.1145/197320.197383) (ACM TOPLAS, 1994).
+- Martin Fowler, [*Inversion of Control Containers and the Dependency Injection pattern*](https://martinfowler.com/articles/injection.html) (2004).
+- Oracle, [Default Methods](https://docs.oracle.com/javase/tutorial/java/IandI/defaultmethods.html), The Java Tutorials.
+- Python, [`abc`: Abstract Base Classes](https://docs.python.org/3/library/abc.html) y [`typing.Protocol`](https://docs.python.org/3/library/typing.html#typing.Protocol).
+- TypeScript Handbook, [Classes](https://www.typescriptlang.org/docs/handbook/2/classes.html) (clases abstractas y miembros privados).
+- Sandi Metz, [*The Wrong Abstraction*](https://sandimetz.com/blog/2016/1/20/the-wrong-abstraction) (2016), y Martin Fowler, [*Yagni*](https://martinfowler.com/bliki/Yagni.html).
+- Andrew Hunt y David Thomas, [*The Pragmatic Programmer*, 20.º aniversario](https://pragprog.com/titles/tpp20/the-pragmatic-programmer-20th-anniversary-edition/) (2019): DRY y la Ley de Demeter.
+- [Tech Interview Handbook](https://www.techinterviewhandbook.org/), para el formato de las preguntas y la preparación general.
+

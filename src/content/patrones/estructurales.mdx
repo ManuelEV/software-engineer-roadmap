@@ -1,0 +1,838 @@
+import { UmlDiagram } from '../../components/widgets/patrones/UmlDiagram'
+import { DecoratorStack } from '../../components/widgets/patrones/DecoratorStack'
+import { ProxyLazy } from '../../components/widgets/patrones/ProxyLazy'
+import { CompositeTree } from '../../components/widgets/patrones/CompositeTree'
+
+Los patrones **estructurales** responden a una pregunta: ¿cómo combino objetos que ya existen para formar algo más grande sin que todo quede pegado con cinta? Casi todos se apoyan en la misma herramienta, la **composición**: un objeto guarda una referencia a otro y le delega trabajo. Lo que cambia entre ellos es la **intención**.
+
+Eso los vuelve confusos al principio. Adapter, Decorator y Proxy tienen diagramas casi idénticos (una clase que envuelve a otra), y aun así resuelven problemas distintos. Por eso este tema termina cada patrón con "cuándo no usarlo" y "con qué se confunde", e incluye una sección dedicada a la pregunta de entrevista más común de la familia: **Decorator vs. Proxy vs. Adapter vs. Facade**.
+
+El recorrido: primero los cuatro "envoltorios" (Adapter, Decorator, Facade, Proxy), después los que organizan estructuras (Composite y Bridge) y al final el que ahorra memoria (Flyweight).
+
+## Adapter
+
+**Intención:** convertir la interfaz de una clase en otra que el cliente espera, para que colaboren clases que de otro modo no podrían.
+
+El caso de manual: tu dominio define cómo cobra (`PaymentGateway.charge(amount: Money, orderId)`), pero el proveedor que te toca integrar trae un SDK con otra forma: recibe centavos y moneda por separado, devuelve códigos numéricos en lugar de excepciones y llama "referencia" a lo que tú llamas pedido.
+
+```ts title="checkout.ts (antes)"
+// El SDK del proveedor se filtra por todo el código de negocio.
+const res = legacyPay.makePayment(Math.round(order.total.amount * 100), order.total.currency, `ORD-${order.id}`)
+if (res.code === 51) throw new InsufficientFunds()
+if (res.code !== 0) throw new PaymentFailed(String(res.code))
+order.markPaid(res.txn)
+// ...y la misma traducción de códigos se repite en refunds.ts y subscriptions.ts
+```
+
+Si mañana cambias de proveedor, tocas cada archivo que conoce `makePayment` y sus códigos mágicos. El Adapter encierra esa traducción en **un solo objeto** que implementa tu interfaz y por dentro habla el idioma del SDK.
+
+<UmlDiagram
+  caption="Adapter de objetos: implementa la interfaz que espera el cliente y delega en el objeto adaptado (adaptee)."
+  classes={[
+    { id: 'client', name: 'CheckoutService', methods: ['pay(order)'], x: 0, y: 0, desc: 'Solo conoce PaymentGateway, la interfaz de tu dominio.' },
+    { id: 'target', name: 'PaymentGateway', kind: 'interface', methods: ['charge(amount, orderId)'], x: 1, y: 0, desc: 'El "target": la interfaz que tu código quiere usar.' },
+    { id: 'adapter', name: 'LegacyPayAdapter', methods: ['charge(amount, orderId)'], x: 1, y: 1.2, tone: 'line', desc: 'Traduce unidades, nombres y códigos de error. Es el único lugar que conoce el SDK.' },
+    { id: 'adaptee', name: 'LegacyPayClient', methods: ['makePayment(cents, cur, ref)'], x: 2, y: 1.2, w: 1.1, desc: 'El "adaptee": el SDK de terceros, que no puedes (ni debes) modificar.' },
+  ]}
+  relations={[
+    { from: 'client', to: 'target', kind: 'depends' },
+    { from: 'adapter', to: 'target', kind: 'implements' },
+    { from: 'adapter', to: 'adaptee', kind: 'composes', label: 'delega' },
+  ]}
+/>
+
+<CodeTabs>
+
+```ts title="TypeScript"
+interface PaymentGateway {
+  charge(amount: Money, orderId: string): Promise<{ transactionId: string }>
+}
+
+class LegacyPayAdapter implements PaymentGateway {
+  constructor(private readonly client: LegacyPayClient) {}
+
+  async charge(amount: Money, orderId: string) {
+    const res = await this.client.makePayment(
+      Math.round(amount.amount * 100), // el SDK quiere centavos
+      amount.currency,
+      `ORD-${orderId}`,
+    )
+    switch (res.code) {
+      case 0: return { transactionId: res.txn }
+      case 51: throw new InsufficientFunds()
+      case 54: throw new CardExpired()
+      default: throw new PaymentFailed(`LegacyPay code ${res.code}`)
+    }
+  }
+}
+
+// El checkout no sabe que existe LegacyPay:
+const checkout = new CheckoutService(new LegacyPayAdapter(new LegacyPayClient(apiKey)))
+```
+
+```python title="Python"
+from typing import Protocol
+
+class PaymentGateway(Protocol):
+    def charge(self, amount: "Money", order_id: str) -> str: ...
+
+ERRORS = {51: InsufficientFunds, 54: CardExpired}
+
+class LegacyPayAdapter:
+    def __init__(self, client: "LegacyPayClient") -> None:
+        self._client = client
+
+    def charge(self, amount: "Money", order_id: str) -> str:
+        res = self._client.make_payment(
+            round(amount.amount * 100), amount.currency, f"ORD-{order_id}"
+        )
+        if res.code == 0:
+            return res.txn
+        raise ERRORS.get(res.code, PaymentFailed)(f"LegacyPay code {res.code}")
+
+checkout = CheckoutService(LegacyPayAdapter(LegacyPayClient(api_key)))
+```
+
+</CodeTabs>
+
+GoF describe dos variantes. El **adapter de objetos** (el de arriba) usa composición y es el que usarás casi siempre. El **adapter de clases** hereda del adaptado e implementa la interfaz objetivo; necesita herencia múltiple o que el adaptado sea una clase extensible, y acopla más.
+
+**Dónde aparece:** `InputStreamReader` en Java adapta un flujo de bytes a un `Reader` de caracteres, y `Arrays.asList` presenta un arreglo como `List`. Axios elige un *adapter* distinto según el entorno (XHR en el navegador, el módulo `http` en Node) detrás de la misma API. A escala de arquitectura, los "adaptadores" de la [arquitectura hexagonal](/arquitectura/hexagonal) y la *anti-corruption layer* de [DDD estratégico](/arquitectura/ddd-estrategico) son este mismo patrón aplicado a un sistema completo.
+
+**Cuándo no usarlo:** si controlas ambos lados, cambia la interfaz en lugar de agregar una capa de traducción. Y si el adapter empieza a tener lógica de negocio (descuentos, reglas de reintento), ya no es un adapter: esa lógica pertenece a tu dominio.
+
+**Relacionados:** Facade también envuelve, pero simplifica un subsistema entero en vez de traducir un objeto. Bridge separa abstracción e implementación **de antemano**; Adapter arregla una incompatibilidad **después**.
+
+## Decorator
+
+**Intención:** agregar responsabilidades a un objeto de forma dinámica, envolviéndolo en otro que implementa la misma interfaz.
+
+Imagina el cliente HTTP con el que tu servicio de pedidos llama a la API de inventario. Primero necesitas logs. Después, reintentos ante errores 503. Después, caché para las lecturas. Después, un token de autenticación. Hay dos caminos malos:
+
+- **Subclases por combinación:** `LoggingHttpClient`, `RetryingHttpClient`, `LoggingRetryingHttpClient`, `CachedLoggingRetryingHttpClient`... Con 4 comportamientos opcionales hay 2⁴ = 16 combinaciones posibles.
+- **Flags dentro de una clase:** `if (this.opts.retry) ... if (this.opts.cache) ...`. La clase crece con cada requisito nuevo y cada `if` se cruza con los demás.
+
+Decorator propone otra cosa: cada comportamiento es un objeto pequeño que **implementa `HttpClient` y envuelve otro `HttpClient`**. Haces su trabajo antes o después de delegar. Como todos comparten interfaz, se apilan como capas de cebolla, y el código que usa el cliente no sabe cuántas capas hay.
+
+<DecoratorStack />
+
+Juega con el orden. Tres lecciones que el widget hace visibles:
+
+1. **Logging por fuera de Retry** registra una llamada lógica; **por dentro**, registra cada intento. Ninguna es incorrecta: depende de qué quieres medir.
+2. **Caché por fuera de Retry** evita reintentar cuando hay un *hit*. Al revés, cada reintento vuelve a consultar la caché, lo que es redundante.
+3. **Caché por fuera de Auth** es un riesgo real: la caché responde antes de saber quién pregunta, y en un cliente compartido podrías servir la respuesta de un usuario a otro.
+
+<UmlDiagram
+  caption="Decorator: cada decorador ES un HttpClient (implementa la interfaz) y TIENE un HttpClient (su campo inner). Por eso se pueden anidar en cualquier orden."
+  classes={[
+    { id: 'iface', name: 'HttpClient', kind: 'interface', methods: ['get(url): Response'], x: 1, y: 0, desc: 'La interfaz común. El cliente final solo conoce esto.' },
+    { id: 'fetch', name: 'FetchHttpClient', methods: ['get(url)'], x: 0, y: 1.2, desc: 'El componente concreto: hace la llamada de red real.' },
+    { id: 'retry', name: 'RetryClient', fields: ['-inner: HttpClient'], methods: ['get(url)'], x: 1, y: 1.2, tone: 'line', desc: 'Decorador: delega en inner y reintenta si la respuesta es un error transitorio.' },
+    { id: 'cache', name: 'CachingClient', fields: ['-inner: HttpClient'], methods: ['get(url)'], x: 2, y: 1.2, tone: 'line', desc: 'Decorador: responde desde la caché o delega y guarda el resultado.' },
+  ]}
+  relations={[
+    { from: 'fetch', to: 'iface', kind: 'implements' },
+    { from: 'retry', to: 'iface', kind: 'implements' },
+    { from: 'retry', to: 'iface', kind: 'aggregates', label: 'inner' },
+    { from: 'cache', to: 'iface', kind: 'implements' },
+    { from: 'cache', to: 'iface', kind: 'aggregates', label: 'inner' },
+  ]}
+/>
+
+<CodeTabs>
+
+```ts title="TypeScript"
+interface HttpClient {
+  get(url: string): Promise<Response>
+}
+
+class FetchHttpClient implements HttpClient {
+  get(url: string) { return fetch(url) }
+}
+
+class RetryClient implements HttpClient {
+  constructor(private readonly inner: HttpClient, private readonly attempts = 3) {}
+
+  async get(url: string) {
+    for (let i = 1; ; i++) {
+      const res = await this.inner.get(url)
+      if (res.status < 500 || i === this.attempts) return res
+      await sleep(100 * 2 ** (i - 1)) // backoff exponencial
+    }
+  }
+}
+
+class CachingClient implements HttpClient {
+  private cache = new Map<string, { body: string; expires: number }>()
+  constructor(private readonly inner: HttpClient, private readonly ttlMs = 30_000) {}
+
+  async get(url: string) {
+    const hit = this.cache.get(url)
+    if (hit && hit.expires > Date.now()) return new Response(hit.body)
+    const res = await this.inner.get(url)
+    if (res.ok) this.cache.set(url, { body: await res.clone().text(), expires: Date.now() + this.ttlMs })
+    return res
+  }
+}
+
+// La composición se lee de afuera hacia adentro:
+const inventory: HttpClient = new CachingClient(new RetryClient(new FetchHttpClient()))
+```
+
+```python title="Python"
+import functools, time
+from typing import Protocol
+
+class HttpClient(Protocol):
+    def get(self, url: str) -> "Response": ...
+
+class RetryClient:
+    def __init__(self, inner: HttpClient, attempts: int = 3) -> None:
+        self._inner, self._attempts = inner, attempts
+
+    def get(self, url: str) -> "Response":
+        for i in range(1, self._attempts + 1):
+            res = self._inner.get(url)
+            if res.status_code < 500 or i == self._attempts:
+                return res
+            time.sleep(0.1 * 2 ** (i - 1))
+
+class CachingClient:
+    def __init__(self, inner: HttpClient) -> None:
+        self._inner, self._cache = inner, {}
+
+    def get(self, url: str) -> "Response":
+        if url not in self._cache:
+            self._cache[url] = self._inner.get(url)
+        return self._cache[url]
+
+client = CachingClient(RetryClient(RequestsClient()))
+
+# El mismo patrón a nivel de función: los decoradores de Python.
+@functools.lru_cache(maxsize=1024)
+def exchange_rate(currency: str) -> float:
+    return fetch_rate(currency)
+```
+
+</CodeTabs>
+
+<Callout type="note" title="Tres cosas que se llaman 'decorator'">
+
+El patrón GoF (envolver un objeto con la misma interfaz), los **decoradores de Python** (`@functools.lru_cache` envuelve una función: es el mismo patrón aplicado a funciones) y los **decoradores de TypeScript/Java** (`@Injectable()`, `@Transactional`), que son anotaciones de metaprogramación. Estos últimos a veces *se implementan* con un proxy o un decorador por debajo, pero el término no significa lo mismo.
+
+</Callout>
+
+**Dónde aparece:** la biblioteca de I/O de Java es el ejemplo canónico. `new BufferedInputStream(new FileInputStream("pedidos.csv"))` agrega un búfer a un flujo, y `GZIPInputStream` agrega descompresión; todos son `InputStream`. En el ecosistema web, los *interceptors* de NestJS y Axios cumplen la misma función de envolver llamadas. Los middleware de Express se parecen, pero allí cada eslabón puede **cortar** la cadena, lo que los acerca más a [Chain of Responsibility](/patrones/comportamiento-2).
+
+**Cuándo no usarlo:** si la capa extra **siempre** está presente y nunca cambia, puede vivir dentro de la clase. Las pilas profundas complican la depuración (trazas largas, ¿en qué capa se perdió el header?) y rompen las comparaciones de identidad: un `CachingClient` no es `instanceof FetchHttpClient`. Y como viste, **el orden importa**, lo que convierte el armado de la pila en una decisión de diseño que hay que documentar.
+
+**Relacionados:** Proxy tiene la misma estructura con otra intención. Strategy y Decorator se complementan; Refactoring.Guru lo resume así: Decorator te deja cambiar la piel de un objeto, Strategy te deja cambiar sus entrañas. Un Decorator es como un Composite con un solo hijo.
+
+<Quiz
+  question="Tienes CachingClient, AuthClient y RetryClient alrededor de un cliente HTTP compartido por todos los usuarios del backend. ¿Qué orden (de afuera hacia adentro) es el más riesgoso?"
+  options={[
+    { text: 'Auth → Retry → Caching → Fetch', why: 'La caché queda adentro de Auth, así que cada petición ya pasó por la capa que identifica al usuario. Es razonable si la clave incluye al usuario.' },
+    { text: 'Caching → Auth → Retry → Fetch', correct: true, why: 'La caché responde antes de que Auth intervenga. Si la clave es solo la URL, un usuario puede recibir la respuesta cacheada de otro. Es una fuga de datos, no solo un detalle de rendimiento.' },
+    { text: 'Auth → Caching → Retry → Fetch', why: 'Auth va primero y la caché evita reintentos en los hits. Es una composición sensata.' },
+    { text: 'Todos los órdenes son equivalentes porque comparten interfaz', why: 'Compartir interfaz permite combinarlos en cualquier orden, pero el comportamiento resultante cambia con el orden.' },
+  ]}
+/>
+
+## Facade
+
+**Intención:** ofrecer una interfaz unificada y simple a un conjunto de interfaces de un subsistema.
+
+Confirmar un pedido toca seis piezas: reservar stock, calcular precio, calcular impuestos, cobrar, generar la etiqueta de envío y mandar el correo. Si cada controlador (web, app móvil, job de reintentos) orquesta esas seis llamadas por su cuenta, el orden y el manejo de errores se duplican en tres lugares y divergen con el tiempo.
+
+```ts title="orders-controller.ts (antes)"
+await inventory.reserve(cart.items)
+const price = pricing.calculate(cart, customer.tier)
+const tax = taxes.compute(price, customer.address)
+const payment = await payments.charge(price.add(tax), customer.paymentMethod)
+const label = await shipping.createLabel(customer.address, cart.weight())
+await mailer.send(customer.email, 'order-confirmed', { label })
+// ¿Y si el cobro falla? ¿Quién libera el stock reservado?
+```
+
+La Facade le pone un nombre a esa secuencia y la esconde detrás de una operación de alto nivel:
+
+<UmlDiagram
+  caption="Facade: un punto de entrada simple; las piezas del subsistema siguen existiendo y se pueden usar directamente si hace falta."
+  classes={[
+    { id: 'ctrl', name: 'OrdersController', methods: ['post(req)'], x: 0, y: 0.6, desc: 'Ya no conoce seis servicios, solo uno.' },
+    { id: 'facade', name: 'CheckoutFacade', methods: ['placeOrder(cart, customer)'], x: 1, y: 0.6, w: 1.1, tone: 'line', desc: 'Conoce el orden correcto de las llamadas y qué deshacer si algo falla.' },
+    { id: 'inv', name: 'Inventory', methods: ['reserve(items)'], x: 2.1, y: -0.2, desc: 'Parte del subsistema. No sabe que existe la facade.' },
+    { id: 'pay', name: 'Payments', methods: ['charge(amount)'], x: 2.1, y: 0.6, desc: 'Parte del subsistema.' },
+    { id: 'ship', name: 'Shipping', methods: ['createLabel(addr)'], x: 2.1, y: 1.4, desc: 'Parte del subsistema.' },
+  ]}
+  relations={[
+    { from: 'ctrl', to: 'facade', kind: 'uses' },
+    { from: 'facade', to: 'inv', kind: 'uses' },
+    { from: 'facade', to: 'pay', kind: 'uses' },
+    { from: 'facade', to: 'ship', kind: 'uses' },
+  ]}
+/>
+
+<CodeTabs>
+
+```ts title="TypeScript"
+export class CheckoutFacade {
+  constructor(
+    private readonly inventory: Inventory,
+    private readonly pricing: Pricing,
+    private readonly payments: Payments,
+    private readonly shipping: Shipping,
+    private readonly mailer: Mailer,
+  ) {}
+
+  async placeOrder(cart: Cart, customer: Customer): Promise<OrderConfirmation> {
+    const reservation = await this.inventory.reserve(cart.items)
+    try {
+      const total = this.pricing.totalWithTax(cart, customer)
+      const payment = await this.payments.charge(total, customer.paymentMethod)
+      const label = await this.shipping.createLabel(customer.address, cart.weight())
+      await this.mailer.send(customer.email, 'order-confirmed', { label })
+      return { paymentId: payment.id, trackingCode: label.tracking }
+    } catch (err) {
+      await this.inventory.release(reservation) // la política de compensación vive en un lugar
+      throw err
+    }
+  }
+}
+```
+
+```python title="Python"
+class CheckoutFacade:
+    def __init__(self, inventory, pricing, payments, shipping, mailer) -> None:
+        self._inventory = inventory
+        self._pricing = pricing
+        self._payments = payments
+        self._shipping = shipping
+        self._mailer = mailer
+
+    def place_order(self, cart: "Cart", customer: "Customer") -> "OrderConfirmation":
+        reservation = self._inventory.reserve(cart.items)
+        try:
+            total = self._pricing.total_with_tax(cart, customer)
+            payment = self._payments.charge(total, customer.payment_method)
+            label = self._shipping.create_label(customer.address, cart.weight())
+            self._mailer.send(customer.email, "order-confirmed", label=label)
+            return OrderConfirmation(payment.id, label.tracking)
+        except Exception:
+            self._inventory.release(reservation)
+            raise
+```
+
+</CodeTabs>
+
+**Dónde aparece:** jQuery fue, en esencia, una gran facade sobre las APIs del DOM de cada navegador. La clase `Upload` de `@aws-sdk/lib-storage` esconde la subida multiparte a S3 (iniciar, partir, subir en paralelo, completar o abortar) detrás de un solo `upload.done()`. `requests` en Python ofrece una cara amable sobre `urllib3`. Y en una arquitectura por capas, los *application services* suelen ser facades sobre el dominio (lo verás en [monolito y capas](/arquitectura/monolito-y-capas)).
+
+**Cuándo no usarlo:** una facade no debe convertirse en el único camino ni en un objeto que sabe de todo. Si empieza a acumular reglas de negocio de cinco dominios, se está volviendo un *god object* ([antipatrones](/patrones/antipatrones)). Y no prohíbas el acceso directo al subsistema: la facade simplifica el caso común, no reemplaza las piezas.
+
+**Relacionados:** Adapter cambia una interfaz; Facade **define una nueva y más simple**. [Mediator](/patrones/comportamiento-2) también centraliza, pero allí los colegas conocen al mediador y se comunican a través de él; en Facade la relación es de un solo sentido. En el mundo distribuido, un API gateway o un *backend for frontend* cumplen un rol de facade entre servicios ([APIs](/system-design/apis)).
+
+## Proxy
+
+**Intención:** ofrecer un sustituto de otro objeto para controlar el acceso a él.
+
+El Proxy implementa la misma interfaz que el objeto real, así que el cliente no nota la diferencia. Lo que hace por dentro define su variante:
+
+- **Virtual:** retrasa la creación de un objeto caro hasta que de verdad se necesita (carga perezosa).
+- **De protección:** verifica permisos antes de delegar.
+- **Remoto:** representa localmente un objeto que vive en otro proceso o máquina (los *stubs* de gRPC o RMI).
+- **De caché:** guarda resultados para no repetir operaciones costosas.
+- **Smart reference:** cuenta referencias, registra accesos o libera recursos cuando nadie usa el objeto.
+
+El widget compara un visor de planos sin proxy (descarga todo al abrir) con un proxy virtual y con un proxy que además comparte caché entre aperturas del documento:
+
+<ProxyLazy />
+
+Si abres el documento sin proxy y solo miras dos planos, pagaste seis descargas. El proxy virtual crea placeholders livianos y descarga cada imagen la primera vez que la miras. El de caché, además, recuerda lo descargado aunque cierres y reabras el documento.
+
+<UmlDiagram
+  caption="Proxy: misma interfaz que el sujeto real; el proxy decide cuándo crearlo y si delegar."
+  classes={[
+    { id: 'client', name: 'PlanViewer', methods: ['open(doc)'], x: 0, y: 0, desc: 'Trabaja con Image sin saber si tiene el objeto real o un proxy.' },
+    { id: 'subject', name: 'Image', kind: 'interface', methods: ['display()'], x: 1, y: 0, desc: 'La interfaz del sujeto, compartida por el real y el proxy.' },
+    { id: 'real', name: 'RemoteImage', methods: ['display()'], x: 0.4, y: 1.25, desc: 'El sujeto real: su constructor descarga varios MB.' },
+    { id: 'proxy', name: 'LazyImageProxy', fields: ['-real?: RemoteImage'], methods: ['display()'], x: 1.6, y: 1.25, tone: 'line', desc: 'Crea RemoteImage recién en el primer display() y lo reutiliza después.' },
+  ]}
+  relations={[
+    { from: 'client', to: 'subject', kind: 'depends' },
+    { from: 'real', to: 'subject', kind: 'implements' },
+    { from: 'proxy', to: 'subject', kind: 'implements' },
+    { from: 'proxy', to: 'real', kind: 'composes', label: 'crea y delega' },
+  ]}
+/>
+
+<CodeTabs>
+
+```ts title="TypeScript"
+interface Image {
+  display(): Promise<Bitmap>
+}
+
+class RemoteImage implements Image {
+  private constructor(private readonly bitmap: Bitmap) {}
+  static async load(url: string) { return new RemoteImage(await download(url)) } // caro
+  async display() { return this.bitmap }
+}
+
+// Proxy virtual: misma interfaz, creación diferida.
+class LazyImageProxy implements Image {
+  private real?: Promise<RemoteImage>
+  constructor(private readonly url: string) {}
+
+  display() {
+    this.real ??= RemoteImage.load(this.url) // solo la primera vez
+    return this.real.then((img) => img.display())
+  }
+}
+
+// Proxy de protección: misma interfaz, control de acceso.
+class ConfidentialPlanProxy implements Image {
+  constructor(private readonly inner: Image, private readonly user: User) {}
+  display() {
+    if (!this.user.can('plans:read-confidential')) throw new Forbidden()
+    return this.inner.display()
+  }
+}
+
+const pages: Image[] = urls.map((u) => new LazyImageProxy(u)) // nada se descarga aún
+```
+
+```python title="Python"
+class RemoteImage:
+    def __init__(self, url: str) -> None:
+        self._bitmap = download(url)  # caro
+
+    def display(self) -> "Bitmap":
+        return self._bitmap
+
+class LazyImageProxy:
+    """Proxy virtual: misma interfaz que RemoteImage, carga diferida."""
+
+    def __init__(self, url: str) -> None:
+        self._url = url
+        self._real: RemoteImage | None = None
+
+    def display(self) -> "Bitmap":
+        if self._real is None:
+            self._real = RemoteImage(self._url)
+        return self._real.display()
+
+# Proxy genérico con __getattr__: delega todo lo que no redefine.
+class LoggingProxy:
+    def __init__(self, target: object) -> None:
+        self._target = target
+
+    def __getattr__(self, name: str):
+        attr = getattr(self._target, name)
+        logger.debug("acceso a %s.%s", type(self._target).__name__, name)
+        return attr
+```
+
+</CodeTabs>
+
+**Dónde aparece:** en todos lados, a menudo sin que lo veas.
+
+- **ORMs:** Hibernate/JPA devuelven proxies para asociaciones perezosas; tocar `order.getCustomer().getName()` dispara la consulta. De ahí viene el famoso problema N+1.
+- **Spring:** `@Transactional` funciona porque Spring envuelve tu bean en un proxy (JDK dynamic proxy o una subclase generada con CGLIB). Consecuencia clásica de entrevista: si un método de la clase llama a otro método `@Transactional` **de la misma clase** con `this`, la llamada no pasa por el proxy y la transacción no se aplica.
+- **JavaScript:** el objeto nativo `Proxy` intercepta lecturas y escrituras. Vue 3 construye su sistema de reactividad sobre él.
+- **Red:** un *reverse proxy* como Nginx es la misma idea a nivel de infraestructura: mismo "contrato" HTTP, con control de acceso, caché y balanceo en el medio.
+
+**Cuándo no usarlo:** cada proxy agrega indirección y puede esconder costos. Un proxy remoto que parece un objeto local invita a hacer cien llamadas pequeñas por la red como si fueran gratis, y la red no es gratis ni confiable ([confiabilidad](/system-design/confiabilidad)). La carga perezosa también mueve la latencia a un momento inesperado (el primer clic) y puede producir errores fuera de la transacción donde los esperabas.
+
+**Relacionados:** Decorator (misma forma, otra intención), Adapter (cambia la interfaz; el proxy la conserva) y la caché como estrategia de sistema ([caching](/system-design/caching)).
+
+## Decorator vs. Proxy vs. Adapter vs. Facade
+
+Los cuatro son envoltorios, y en un diagrama de clases pueden verse idénticos. La forma de distinguirlos es preguntarte **qué interfaz expone el envoltorio** y **para qué existe**.
+
+<Compare>
+<Option title="Adapter" verdict="Otra interfaz → la que esperas">
+
+Envuelve **un** objeto con una interfaz **incompatible** y la traduce a la que el cliente espera. Se agrega después, cuando dos piezas ya existen y no encajan. No agrega comportamiento: traduce.
+
+</Option>
+<Option title="Decorator" verdict="Misma interfaz + comportamiento">
+
+Expone **la misma** interfaz y **agrega** responsabilidades (logs, reintentos, caché). Está pensado para **apilarse**, y normalmente es el cliente (o la composition root) quien arma la pila.
+
+</Option>
+<Option title="Proxy" verdict="Misma interfaz + control de acceso">
+
+Expone **la misma** interfaz y **controla el acceso** al objeto real: cuándo se crea, quién puede usarlo, dónde vive. A menudo el proxy **gestiona el ciclo de vida** del sujeto, y el cliente ni sabe que existe.
+
+</Option>
+<Option title="Facade" verdict="Interfaz nueva y más simple">
+
+Expone una interfaz **nueva** sobre **varios** objetos de un subsistema. No traduce uno a uno: resume una secuencia de pasos en una operación de alto nivel.
+
+</Option>
+</Compare>
+
+La línea entre Decorator y Proxy es la más difusa. Una caché puede verse como decorador (agrega comportamiento) o como proxy (controla el acceso al objeto caro). El propio libro GoF admite que un proxy de protección puede implementarse exactamente como un decorador: la diferencia es el propósito. Refactoring.Guru agrega una pista práctica: la composición de decoradores la controla el cliente, mientras que el proxy suele gestionar por su cuenta el ciclo de vida del objeto real. En una entrevista, lo que se evalúa no es que elijas la etiqueta "correcta", sino que expliques la **intención** y el **trade-off**.
+
+<Callout type="interview" title="Cómo responder en 30 segundos">
+
+"Adapter cambia la interfaz para que algo encaje. Decorator mantiene la interfaz y agrega comportamiento apilable. Proxy mantiene la interfaz y controla el acceso: carga perezosa, permisos u objetos remotos. Facade crea una interfaz nueva y simple sobre un subsistema completo." Si quieres un ejemplo para cada uno: `InputStreamReader`, `BufferedInputStream`, el proxy de `@Transactional` en Spring y la clase `Upload` del SDK de AWS.
+
+</Callout>
+
+<Quiz
+  question="Una clase envuelve a un ReportService, expone exactamente la misma interfaz y, antes de delegar, verifica que el usuario tenga el rol de finanzas. Si no lo tiene, lanza Forbidden. ¿Cuál es la clasificación más precisa?"
+  options={[
+    { text: 'Adapter', why: 'Un adapter cambia la interfaz para hacerla compatible; aquí la interfaz es idéntica.' },
+    { text: 'Facade', why: 'Una facade expone una interfaz nueva y simplificada sobre varios objetos; aquí hay un solo objeto y la misma interfaz.' },
+    { text: 'Proxy de protección', correct: true, why: 'Misma interfaz e intención de controlar quién puede acceder al objeto real. Es la definición de proxy de protección.' },
+    { text: 'Composite', why: 'Composite organiza objetos en árboles para tratarlos de forma uniforme; no hay ningún árbol aquí.' },
+  ]}
+/>
+
+## Composite
+
+**Intención:** componer objetos en estructuras de árbol y permitir que el cliente trate igual a los objetos individuales y a las composiciones.
+
+Un envío tiene productos, pero también cajas que contienen productos y otras cajas. Si el código que calcula el costo de envío tiene que preguntar "¿esto es una caja o un producto?" en cada nivel, la recursión queda desparramada por el cliente:
+
+```ts title="shipping-cost.ts (antes)"
+function totalWeight(item: Product | Box): number {
+  if (item instanceof Box) {
+    let sum = item.packagingWeight
+    for (const child of item.contents) sum += totalWeight(child)
+    return sum
+  }
+  return item.weight
+}
+// ...y la misma forma se repite en totalPrice, countItems, hasHazardousGoods...
+```
+
+Composite define una interfaz común (`ShipmentItem`) que implementan tanto las hojas (`Product`) como los compuestos (`Box`). Cada caja resuelve su total **delegando en sus hijos**, sin saber si son productos o más cajas. El cliente llama `weight()` en la raíz y listo.
+
+<CompositeTree />
+
+Recorre el árbol paso a paso: la pila de llamadas crece al entrar a cada caja y se resuelve de abajo hacia arriba. Contraer una caja no cambia su total, porque el cálculo no depende de lo que el cliente ve, sino de la estructura.
+
+<UmlDiagram
+  caption="Composite: Box implementa ShipmentItem y además guarda una lista de ShipmentItems (su campo children). Esa doble relación es todo el patrón."
+  classes={[
+    { id: 'client', name: 'ShippingQuote', methods: ['quote(root)'], x: 0, y: 0, desc: 'Llama weight() sobre la raíz, sin distinguir hojas de cajas.' },
+    { id: 'comp', name: 'ShipmentItem', kind: 'interface', methods: ['price(): Money', 'weight(): number'], x: 1, y: 0, desc: 'La interfaz común: el contrato que permite tratar todo igual.' },
+    { id: 'leaf', name: 'Product', fields: ['-price, -weight'], methods: ['weight()'], x: 0.45, y: 1.3, desc: 'Hoja: devuelve su propio valor.' },
+    { id: 'box', name: 'Box', fields: ['-children: ShipmentItem[]'], methods: ['add(item)', 'weight()'], x: 1.6, y: 1.3, tone: 'line', desc: 'Compuesto: suma su embalaje más el weight() de cada hijo.' },
+  ]}
+  relations={[
+    { from: 'client', to: 'comp', kind: 'depends' },
+    { from: 'leaf', to: 'comp', kind: 'implements' },
+    { from: 'box', to: 'comp', kind: 'implements' },
+    { from: 'box', to: 'comp', kind: 'aggregates', label: 'children' },
+  ]}
+/>
+
+<CodeTabs>
+
+```ts title="TypeScript"
+interface ShipmentItem {
+  price(): number
+  weight(): number
+}
+
+class Product implements ShipmentItem {
+  constructor(readonly name: string, private readonly _price: number, private readonly _weight: number) {}
+  price() { return this._price }
+  weight() { return this._weight }
+}
+
+class Box implements ShipmentItem {
+  private readonly children: ShipmentItem[] = []
+  constructor(readonly label: string, private readonly packaging = { price: 1.5, weight: 0.3 }) {}
+
+  add(...items: ShipmentItem[]) { this.children.push(...items); return this }
+  price() { return this.children.reduce((s, c) => s + c.price(), this.packaging.price) }
+  weight() { return this.children.reduce((s, c) => s + c.weight(), this.packaging.weight) }
+}
+
+const shipment = new Box('Caja grande').add(
+  new Product('Laptop', 1200, 2.1),
+  new Box('Caja mediana').add(new Product('Mouse', 25, 0.1), new Product('Cable USB-C', 12, 0.05)),
+)
+shipment.weight() // el cliente no sabe cuántos niveles hay
+```
+
+```python title="Python"
+from dataclasses import dataclass, field
+from typing import Protocol
+
+class ShipmentItem(Protocol):
+    def price(self) -> float: ...
+    def weight(self) -> float: ...
+
+@dataclass(frozen=True)
+class Product:
+    name: str
+    _price: float
+    _weight: float
+    def price(self) -> float: return self._price
+    def weight(self) -> float: return self._weight
+
+@dataclass
+class Box:
+    label: str
+    packaging_price: float = 1.5
+    packaging_weight: float = 0.3
+    children: list[ShipmentItem] = field(default_factory=list)
+
+    def add(self, *items: ShipmentItem) -> "Box":
+        self.children.extend(items)
+        return self
+
+    def price(self) -> float:
+        return self.packaging_price + sum(c.price() for c in self.children)
+
+    def weight(self) -> float:
+        return self.packaging_weight + sum(c.weight() for c in self.children)
+```
+
+</CodeTabs>
+
+<Details summary="Profundizar: transparencia vs. seguridad">
+
+¿Dónde declaras `add(child)`? Si lo pones en la interfaz común (*transparencia*), el cliente trata todo igual, pero `product.add(...)` compila y tiene que fallar en runtime. Si lo dejas solo en `Box` (*seguridad*), el compilador te protege, pero a veces el cliente tiene que preguntar el tipo para agregar hijos. GoF discute ambos lados y se inclina por la transparencia; los lenguajes con tipos estáticos modernos suelen preferir la seguridad (como el ejemplo de arriba). No hay una respuesta universal: elige según quién arma el árbol y quién lo recorre.
+
+</Details>
+
+**Dónde aparece:** el DOM y el árbol de componentes de React (un componente renderiza elementos o más componentes), los sistemas de archivos (carpetas y archivos con `size()`), los widgets de Flutter, los árboles sintácticos de un compilador, los grupos de permisos que contienen usuarios u otros grupos, y la lista de materiales (BOM) en manufactura.
+
+**Cuándo no usarlo:** si la jerarquía no es recursiva (pedido → líneas, y punto), un array basta. Si las hojas y los compuestos necesitan operaciones muy distintas, forzar una interfaz común produce métodos vacíos o que lanzan excepciones. Con árboles muy grandes, recalcular totales en cada llamada puede ser caro: cachea o mantén agregados actualizados.
+
+**Relacionados:** [Iterator](/patrones/comportamiento-2) para recorrer el árbol, [Visitor](/patrones/comportamiento-2) para agregar operaciones nuevas sin tocar las clases, Builder para armar árboles complejos y Decorator, que es un "composite de un solo hijo".
+
+## Bridge
+
+**Intención:** desacoplar una abstracción de su implementación para que ambas puedan variar de forma independiente.
+
+Bridge resuelve una explosión combinatoria en **dos dimensiones**. Tu sistema envía tres tipos de notificación (alerta de pedido, recordatorio de carrito, promoción) por tres canales (email, SMS, push). Si modelas cada combinación con herencia, terminas con nueve clases (`EmailOrderAlert`, `SmsOrderAlert`, `PushOrderAlert`, `EmailReminder`...) y agregar WhatsApp suma tres más.
+
+Bridge parte la jerarquía en dos: la **abstracción** (qué notificas y con qué reglas) y la **implementación** (por dónde viaja). La abstracción guarda una referencia a la implementación: ese "puente" es una simple composición. Ahora tienes 3 + 3 clases, y cada dimensión crece por separado.
+
+<UmlDiagram
+  wide
+  caption="Bridge: dos jerarquías independientes unidas por composición. Agregar un canal no toca las notificaciones, y viceversa."
+  classes={[
+    { id: 'abs', name: 'Notification', kind: 'abstract', fields: ['#channel: Channel'], methods: ['send(user)'], x: 0.475, y: 0, desc: 'La abstracción: define qué se comunica y con qué reglas (prioridad, horario).' },
+    { id: 'alert', name: 'OrderAlert', methods: ['send(user)'], x: 0, y: 1.25, desc: 'Abstracción refinada: alta prioridad, se envía a cualquier hora.' },
+    { id: 'promo', name: 'Promotion', methods: ['send(user)'], x: 0.95, y: 1.25, desc: 'Abstracción refinada: respeta el opt-out y el horario de silencio.' },
+    { id: 'impl', name: 'Channel', kind: 'interface', methods: ['deliver(to, title, body)'], x: 2.4, y: 0, desc: 'El implementador: una interfaz de bajo nivel, primitiva.' },
+    { id: 'email', name: 'EmailChannel', x: 1.95, y: 1.25, desc: 'Implementación concreta.' },
+    { id: 'sms', name: 'SmsChannel', x: 2.85, y: 1.25, w: 0.85, desc: 'Implementación concreta.' },
+  ]}
+  relations={[
+    { from: 'alert', to: 'abs', kind: 'inherits' },
+    { from: 'promo', to: 'abs', kind: 'inherits' },
+    { from: 'abs', to: 'impl', kind: 'aggregates', label: 'puente' },
+    { from: 'email', to: 'impl', kind: 'implements' },
+    { from: 'sms', to: 'impl', kind: 'implements' },
+  ]}
+/>
+
+<CodeTabs>
+
+```ts title="TypeScript"
+// Implementador: operaciones primitivas de un canal.
+interface Channel {
+  deliver(to: User, title: string, body: string): Promise<void>
+}
+
+class EmailChannel implements Channel {
+  deliver(to: User, title: string, body: string) { return smtp.send(to.email, title, body) }
+}
+class SmsChannel implements Channel {
+  deliver(to: User, _title: string, body: string) { return twilio.send(to.phone, body.slice(0, 160)) }
+}
+
+// Abstracción: reglas de negocio de cada tipo de notificación.
+abstract class Notification {
+  constructor(protected readonly channel: Channel) {}
+  abstract send(user: User): Promise<void>
+}
+
+class OrderAlert extends Notification {
+  constructor(channel: Channel, private readonly order: Order) { super(channel) }
+  send(user: User) {
+    return this.channel.deliver(user, `Pedido ${this.order.id}`, `Tu pedido está ${this.order.status}`)
+  }
+}
+
+class Promotion extends Notification {
+  constructor(channel: Channel, private readonly campaign: Campaign) { super(channel) }
+  async send(user: User) {
+    if (!user.marketingOptIn || isQuietHours(user.timezone)) return
+    await this.channel.deliver(user, this.campaign.title, this.campaign.body)
+  }
+}
+
+// Cualquier combinación, sin clases nuevas:
+await new Promotion(new SmsChannel(), blackFriday).send(user)
+```
+
+```python title="Python"
+from abc import ABC, abstractmethod
+from typing import Protocol
+
+class Channel(Protocol):
+    def deliver(self, to: "User", title: str, body: str) -> None: ...
+
+class Notification(ABC):
+    def __init__(self, channel: Channel) -> None:
+        self._channel = channel  # el "puente"
+
+    @abstractmethod
+    def send(self, user: "User") -> None: ...
+
+class OrderAlert(Notification):
+    def __init__(self, channel: Channel, order: "Order") -> None:
+        super().__init__(channel)
+        self._order = order
+
+    def send(self, user: "User") -> None:
+        self._channel.deliver(user, f"Pedido {self._order.id}", f"Tu pedido está {self._order.status}")
+
+class Promotion(Notification):
+    def __init__(self, channel: Channel, campaign: "Campaign") -> None:
+        super().__init__(channel)
+        self._campaign = campaign
+
+    def send(self, user: "User") -> None:
+        if user.marketing_opt_in and not is_quiet_hours(user.timezone):
+            self._channel.deliver(user, self._campaign.title, self._campaign.body)
+
+Promotion(SmsChannel(), black_friday).send(user)
+```
+
+</CodeTabs>
+
+**Dónde aparece:** JDBC se cita a menudo como Bridge: tu código usa la API de `java.sql` (la abstracción) y cada driver de base de datos aporta la implementación. SLF4J separa la API de logging del backend (Logback, Log4j) con la misma lógica. En gráficos, las formas (círculo, rectángulo) suelen desacoplarse del motor que las dibuja (SVG, Canvas, OpenGL).
+
+**Cuándo no usarlo:** si solo hay **una** dimensión de variación, Bridge es una indirección sin beneficio. Tampoco lo diseñes "por si acaso": nace de detectar dos ejes reales de cambio. Si ya tienes dos interfaces incompatibles, lo que necesitas es un Adapter.
+
+**Relacionados:** estructuralmente se parece a [Strategy](/patrones/comportamiento-1) (un objeto delega en otro intercambiable). La diferencia es la intención: Bridge organiza una jerarquía completa en dos ejes de forma estable; Strategy intercambia un algoritmo, a menudo en runtime. Abstract Factory puede crear la implementación correcta para cada plataforma.
+
+## Flyweight
+
+**Intención:** compartir eficientemente una gran cantidad de objetos pequeños separando el estado **intrínseco** (compartible e inmutable) del **extrínseco** (propio de cada uso).
+
+Imagina el mapa de seguimiento de una empresa de envíos que dibuja todos los paquetes activos de una ciudad. Supongamos 100.000 marcadores, cada uno con su ícono de 20 KB, su color y su tamaño según el estado del paquete. Si cada marcador guarda su propia copia del ícono, son unos 2 GB solo en imágenes. Pero solo hay cinco estados posibles (en bodega, en ruta, demorado, entregado, devuelto): **cinco íconos distintos**.
+
+Flyweight separa lo que se repite de lo que no. El ícono, el color y el tamaño (estado intrínseco) viven en cinco objetos compartidos. La latitud, la longitud y el id del paquete (estado extrínseco) quedan en cada marcador o se pasan como parámetros. Una fábrica con caché garantiza que nunca se cree un segundo objeto para el mismo estado.
+
+<UmlDiagram
+  caption="Flyweight: miles de marcadores livianos apuntan a unos pocos estilos compartidos, que una fábrica crea una sola vez."
+  classes={[
+    { id: 'marker', name: 'Marker', fields: ['lat, lng, packageId', 'style: MarkerStyle'], x: 0, y: 0, w: 1.05, desc: 'Estado extrínseco: lo que cambia en cada uno de los 100.000 marcadores.' },
+    { id: 'style', name: 'MarkerStyle', fields: ['icon, color, size'], methods: ['draw(ctx, lat, lng)'], x: 1.1, y: 0, tone: 'line', desc: 'El flyweight: estado intrínseco, inmutable y compartido.' },
+    { id: 'factory', name: 'MarkerStyleFactory', fields: ['-cache: Map'], methods: ['get(status)'], x: 1.1, y: 1.2, w: 1.05, desc: 'Devuelve el estilo existente para cada estado o lo crea la primera vez.' },
+  ]}
+  relations={[
+    { from: 'marker', to: 'style', kind: 'aggregates', label: 'comparte' },
+    { from: 'factory', to: 'style', kind: 'aggregates', label: 'cachea' },
+  ]}
+/>
+
+<CodeTabs>
+
+```ts title="TypeScript"
+type Status = 'warehouse' | 'in_transit' | 'delayed' | 'delivered' | 'returned'
+
+// Flyweight: inmutable y compartido.
+class MarkerStyle {
+  constructor(readonly icon: ImageBitmap, readonly color: string, readonly size: number) {
+    Object.freeze(this)
+  }
+  draw(ctx: CanvasRenderingContext2D, x: number, y: number) {
+    ctx.drawImage(this.icon, x - this.size / 2, y - this.size, this.size, this.size)
+  }
+}
+
+class MarkerStyleFactory {
+  private cache = new Map<Status, MarkerStyle>()
+  get(status: Status): MarkerStyle {
+    let style = this.cache.get(status)
+    if (!style) {
+      style = new MarkerStyle(loadIcon(status), colorFor(status), 28)
+      this.cache.set(status, style)
+    }
+    return style
+  }
+}
+
+// Cada marcador es liviano: coordenadas + referencia al estilo compartido.
+const styles = new MarkerStyleFactory()
+const markers = packages.map((p) => ({ lat: p.lat, lng: p.lng, id: p.id, style: styles.get(p.status) }))
+// 100.000 marcadores, 5 instancias de MarkerStyle.
+```
+
+```python title="Python"
+from dataclasses import dataclass
+from functools import cache
+
+@dataclass(frozen=True, slots=True)
+class MarkerStyle:          # intrínseco: inmutable y compartido
+    icon: bytes
+    color: str
+    size: int
+
+@cache                      # la "fábrica" con caché: un estilo por estado
+def marker_style(status: str) -> MarkerStyle:
+    return MarkerStyle(load_icon(status), color_for(status), 28)
+
+@dataclass(slots=True)      # extrínseco: slots reduce la memoria por instancia
+class Marker:
+    lat: float
+    lng: float
+    package_id: str
+    style: MarkerStyle
+
+markers = [Marker(p.lat, p.lng, p.id, marker_style(p.status)) for p in packages]
+```
+
+</CodeTabs>
+
+**Dónde aparece:** `Integer.valueOf(int)` en Java reutiliza instancias para los valores entre -128 y 127 (por eso `==` entre `Integer` "funciona" con números chicos y falla con grandes, una pregunta trampa clásica). El *string pool* de Java y `sys.intern` en Python comparten cadenas idénticas. Los editores de texto y los motores de fuentes comparten los glifos, que es el ejemplo original del libro GoF. Los motores de videojuegos aplican la misma idea con *instancing*: una malla, miles de árboles en posiciones distintas.
+
+**Cuándo no usarlo:** solo cuando hay **muchos** objetos y la memoria es un problema **medido**. Complica el código (el estado queda partido en dos lugares) y exige que lo compartido sea estrictamente inmutable: si alguien cambia el color de un `MarkerStyle`, cambian 20.000 marcadores a la vez. Con pocos miles de objetos, casi nunca compensa.
+
+**Relacionados:** se combina con Composite (las hojas compartidas de un árbol), usa una fábrica con caché (un pariente de Factory Method) y conceptualmente es un caso particular de [caching](/system-design/caching) a nivel de objetos.
+
+<Quiz
+  question="Tienes formas (círculo, rectángulo, triángulo) que deben dibujarse en SVG, Canvas y PDF. Hoy existen nueve clases como SvgCircle o PdfTriangle. ¿Qué patrón ataca directamente este problema?"
+  options={[
+    { text: 'Flyweight', why: 'Flyweight comparte estado para ahorrar memoria; no reduce la cantidad de clases por combinación.' },
+    { text: 'Bridge', correct: true, why: 'Hay dos dimensiones que varían de forma independiente (forma y motor de dibujo). Bridge las separa en dos jerarquías unidas por composición: 3 + 3 clases en lugar de 3 × 3.' },
+    { text: 'Facade', why: 'Una facade simplificaría el uso de los tres motores, pero no elimina la explosión de subclases.' },
+    { text: 'Composite', why: 'Composite sirve para árboles parte-todo, como un grupo de formas que contiene formas. No resuelve la combinación forma × motor.' },
+  ]}
+/>
+
+<Takeaways>
+
+- Casi todos los patrones estructurales se basan en **composición y delegación**; lo que los distingue es la intención, no el diagrama.
+- **Adapter** traduce una interfaz incompatible a la que esperas; **Facade** crea una interfaz nueva y simple sobre un subsistema completo.
+- **Decorator** y **Proxy** conservan la interfaz: el primero agrega comportamiento apilable (y **el orden de las capas importa**), el segundo controla el acceso (carga perezosa, permisos, objetos remotos).
+- **Composite** permite tratar hojas y grupos de forma uniforme; la recursión vive en los compuestos, no en el cliente.
+- **Bridge** evita la explosión combinatoria cuando hay **dos** ejes de variación independientes; con uno solo es indirección innecesaria.
+- **Flyweight** separa estado intrínseco (compartido e inmutable) de extrínseco; úsalo solo cuando la memoria sea un problema medido.
+- En frameworks reales verás estos patrones sin su nombre: los streams de Java, los proxies de Spring y Hibernate, el `Proxy` de JavaScript, React y el DOM.
+
+</Takeaways>
+
+## Fuentes y lecturas
+
+- Gamma, Helm, Johnson y Vlissides, *Design Patterns: Elements of Reusable Object-Oriented Software* (1994), capítulo 4. [Ficha en O'Reilly](https://www.oreilly.com/library/view/design-patterns-elements/0201633612/)
+- Eric Freeman y Elisabeth Robson, *Head First Design Patterns*, 2.ª ed. (2020): Decorator (cap. 3), Adapter y Facade (cap. 7), Composite (cap. 9) y Proxy (cap. 11). [O'Reilly](https://www.oreilly.com/library/view/head-first-design/9781492077992/)
+- Refactoring.Guru, patrones estructurales: [Adapter](https://refactoring.guru/design-patterns/adapter), [Bridge](https://refactoring.guru/design-patterns/bridge), [Composite](https://refactoring.guru/design-patterns/composite), [Decorator](https://refactoring.guru/design-patterns/decorator), [Facade](https://refactoring.guru/design-patterns/facade), [Flyweight](https://refactoring.guru/design-patterns/flyweight), [Proxy](https://refactoring.guru/design-patterns/proxy).
+- Spring Framework, [Proxying Mechanisms](https://docs.spring.io/spring-framework/reference/core/aop/proxying.html) (proxies JDK vs. CGLIB y el problema de la auto-invocación).
+- MDN, [`Proxy`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Proxy) y Vue, [Reactivity in Depth](https://vuejs.org/guide/extras/reactivity-in-depth.html).
+- Documentación del JDK, [`BufferedInputStream`](https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/io/BufferedInputStream.html) y [`Integer.valueOf(int)`](https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/lang/Integer.html#valueOf(int)).
+- Documentación de Python, [`functools`](https://docs.python.org/3/library/functools.html) (`lru_cache`, `cache`, `wraps`).
+- Microsoft Azure Architecture Center, [Anti-Corruption Layer pattern](https://learn.microsoft.com/en-us/azure/architecture/patterns/anti-corruption-layer).

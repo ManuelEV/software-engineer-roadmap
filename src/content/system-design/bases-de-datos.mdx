@@ -1,0 +1,270 @@
+import { IsolationAnomalies } from '../../components/widgets/system-design/IsolationAnomalies'
+
+Elegir dónde guardar los datos es una de las decisiones más caras de cambiar en un sistema. El código se reescribe en semanas; migrar terabytes de una base a otra sin cortar el servicio lleva meses. Por eso en una entrevista no basta con decir "uso NoSQL porque escala": el entrevistador quiere ver que eliges a partir de **cómo se van a leer y escribir los datos**, y que conoces lo que pierdes con cada opción.
+
+Este tema te da el mapa: las familias de bases de datos y para qué sirve cada una, qué garantiza de verdad una transacción ACID, qué anomalías permite cada nivel de aislamiento, cómo funcionan por dentro los índices B-tree y LSM, y un método para elegir. La distribución de los datos entre máquinas (replicación y sharding) tiene su propio tema.
+
+## Empieza por los patrones de acceso
+
+Antes de nombrar una tecnología, responde estas preguntas. Son las mismas que debes hacer en voz alta en la entrevista:
+
+- **Forma de los datos**: ¿entidades con muchas relaciones (usuarios, pedidos, productos), documentos autocontenidos (un perfil con sus preferencias), series de eventos en el tiempo, un grafo de conexiones?
+- **Consultas**: ¿lees por clave primaria, por rangos, con filtros arbitrarios, con joins, con búsqueda de texto? ¿Las consultas se conocen de antemano o son ad hoc?
+- **Proporción de lecturas y escrituras**: ¿100 lecturas por escritura (un catálogo) o al revés (ingesta de métricas, logs, ubicaciones de conductores)?
+- **Consistencia**: ¿necesitas transacciones que toquen varias filas o entidades a la vez? ¿Puedes tolerar leer un dato con unos segundos de atraso?
+- **Escala**: volumen total, crecimiento por año, tamaño de cada registro, picos de QPS. El tema *Estimaciones rápidas* te da las herramientas.
+- **Latencia**: ¿la consulta está en el camino crítico del usuario o es un reporte nocturno?
+
+Con eso, la elección suele caer sola. Un sistema de pagos con transacciones entre cuentas apunta a una base relacional. Un historial de chat con miles de millones de mensajes leídos por canal y fecha apunta a un almacén de columnas anchas particionado por canal. Un feed de "amigos de amigos" apunta a un grafo o a una estructura precalculada.
+
+## Las familias
+
+| Familia | Modelo | Ejemplos | Brilla en | Sufre con |
+| --- | --- | --- | --- | --- |
+| Relacional | Tablas, filas, SQL, joins | PostgreSQL, MySQL | Datos relacionados, transacciones, consultas ad hoc | Escalar escrituras más allá de una máquina |
+| SQL distribuido | Relacional particionado con consenso | Spanner, CockroachDB, YugabyteDB | ACID a escala global | Latencia de escritura, costo, complejidad |
+| Clave-valor | `get(k)` / `put(k, v)` | Redis, DynamoDB, etcd | Accesos por clave a latencia mínima | Consultas que no sean por clave |
+| Documental | Documentos JSON anidados | MongoDB, Firestore | Entidades autocontenidas, esquema flexible | Relaciones muchos a muchos, joins |
+| Columnas anchas | Filas por clave de partición, ordenadas por clave de clustering | Cassandra, ScyllaDB, Bigtable, HBase | Escrituras masivas, lecturas por partición y rango | Consultas fuera de la clave, transacciones |
+| Grafo | Nodos y aristas | Neo4j, Amazon Neptune | Recorridos de varias relaciones | Agregaciones masivas, escalar horizontalmente |
+| Series de tiempo | Puntos (métrica, etiquetas, tiempo, valor) | Prometheus, InfluxDB, TimescaleDB | Ingesta continua, ventanas de tiempo, retención | Datos que no son series |
+| Búsqueda | Índice invertido | Elasticsearch, OpenSearch | Texto libre, relevancia, facetas | Ser fuente de verdad, consistencia |
+
+Algunas notas que la tabla no cuenta:
+
+**Relacional** sigue siendo el mejor default. PostgreSQL maneja sin problema cientos de gigabytes o algunos terabytes en una sola máquina, con réplicas de lectura para escalar lecturas, y además soporta JSON, búsqueda de texto y extensiones geoespaciales. El esquema rígido no es un defecto: es una restricción que protege la integridad de tus datos. Su límite real es escalar **escrituras** más allá de un nodo primario; ahí entra el sharding, que lo vemos en *Replicación y sharding*.
+
+**Clave-valor** es la forma más simple y escalable: si solo accedes por clave, se reparte trivialmente entre muchas máquinas. DynamoDB agrega una clave de ordenamiento, lo que permite consultas por rango dentro de una partición y lo acerca al modelo de columnas anchas.
+
+**Documental** encaja cuando una entidad se lee y escribe entera: un perfil con sus direcciones y preferencias. La localidad es buena (un documento, una lectura), pero las relaciones muchos a muchos te obligan a duplicar datos o a hacer joins en la aplicación.
+
+**Columnas anchas** es la opción de las escrituras masivas. En Cassandra diseñas **una tabla por consulta**: la clave de partición decide en qué nodos vive la fila y la clave de clustering decide el orden dentro de la partición. `PRIMARY KEY ((canal_id, bucket), mensaje_id)` hace que leer los últimos mensajes de un canal sea una lectura secuencial en un solo nodo. La contracara es que una clave de partición mal elegida crea **particiones calientes**: Discord cuenta que su clúster de Cassandra para mensajes sufría justamente de particiones calientes y latencias impredecibles, hasta que migró a ScyllaDB y rediseñó el acceso.<Sidenote>En su artículo de 2023, Discord reporta que pasó de 177 nodos de Cassandra a 72 de ScyllaDB y que la p99 para leer historial bajó de entre 40 y 125 ms a unos 15 ms.</Sidenote>
+
+**Búsqueda** casi nunca es la fuente de verdad. El patrón habitual es escribir en la base principal y alimentar el índice de búsqueda de forma asíncrona (por eventos o CDC), aceptando unos segundos de atraso. Los índices invertidos y las búsquedas geoespaciales se tratan en *IDs, búsqueda, geo y blobs*.
+
+<Callout type="warn" title="Escalar no es sinónimo de NoSQL">
+
+Muchas bases NoSQL escalan horizontalmente porque **renuncian** a cosas: joins, transacciones entre particiones, consultas ad hoc. No es magia, es un trade-off. Y del otro lado, Spanner y CockroachDB demuestran que se puede tener SQL con transacciones a escala, pagando en latencia y complejidad. Elige por patrón de acceso y garantías, no por etiqueta.
+
+</Callout>
+
+## Qué garantiza ACID (de verdad)
+
+ACID es la promesa de una transacción. Conviene saber qué significa cada letra con precisión, porque es fácil decirlo mal:
+
+- **Atomicidad**: todo o nada. Si una transacción hace tres escrituras y falla en la tercera, las dos primeras se deshacen. No tiene que ver con concurrencia; tiene que ver con **abortar** de forma segura.
+- **Consistencia**: la transacción lleva la base de un estado válido a otro según **tus** invariantes (el saldo nunca es negativo, todo pedido tiene un cliente). Es en gran parte responsabilidad de la aplicación; la base ayuda con restricciones (`CHECK`, claves foráneas, `UNIQUE`). Es una "C" bastante distinta de la de CAP.
+- **Aislamiento** (*isolation*): las transacciones concurrentes no se pisan. En teoría, cada una se comporta como si corriera sola (serializabilidad). En la práctica, casi todas las bases usan por defecto niveles más débiles que permiten ciertas anomalías.
+- **Durabilidad**: lo confirmado no se pierde ante un corte de energía. Se logra escribiendo primero en un *write-ahead log* (WAL) en disco y, en sistemas replicados, esperando confirmación de réplicas.
+
+La "I" es la que más se malinterpreta, y la que más bugs produce en producción.
+
+## Niveles de aislamiento y sus anomalías
+
+El estándar SQL define cuatro niveles según qué fenómenos prohíben. El problema es que esa definición quedó corta: el artículo *A Critique of ANSI SQL Isolation Levels* (Berenson, Bernstein, Gray y otros, 1995) mostró que los fenómenos del estándar no caracterizan bien a las implementaciones reales y definió formalmente **snapshot isolation**, que es lo que la mayoría de las bases con MVCC implementan.
+
+Las anomalías que debes reconocer:
+
+- **Lectura sucia**: lees un dato que otra transacción escribió y todavía no confirmó (y quizá nunca confirme).
+- **Lectura no repetible**: lees la misma fila dos veces en una transacción y obtienes valores distintos porque otra transacción la modificó y confirmó en medio.
+- **Fantasma**: repites una consulta con filtro y aparecen o desaparecen filas porque otra transacción insertó o borró.
+- **Actualización perdida**: dos transacciones leen un valor, calculan uno nuevo y escriben; la segunda escritura pisa a la primera.
+- **Write skew**: dos transacciones leen el mismo conjunto, toman una decisión válida cada una por separado y escriben en filas **distintas**; juntas violan una regla. Es la anomalía más traicionera porque no hay ningún conflicto de escritura que detectar.
+
+<IsolationAnomalies />
+
+Recorre cada pestaña en *Read committed* y luego cambia el nivel en el último paso. Fíjate especialmente en **Update perdido**, que es el bug de inventario y de saldos más común del mundo, y en **Write skew**, que sobrevive incluso a *Repeatable read*.
+
+| Nivel | Lectura sucia | No repetible | Fantasma | Update perdido | Write skew |
+| --- | --- | --- | --- | --- | --- |
+| Read uncommitted | posible | posible | posible | posible | posible |
+| Read committed | no | posible | posible | posible | posible |
+| Repeatable read / snapshot (PostgreSQL) | no | no | no | no | posible |
+| Serializable | no | no | no | no | no |
+
+La tabla describe a PostgreSQL. Otros motores difieren, y esto es lo importante: **el nombre del nivel no te dice qué garantiza**. Según las pruebas de Hermitage de Martin Kleppmann, el *Repeatable read* de MySQL/InnoDB (su nivel por defecto) no previene la actualización perdida, mientras que el de PostgreSQL sí. Y el *Serializable* de Oracle es en realidad snapshot isolation, que permite write skew.
+
+Los defaults también importan: PostgreSQL usa **Read committed** por defecto, MySQL/InnoDB usa **Repeatable read**. Es decir, por defecto tu aplicación está expuesta a actualizaciones perdidas salvo que hagas algo al respecto.
+
+### Cómo defenderte sin subir a Serializable
+
+*Serializable* en PostgreSQL usa *Serializable Snapshot Isolation* (SSI): no bloquea las lecturas, sino que detecta ciclos de dependencias y aborta una transacción con un error de serialización (`SQLSTATE 40001`). Funciona bien, pero tu aplicación **debe reintentar** las transacciones abortadas, y con mucha contención la tasa de abortos sube. Las alternativas más localizadas:
+
+```sql
+-- 1. Actualización atómica: la base hace leer-modificar-escribir sola
+UPDATE inventario SET stock = stock - 2 WHERE sku = 7 AND stock >= 2;
+
+-- 2. Bloqueo pesimista explícito de las filas que vas a modificar
+BEGIN;
+SELECT stock FROM inventario WHERE sku = 7 FOR UPDATE;
+UPDATE inventario SET stock = 8 WHERE sku = 7;
+COMMIT;
+
+-- 3. Control optimista con versión: falla (0 filas) si otro escribió antes
+UPDATE inventario SET stock = 8, version = version + 1
+WHERE sku = 7 AND version = 3;
+```
+
+Para write skew, la técnica es **materializar el conflicto**: hacer que ambas transacciones tengan que escribir la misma fila (por ejemplo, una fila por turno de guardia que ambas bloquean con `FOR UPDATE`), o expresar la regla como una restricción de la base, como una *exclusion constraint* que impide dos reservas solapadas para la misma sala.
+
+<Quiz
+  question="Un endpoint de reservas hace: SELECT para ver si la sala está libre a las 10:00; si lo está, INSERT de la reserva. Corre en PostgreSQL con Repeatable read. ¿Pueden quedar dos reservas para la misma sala y hora?"
+  options={[
+    { text: 'No: Repeatable read en PostgreSQL previene los fantasmas.', why: 'Previene que T1 vea la fila nueva al repetir su consulta, pero no impide que ambas transacciones inserten. Cada una ve su snapshot sin la reserva de la otra.' },
+    { text: 'Sí: es write skew. Ambas leen “libre” en su snapshot e insertan filas distintas, sin conflicto de escritura. Se evita con Serializable, una restricción única o de exclusión, o bloqueando una fila que represente el recurso.', correct: true, why: 'Correcto. La solución más robusta suele ser una restricción en la base (UNIQUE (sala, hora) o una exclusion constraint para rangos), porque no depende de que todos los caminos de código hagan lo correcto.' },
+    { text: 'Solo si las dos peticiones llegan exactamente en el mismo milisegundo.', why: 'Basta con que las transacciones se solapen en el tiempo, lo que con latencias de red de varios milisegundos ocurre bajo carga normal.' },
+    { text: 'No, porque el INSERT bloquea la tabla entera.', why: 'Un INSERT no bloquea la tabla; toma bloqueos a nivel de fila e índice. Sin una restricción única, dos inserts de filas distintas no entran en conflicto.' },
+  ]}
+/>
+
+## Índices por dentro: B-tree vs LSM
+
+Un índice es una estructura adicional que permite encontrar filas sin recorrer toda la tabla. Acelera lecturas y **siempre** encarece escrituras, porque cada escritura tiene que actualizar también cada índice. Casi todos los motores usan una de dos familias.
+
+### B-tree: actualizar en el lugar
+
+El **B-tree** (en realidad, B+tree) divide los datos en páginas de tamaño fijo, de 8 KB en PostgreSQL y 16 KB por defecto en InnoDB, organizadas en un árbol balanceado y muy ancho. Cada página interna apunta a cientos de hijas, así que el árbol es poco profundo: Kleppmann calcula que un árbol de cuatro niveles con páginas de 4 KB y factor de ramificación 500 puede direccionar hasta 256 TB. Encontrar una clave cuesta unas pocas lecturas de página, y las de arriba casi siempre están en memoria.
+
+Escribir significa encontrar la página y **modificarla en el lugar**, registrando antes el cambio en el WAL para sobrevivir a una caída. Si la página se llena, se divide en dos. Lecturas predecibles y rápidas, rangos eficientes porque las hojas están ordenadas y enlazadas. Escrituras aleatorias: cada inserción toca una página distinta del disco.
+
+### LSM-tree: escribir siempre al final
+
+El **LSM-tree** (*log-structured merge tree*) convierte las escrituras aleatorias en secuenciales. Nunca modifica nada en el lugar: acumula en memoria, vuelca archivos ordenados e inmutables, y los fusiona en segundo plano. Lo usan RocksDB, LevelDB, Cassandra, ScyllaDB, HBase y Bigtable.
+
+<FlowDiagram
+  caption="El camino de escritura y lectura en un LSM-tree."
+  nodes={[
+    { id: 'c', label: 'Cliente', kind: 'client', x: 0, y: 1 },
+    { id: 'wal', label: 'WAL', kind: 'file', x: 1, y: 0, sub: 'append en disco' },
+    { id: 'mem', label: 'Memtable', kind: 'layers', x: 1, y: 1, sub: 'ordenada, en RAM' },
+    { id: 'l0', label: 'SSTables L0', kind: 'file', x: 2, y: 1, sub: 'inmutables' },
+    { id: 'ln', label: 'Niveles L1…Ln', kind: 'archive', x: 3, y: 1, sub: 'cada uno ~10× mayor' },
+    { id: 'cmp', label: 'Compactación', kind: 'worker', x: 2.5, y: 2, sub: 'fusiona y descarta' },
+  ]}
+  edges={[
+    { from: 'c', to: 'wal' },
+    { from: 'c', to: 'mem' },
+    { from: 'mem', to: 'l0', label: 'flush' },
+    { from: 'l0', to: 'ln' },
+    { from: 'cmp', to: 'l0', dashed: true },
+    { from: 'cmp', to: 'ln', dashed: true },
+  ]}
+  steps={[
+    { title: '1. Escribir en el log', body: 'La escritura se agrega al final del WAL: una escritura secuencial, barata. Si el proceso muere, el WAL permite reconstruir la memtable.', active: ['c', 'wal'], flow: ['c-wal'] },
+    { title: '2. Insertar en la memtable', body: 'Se inserta en una estructura ordenada en memoria (por ejemplo, una skip list) y se confirma al cliente. Por eso las escrituras de un LSM son tan rápidas.', active: ['c', 'mem'], flow: ['c-mem'] },
+    { title: '3. Volcar a disco', body: 'Cuando la memtable se llena, se escribe entera como un archivo ordenado e inmutable (SSTable) en el nivel 0. Los archivos de L0 pueden solaparse entre sí.', active: ['mem', 'l0'], flow: ['mem-l0'] },
+    { title: '4. Compactar', body: 'En segundo plano, la compactación fusiona SSTables hacia niveles más grandes, descarta versiones viejas y borrados (tombstones). Cada byte se reescribe varias veces: eso es la amplificación de escritura.', active: ['cmp', 'l0', 'ln'], flow: ['l0-ln', 'cmp-l0', 'cmp-ln'] },
+    { title: '5. Leer', body: 'Una lectura mira la memtable, luego L0, luego cada nivel. Filtros de Bloom por SSTable evitan abrir archivos que seguro no tienen la clave. Aun así, una clave inexistente o vieja puede costar varias búsquedas: amplificación de lectura.', active: ['c', 'mem', 'l0', 'ln'] },
+  ]}
+/>
+
+### El triángulo de amplificaciones
+
+Toda estructura de almacenamiento negocia entre tres costos: **amplificación de escritura** (cuántos bytes escribe el disco por cada byte que escribe la aplicación), **amplificación de lectura** (cuántas lecturas de disco por consulta) y **amplificación de espacio** (cuánto ocupa respecto a los datos vivos). No puedes minimizar los tres a la vez.
+
+<Compare>
+<Option title="B-tree" verdict="Lecturas predecibles">
+
+- Lecturas puntuales y por rango rápidas y estables.
+- Cada clave vive en un solo lugar: bueno para transacciones y bloqueos.
+- Escrituras aleatorias; reescribe páginas enteras por cambios pequeños.
+- Fragmentación con el tiempo.
+- PostgreSQL, MySQL/InnoDB, SQL Server, Oracle.
+
+</Option>
+<Option title="LSM-tree" verdict="Escrituras masivas">
+
+- Escrituras secuenciales: mucho mayor rendimiento de ingesta.
+- Mejor compresión, menos espacio fragmentado.
+- Lecturas más caras (varios niveles), mitigadas con filtros de Bloom.
+- La compactación consume disco y CPU y puede provocar picos de latencia.
+- RocksDB, Cassandra, ScyllaDB, HBase, Bigtable.
+
+</Option>
+</Compare>
+
+La regla práctica: con mucha escritura (eventos, métricas, mensajes, ubicaciones), LSM; con lecturas variadas y transacciones, B-tree. Dentro de los LSM, la estrategia de compactación vuelve a mover el equilibrio: la compactación por niveles (*leveled*) reduce amplificación de lectura y espacio a costa de más escrituras; la escalonada (*tiered*) hace lo contrario.
+
+### Índices secundarios: lo que cuestan
+
+En la entrevista, cuando agregues un índice, di qué consulta resuelve y cuánto cuesta. Tres ideas:
+
+- **Índice compuesto**: `(cliente_id, creado_en)` sirve para "pedidos de un cliente ordenados por fecha" y para "pedidos de un cliente", pero no para "pedidos de ayer" de todos los clientes. El orden de las columnas importa: vale el prefijo izquierdo.
+- **Índice cubriente**: si el índice incluye todas las columnas que la consulta pide, la base no necesita leer la tabla.
+- **Costo de escritura**: cada índice adicional es una escritura más por inserción. Una tabla con ingesta masiva y ocho índices es una tabla lenta. En sistemas particionados, un índice secundario global se vuelve una escritura distribuida, normalmente asíncrona.
+
+<Quiz
+  question="Diseñas el almacenamiento de las ubicaciones GPS de 500 mil conductores, que reportan cada 4 segundos. Se consultan casi siempre como “última posición del conductor X” y “trayecto del viaje Y”. ¿Qué estructura de almacenamiento encaja mejor para el historial?"
+  options={[
+    { text: 'Una base relacional con B-tree y un índice por cada columna, para poder consultar cualquier cosa.', why: 'Son unas 125 mil escrituras por segundo; ocho índices multiplican ese costo. Y no necesitas consultas arbitrarias: los patrones de acceso son conocidos.' },
+    { text: 'Un almacén basado en LSM (columnas anchas) particionado por viaje o conductor y ordenado por tiempo; la última posición, en un clave-valor en memoria.', correct: true, why: 'Correcto. Escrituras masivas y secuenciales encajan con LSM; leer un trayecto es leer una partición en orden. La última posición es un acceso por clave que se sobrescribe constantemente: ideal para Redis.' },
+    { text: 'Una base de grafos, porque los conductores se mueven entre puntos conectados.', why: 'No hay recorridos de relaciones en estas consultas. Una base de grafos no está optimizada para ingesta masiva de puntos.' },
+    { text: 'Elasticsearch como fuente de verdad, para poder buscar por cualquier campo.', why: 'Un motor de búsqueda no es buena fuente de verdad (durabilidad y consistencia más débiles) y la ingesta de esta escala con indexación completa sería carísima.' },
+  ]}
+/>
+
+## Cómo elegir: un método
+
+<Steps>
+<Step title="Escribe las consultas principales">
+
+Antes de elegir, lista las tres a cinco consultas que más importan, con su frecuencia y latencia esperada. "Leer los últimos 50 mensajes de un canal, 20 mil veces por segundo, en menos de 50 ms" decide más que cualquier comparación de tecnologías.
+
+</Step>
+<Step title="Empieza por una base relacional">
+
+Si nada de lo anterior la descarta (escala de escritura, forma de los datos), PostgreSQL o MySQL. Te da transacciones, consultas ad hoc, restricciones y un ecosistema maduro. Escala lecturas con réplicas y cachés.
+
+</Step>
+<Step title="Cambia solo con una razón concreta">
+
+Ingesta que no cabe en un primario: columnas anchas o clave-valor particionado. Recorridos de relaciones profundos: grafo. Texto libre y relevancia: un índice de búsqueda alimentado por eventos. Métricas con retención: series de tiempo. Archivos grandes: almacenamiento de objetos, nunca la base.
+
+</Step>
+<Step title="Diseña la clave de partición">
+
+En cualquier almacén distribuido, la clave de partición es la decisión más importante: debe repartir la carga de forma pareja y hacer que tus consultas principales toquen una sola partición. Una mala clave crea particiones calientes que ninguna cantidad de nodos arregla.
+
+</Step>
+<Step title="Paga conscientemente la persistencia políglota">
+
+Usar varias bases (relacional para pedidos, Redis para sesiones, Elasticsearch para búsqueda) es normal, pero cada una agrega operación, monitoreo y un problema de sincronización. Justifica cada una.
+
+</Step>
+</Steps>
+
+<Callout type="interview" title="Cómo justificar la base de datos">
+
+Une siempre la elección al patrón de acceso y nombra el trade-off. Por ejemplo: "Los pedidos van en PostgreSQL: son relacionales, necesito transacciones para descontar stock y crear el pedido juntos, y el volumen de escritura, unos mil pedidos por segundo en pico, cabe en un primario. Para evitar actualizaciones perdidas en el stock uso un UPDATE atómico con condición. El historial de eventos de tracking va en Cassandra, particionado por pedido y ordenado por tiempo, porque es ingesta masiva de solo agregar y siempre lo leo por pedido". Si el entrevistador pregunta "¿y por qué no MongoDB?", responde con el patrón de acceso, no con preferencias.
+
+</Callout>
+
+Errores que conviene evitar:
+
+- Elegir la base antes de definir las consultas.
+- Decir "NoSQL porque escala" sin decir qué consultas pierdes.
+- Asumir que las transacciones por defecto te protegen de todo: Read committed permite actualizaciones perdidas.
+- Olvidar el costo de los índices en tablas de mucha escritura.
+- Usar un motor de búsqueda o una caché como fuente de verdad.
+
+<Takeaways>
+
+- Elige el almacenamiento a partir de los patrones de acceso: forma de los datos, consultas, proporción lectura/escritura, consistencia, escala y latencia.
+- Una base relacional es el mejor default; cámbiala solo con una razón concreta, como escala de escritura, recorridos de grafo o búsqueda de texto.
+- ACID: la atomicidad trata de abortar, la consistencia es sobre tus invariantes, el aislamiento rara vez es serializable por defecto y la durabilidad sale del WAL y la replicación.
+- Conoce las anomalías: Read committed permite actualizaciones perdidas; snapshot isolation permite write skew. Defiéndete con UPDATE atómico, FOR UPDATE, control optimista, restricciones o Serializable con reintentos.
+- B-tree actualiza en el lugar y da lecturas predecibles; LSM escribe secuencialmente y brilla en ingesta masiva, pagando en lectura y compactación.
+- Cada índice acelera una consulta y encarece todas las escrituras. En sistemas distribuidos, la clave de partición es la decisión más importante.
+
+</Takeaways>
+
+## Fuentes y lecturas
+
+- Martin Kleppmann, *Designing Data-Intensive Applications*, O'Reilly ([sitio del libro](https://dataintensive.net/)): capítulo 3 (almacenamiento, B-trees y LSM) y capítulo 7 (transacciones).
+- [Transaction Isolation](https://www.postgresql.org/docs/current/transaction-iso.html), documentación de PostgreSQL: niveles, snapshot isolation y SSI.
+- Berenson, Bernstein, Gray, Melton, O'Neil y O'Neil, [A Critique of ANSI SQL Isolation Levels](https://arxiv.org/abs/cs/0701157), SIGMOD 1995.
+- Martin Kleppmann, [Hermitage: testing transaction isolation levels](https://github.com/ept/hermitage): qué previene realmente cada nivel en cada motor.
+- [Leveled Compaction](https://github.com/facebook/rocksdb/wiki/Leveled-Compaction), wiki de RocksDB.
+- Bo Ingram, [How Discord Stores Trillions of Messages](https://discord.com/blog/how-discord-stores-trillions-of-messages), Discord Engineering, 2023.
+- Markus Winand, [Use The Index, Luke](https://use-the-index-luke.com/): índices SQL explicados para desarrolladores.
+

@@ -1,0 +1,309 @@
+import { InterviewLoop } from '../../components/widgets/entrevistas/InterviewLoop'
+
+Un proceso de entrevistas técnico no es una prueba: es una serie de filtros, cada uno diseñado para medir una cosa distinta. El recruiter mide si tu perfil calza, la prueba online mide si programas lo básico sin ayuda, el live coding mide cómo resuelves un problema frente a otra persona, el system design mide si sabes tomar decisiones de arquitectura y la conductual mide cómo trabajas con otros. Si te preparas para "la entrevista" en general, estudias de más para algunas etapas y de menos para otras.
+
+Este tema es el mapa de la unidad. Primero recorre las etapas una por una (qué evalúan, cuánto duran, qué las aprueba y qué las reprueba), después cómo cambian según el tipo de empresa y tu nivel, qué cambió con la llegada de la IA y, al final, un plan de preparación por semanas que enlaza con cada tema de la unidad.
+
+<Sketch
+  width={640}
+  height={320}
+  caption="Un proceso es una serie de filtros. Cada etapa deja pasar a menos gente y mide algo distinto: por eso cada una se prepara por separado."
+  items={[
+    { type: 'text', x: 24, y: 32, text: 'cada etapa mide otra cosa', size: 22, tone: 'line' },
+    { type: 'path', d: 'M30 56 L330 56 L230 256 L130 256 Z', len: 900 },
+    { type: 'path', d: 'M50 96 L310 96 M70 136 L290 136 M90 176 L270 176 M110 216 L250 216', len: 760, tone: 'pencil' },
+    { type: 'text', x: 180, y: 82, text: 'recruiter', size: 18, anchor: 'middle' },
+    { type: 'text', x: 350, y: 82, text: 'tu perfil y tu sueldo', size: 18, tone: 'pencil', with: true },
+    { type: 'text', x: 180, y: 122, text: 'prueba online', size: 18, anchor: 'middle' },
+    { type: 'text', x: 350, y: 122, text: 'código sin ayuda', size: 18, tone: 'pencil', with: true },
+    { type: 'text', x: 180, y: 162, text: 'live coding', size: 18, anchor: 'middle' },
+    { type: 'text', x: 350, y: 162, text: 'cómo piensas en voz alta', size: 18, tone: 'pencil', with: true },
+    { type: 'text', x: 180, y: 202, text: 'system design', size: 18, anchor: 'middle' },
+    { type: 'text', x: 350, y: 202, text: 'decisiones con trade-offs', size: 18, tone: 'pencil', with: true },
+    { type: 'text', x: 180, y: 242, text: 'conductual', size: 18, anchor: 'middle' },
+    { type: 'text', x: 350, y: 242, text: 'cómo trabajas con otros', size: 18, tone: 'pencil', with: true },
+    { type: 'arrow', from: [180, 262], to: [180, 292], tone: 'ok' },
+    { type: 'text', x: 196, y: 306, text: 'oferta', size: 22, tone: 'ok' },
+    { type: 'check', x: 278, y: 298, size: 22 },
+  ]}
+/>
+
+## Las etapas, una por una
+
+Casi todos los procesos son combinaciones de las mismas piezas. Lo que cambia es cuáles aparecen, en qué orden y con qué peso.
+
+### 1. Contacto con el recruiter (20 a 30 minutos)
+
+Una llamada sin código. El recruiter confirma que tu experiencia corresponde al puesto, pregunta por qué te interesa, tu disponibilidad y tus expectativas de sueldo, y en puestos remotos para EE. UU. o Europa suele ser la primera prueba informal de tu inglés. A cambio, te explica el proceso.
+
+- **Se aprueba** contando en dos minutos qué hiciste y por qué este puesto, con un rango de sueldo investigado y preguntando cómo es cada ronda.
+- **Se reprueba** sin saber a qué se dedica la empresa, con un número muy fuera de rango o con una historia de diez minutos sin estructura.
+
+Esta llamada es también tu mejor fuente de información. Pregunta cuántas rondas hay, de qué tipo, en qué lenguaje puedes programar, si el código se ejecuta y en qué idioma es cada una. Los recruiters quieren que llegues preparado: un candidato que pasa el proceso es su éxito. Prepárala con [Háblame de ti](/casos/hablame-de-ti) y [Expectativas, oferta y negociación](/casos/oferta-y-negociacion).
+
+### 2. Prueba online (60 a 90 minutos)
+
+Uno a cuatro problemas de algoritmos en una plataforma como HackerRank o CodeSignal, sin entrevistador. Se corrige con tests automáticos, muchos ocultos. Es el filtro más barato para la empresa, por eso aparece cuando hay muchos postulantes: procesos para junior y empresas que reciben miles de candidaturas.
+
+- **Se aprueba** leyendo todos los problemas antes de empezar, resolviendo primero el que dominas, mirando las restricciones para saber qué complejidad hace falta y probando casos borde antes de enviar.
+- **Se reprueba** por timeouts (una solución O(n²) con n = 10⁵), por fallar tests ocultos de casos borde (arreglo vacío, un solo elemento, valores negativos) o por quedarte trabado en un problema y no enviar los demás.
+
+Aquí no hay nadie que valore tu razonamiento: solo cuenta lo que pasa los tests. El tema [El método para live coding](/casos/metodo-live-coding) explica cómo leer las restricciones para saber qué complejidad necesitas.
+
+### 3. Live coding técnico (45 a 60 minutos cada ronda)
+
+Un ingeniero te da un problema y lo resuelves en un editor compartido mientras conversan. La primera ronda de este tipo suele ser el *screen técnico* (decide si vale la pena invertir un día de entrevistas en ti); las siguientes forman parte del loop final y van más hondo: variantes, repreguntas sobre complejidad, un segundo problema.
+
+- **Se aprueba** aclarando antes de programar, proponiendo una fuerza bruta y mejorándola con un argumento de Big-O, codificando mientras explicas y probando tu propio código antes de que te lo pidan.
+- **Se reprueba** programando en silencio, lanzándote a codificar sin acordar el enfoque, quedándote sin una solución que funcione o dejando que el entrevistador encuentre tus bugs.
+
+Lo que se evalúa no es solo si llegas a la respuesta, sino cómo: comunicación, resolución del problema, calidad del código y verificación. El [método para live coding](/casos/metodo-live-coding) lo desarrolla, y los temas de patrones (desde [arreglos y hashing](/casos/arrays-y-hashing) hasta [programación dinámica](/casos/programacion-dinamica)) cubren los problemas.
+
+### 4. System design (45 a 60 minutos)
+
+Un enunciado abierto ("diseña un acortador de URLs", "diseña el feed de Instagram") y una pizarra virtual. Tú llevas la conversación: requisitos, estimaciones, API, modelo de datos, arquitectura, cuellos de botella. Aparece desde semi senior y es la ronda que más pesa para decidir el nivel en perfiles senior.
+
+- **Se aprueba** acotando requisitos y haciendo números antes de dibujar, justificando cada componente con su costo, comparando alternativas y detectando tú los cuellos de botella.
+- **Se reprueba** dibujando una arquitectura de memoria sin preguntar nada, nombrando tecnologías sin decir qué problema resuelven o necesitando que el entrevistador te guíe paso a paso.
+
+Empieza por [el método de system design](/system-design/metodo-entrevista) y practica con los casos de la unidad, como el [acortador de URLs](/casos/acortador-urls) o el [rate limiter](/casos/rate-limiter).
+
+### 5. Low-level design (45 a 60 minutos)
+
+Diseño orientado a objetos de un problema acotado: un estacionamiento, una biblioteca, un sistema de reservas. Te piden clases, interfaces y relaciones, y a veces implementar una parte (el formato que en algunos mercados se llama *machine coding*).
+
+- **Se aprueba** partiendo de los casos de uso, usando interfaces donde el comportamiento varía y manteniendo el diseño simple pero extensible a lo que te piden después.
+- **Se reprueba** metiendo patrones de diseño porque sí, o con clases anémicas y un "Manager" que hace todo.
+
+Está cubierto en [Diseño orientado a objetos (LLD)](/casos/diseno-orientado-a-objetos) y [POO y SOLID](/casos/poo-y-solid).
+
+### 6. Conductual (45 a 60 minutos)
+
+Preguntas del tipo "cuéntame de una vez que tuviste un conflicto con alguien del equipo". Evalúa colaboración, ownership, manejo de errores, prioridades y, en niveles altos, el alcance de tu impacto. En muchas empresas grandes puede reprobarte por sí sola: un excelente desempeño técnico no compensa señales de que eres difícil de trabajar.
+
+- **Se aprueba** con historias concretas, tu papel claro ("yo propuse", no "hicimos") y un resultado medible. Hablar de un error propio y de lo que cambiaste después suma.
+- **Se reprueba** con respuestas hipotéticas ("lo que yo haría es…"), culpando a otros o sin poder dar un ejemplo real.
+
+Prepárala con [La entrevista conductual y el método STAR](/casos/entrevista-conductual).
+
+### 7. El loop final, u "onsite" (de 3 a 5 horas)
+
+En las empresas grandes, las rondas de live coding, diseño y conductual se agrupan en un día (o dos medios días) llamado *onsite* por costumbre, aunque hoy casi siempre es virtual. Cada ronda la toma un entrevistador distinto, y cada uno escribe su evaluación por separado.
+
+Dos consejos que no dependen del contenido: pide pausas entre rondas si no están en la agenda (es normal y nadie lo penaliza), y trata cada ronda como si empezara de cero. El entrevistador de las 15:00 no sabe que la ronda de las 14:00 salió mal.
+
+### 8. Referencias y oferta
+
+Antes de la oferta, algunas empresas piden dos o tres referencias (exjefes o colegas). En big tech, tu evaluación pasa además por una revisión del paquete de feedback, sea un comité de contratación o el hiring manager con los entrevistadores, que también decide el nivel. Después llega la oferta, que casi siempre se puede negociar: lo vemos en [Expectativas, oferta y negociación](/casos/oferta-y-negociacion).
+
+<Callout type="interview" title="Lo que el proceso completo está midiendo">
+
+Cada etapa mide algo distinto, pero hay un hilo común: **si te pueden poner a trabajar con un equipo mañana**. Programas sin ayuda (prueba online), piensas en voz alta y aceptas sugerencias (live coding), tomas decisiones con trade-offs (diseño) y trabajas bien con otros (conductual). La señal más fuerte en todas las rondas es la misma: que se entienda tu razonamiento.
+
+</Callout>
+
+<Quiz
+  question="Eres semi senior. El recruiter te dice que el loop final tendrá dos rondas de live coding, una de system design y una conductual, en tres semanas. Hasta ahora solo practicaste LeetCode. ¿Cómo repartes el tiempo?"
+  options={[
+    { text: 'Todo a LeetCode: es la mitad de las rondas y lo que más se reprueba.', why: 'Las rondas de diseño y conductual también pueden reprobarte, y llegar sin haberlas practicado nunca es el error más común de quien solo hizo problemas.' },
+    { text: 'Mantener una dosis diaria de problemas, dedicar una buena parte del tiempo a system design y preparar 6 a 8 historias para la conductual.', correct: true, why: 'Cada ronda pesa por sí misma. La práctica de código ya tiene base y solo necesita mantenerse; diseño y conductual parten de cero, así que rinden más por hora invertida.' },
+    { text: 'Solo system design, porque es lo que define el nivel.', why: 'Define el nivel, pero dos rondas de código mal resueltas te dejan fuera aunque el diseño salga perfecto.' },
+    { text: 'La conductual no se prepara: hay que ser natural.', why: 'Ser natural no es improvisar. Sin historias preparadas, las respuestas salen vagas y sin resultados concretos, que es justo lo que resta puntos.' },
+  ]}
+/>
+
+## Cómo cambia según la empresa y tu nivel
+
+Las piezas son las mismas, pero cada tipo de empresa las combina distinto. Elige empresa y nivel y toca una etapa para ver qué mide y qué estudiar para ella.
+
+<InterviewLoop />
+
+Las cuatro familias más comunes para un desarrollador de Latinoamérica:
+
+<Compare>
+<Option title="Big tech de EE. UU." verdict="Estandarizado y largo">
+
+Prueba online o screen, luego un loop de 4 a 5 rondas: 2 o 3 de código, 1 o 2 de diseño (desde semi senior) y una conductual. Las preguntas y las rúbricas están muy estandarizadas, así que la preparación es predecible. El proceso puede tomar de semanas a meses entre etapas, comité y team match.
+
+</Option>
+<Option title="Startup" verdict="Práctico y rápido">
+
+Menos rondas y más parecidas al trabajo real: un take-home o un problema práctico en vez de algoritmos puros, una charla con el CTO o un fundador, y a veces un día de pair programming. Valoran la autonomía y que puedas avanzar con requisitos incompletos.
+
+</Option>
+<Option title="Empresa local" verdict="Conceptual y de stack">
+
+Más preguntas teóricas sobre tu stack (POO, SQL, frameworks) que algoritmos, una prueba técnica o un take-home, la entrevista con el líder técnico y, en empresas grandes y tradicionales, una evaluación psicolaboral. Recursos Humanos suele conducir el proceso.
+
+</Option>
+<Option title="Agencia que contrata remoto" verdict="Dos procesos en uno">
+
+Primero pasas los filtros de la agencia (inglés, prueba online, una entrevista técnica con uno de sus ingenieros) y después la entrevista con el cliente que te va a contratar a través de ella. A menudo el contrato es como contractor, lo que cambia cómo comparas la oferta.
+
+</Option>
+</Compare>
+
+**Por nivel**, la tendencia es clara aunque cada empresa la aplique a su manera:
+
+- **Junior**: casi todo es código. Prueba online, dos o tres rondas de live coding y una conductual corta. Te piden fundamentos sólidos y que aprendas rápido, no experiencia en diseño.
+- **Semi senior**: aparece la ronda de system design, normalmente una, con expectativas de "diseño que funciona de punta a punta". El código sigue pesando mucho.
+- **Senior y más**: el peso se mueve al diseño (a veces dos rondas, una de ellas de producto o de arquitectura), a la conductual (alcance, liderazgo sin autoridad, decisiones que afectaron a otros equipos) y al ownership. El código se sigue evaluando, pero un buen código no compensa un diseño superficial. La decisión de nivel (senior o semi senior) sale sobre todo de estas rondas.
+
+Fíjate en la barra de reparto del widget al pasar de Junior a Senior en big tech: la proporción de tiempo de código baja y la de diseño sube. Prepararte con la misma mezcla que hace dos años, si cambiaste de nivel, es prepararte para otro proceso.
+
+## Lo que cambió con la IA, contado con cuidado
+
+Desde 2025 algunas empresas empezaron a probar rondas en las que puedes (o debes) usar un asistente de IA dentro del entorno de la entrevista. Lo que se sabe públicamente viene sobre todo de **reportes de candidatos recopilados por sitios de preparación**, no de anuncios oficiales, así que tómalo como tendencia y confírmalo siempre con tu recruiter.
+
+- **Meta**: según varios sitios de preparación, desde fines de 2025 una de las dos rondas de código del onsite pasó a ser una ronda de unos 60 minutos con un asistente de IA integrado en CoderPad, sobre un proyecto pequeño de varios archivos. Lo que reportan que se evalúa es cómo descompones el problema, si detectas salida incorrecta del modelo, cómo verificas y si puedes explicar cada línea del resultado, más que el código que genera el modelo.
+- **Google**: un reporte de mayo de 2026 describe un piloto, en algunos equipos de EE. UU. y para perfiles junior y semi senior, de una ronda de "code comprehension" de 60 minutos sobre un código existente, con Gemini como asistente. Según ese mismo reporte, el system design y el comité de contratación no cambiaron.
+
+Lo que **no** cambió: las rondas de algoritmos sin IA siguen existiendo en la gran mayoría de los procesos, incluidos los de esas mismas empresas. Prepararte solo para rondas con IA es una mala apuesta. El tema [Take-home, code review y rondas con IA](/casos/otros-formatos) cubre ese formato en detalle.
+
+<Callout type="warn" title="Pregunta, no supongas">
+
+Si una ronda permite IA, el recruiter te lo dirá y a menudo te ofrecerá un entorno de práctica. Si no te lo dicen, asume que no está permitida: usar un asistente sin permiso en una ronda tradicional es motivo de descalificación inmediata.
+
+</Callout>
+
+## Qué pasa después de cada ronda
+
+Entender qué ocurre detrás de escena te ayuda a interpretar los silencios. Este es el recorrido típico en una empresa grande; en una startup se comprime a una conversación entre dos o tres personas.
+
+<FlowDiagram
+  caption="Del final de tu última ronda a la respuesta. Recorre los pasos."
+  nodes={[
+    { id: 'u', label: 'Tú', kind: 'user', x: 0, y: 1 },
+    { id: 'e', label: 'Entrevistadores', kind: 'users', x: 1, y: 1, sub: 'uno por ronda' },
+    { id: 'f', label: 'Feedback', kind: 'file', x: 2, y: 1, sub: 'escrito por separado' },
+    { id: 'd', label: 'Debrief', kind: 'decision', x: 3, y: 0, sub: 'o comité' },
+    { id: 'n', label: 'Nivel', kind: 'layers', x: 3, y: 2, sub: 'calibración' },
+    { id: 'r', label: 'Recruiter', kind: 'chat', x: 4, y: 1, sub: 'te comunica' },
+  ]}
+  edges={[
+    { from: 'u', to: 'e' },
+    { from: 'e', to: 'f' },
+    { from: 'f', to: 'd' },
+    { from: 'f', to: 'n' },
+    { from: 'd', to: 'r' },
+    { from: 'n', to: 'r', dashed: true },
+    { from: 'r', to: 'u', dashed: true, label: 'oferta o rechazo' },
+  ]}
+  steps={[
+    { title: 'Cada entrevistador escribe solo', body: 'Al terminar tu ronda, cada entrevistador escribe su evaluación y una recomendación (de "contratar con convicción" a "no contratar") sin ver lo que escribieron los demás. Así una mala ronda no contamina las otras.', active: ['u', 'e', 'f'], flow: ['u-e', 'e-f'] },
+    { title: 'Se juntan las evaluaciones', body: 'Un debrief (los entrevistadores con el hiring manager) o un comité que no te conoció lee el paquete completo. Buscan señales consistentes: una ronda floja con el resto sólido no siempre es fatal; dos rondas flojas casi siempre lo son.', active: ['f', 'd'], flow: ['f-d'] },
+    { title: 'Se decide el nivel', body: 'En paralelo se calibra el nivel. Puedes aprobar para un nivel menor del que postulaste: es una oferta válida, y a veces conviene más que esperar el período de reintento.', active: ['f', 'n'], flow: ['f-n'] },
+    { title: 'El recruiter te avisa', body: 'El recruiter recibe la decisión y te la comunica. Esta cadena puede tardar de días a semanas. Un silencio largo suele significar agenda llena, team match pendiente u otro candidato en proceso, no necesariamente un no.', active: ['d', 'n', 'r', 'u'], flow: ['d-r', 'n-r', 'r-u'] },
+  ]}
+/>
+
+### Entre rondas
+
+- **Anota todo apenas termines**: qué te preguntaron, qué respondiste, dónde dudaste. Esa nota vale más que cualquier feedback que te den, y la vas a usar si tienes que volver a postular.
+- **Pregunta por la siguiente etapa**: formato, duración, entrevistadores, si hay entorno de práctica. Preguntarle al recruiter no te resta puntos.
+- **No analices cada gesto.** Que el entrevistador te haya cortado no significa que te fue mal (a veces quiere llegar a la segunda parte), y que haya sido simpático no significa que te fue bien.
+- **Sigue practicando.** Entre el screen y el loop suele haber una o dos semanas: úsalas para lo que el screen te mostró que te falta.
+
+### Cómo leer el feedback (o su ausencia)
+
+Muchas empresas, sobre todo las grandes, no dan feedback detallado por política interna. Si te lo dan, suele ser genérico ("buscamos un perfil con más experiencia en diseño"). Tres cosas que sí puedes hacer:
+
+1. **Pide una cosa concreta**: "¿Hay un área en la que me recomendarías enfocarme si vuelvo a postular?". Una pregunta acotada tiene más chances de respuesta que "¿por qué no quedé?".
+2. **Cruza con tus notas.** Si en tus notas dice "me trabé en la ronda de grafos", el feedback genérico no cambia el diagnóstico.
+3. **Distingue el tipo de no.** "No en este momento" para un puesto cerrado no es lo mismo que "no pasaste la barra técnica". El primero es casi siempre circunstancial.
+
+Si después de una semana del plazo que te dieron no hay respuesta, un mensaje corto y amable al recruiter es lo correcto. Uno, no tres.
+
+### El rechazo y volver a postular
+
+Los procesos grandes están diseñados para preferir rechazar a alguien bueno antes que contratar a alguien que no rinde, y una ronda mide 45 minutos de un día. Un rechazo dice "esta vez, en estas rondas, no alcanzó la señal", no "no eres buen ingeniero". Volver a postular es normal, y los procesos lo prevén: por eso existen los períodos de espera.
+
+Lo práctico: muchas empresas tienen un período de espera antes de volver a entrevistarte (pregúntale al recruiter cuál aplica, suele ser de varios meses), y el siguiente proceso parte casi de cero. Usa ese tiempo con tus notas: si fallaste en diseño, ese es tu plan. Y despídete bien del recruiter: es la persona que te va a escribir cuando se cumpla el plazo.
+
+<Quiz
+  question="Pasaron diez días desde tu loop final y nadie te escribió. El recruiter dijo que tendrías respuesta 'en una semana'. ¿Qué haces?"
+  options={[
+    { text: 'Asumir que es un no y dejar de esperar.', why: 'Los silencios suelen deberse a comités, team match, aprobaciones de compensación o vacaciones. Asumir el no sin preguntar es perder información gratis.' },
+    { text: 'Escribir un mensaje breve al recruiter preguntando si hay novedades y si necesitan algo de tu parte.', correct: true, why: 'Es lo profesional: el plazo ya pasó, el mensaje es corto y no presiona. Si tienes otra oferta con fecha límite, este es el momento de decirlo.' },
+    { text: 'Escribirle a cada entrevistador por LinkedIn para saber cómo te fue.', why: 'Los entrevistadores normalmente no pueden compartir su evaluación y el contacto directo puede verse como presión. El canal es el recruiter.' },
+    { text: 'Escribir cada dos días hasta que respondan.', why: 'La insistencia no acelera la decisión y deja una mala impresión en quien maneja tu proceso.' },
+  ]}
+/>
+
+## Un plan de preparación de 8 semanas
+
+Este plan supone unas 8 a 10 horas por semana y un objetivo de semi senior en una empresa que hace algoritmos y diseño. Es un punto de partida: si tu proceso es en una empresa local, mueve tiempo a las preguntas conceptuales; si eres senior, al diseño.
+
+<Sketch
+  width={640}
+  height={276}
+  caption="El plan de un vistazo: cinco semanas de patrones, una de preguntas conceptuales, una de diseño y una de conductual, con simulacros desde la mitad."
+  items={[
+    { type: 'text', x: 24, y: 30, text: 'ocho semanas, en este orden', size: 20, tone: 'pencil' },
+    { type: 'cells', x: 40, y: 100, values: [1, 2, 3, 4, 5, 6, 7, 8], size: 64, font: 'hand', states: ['line', 'line', 'line', 'line', 'line', null, null, null] },
+    { type: 'arrow', from: [232, 86], to: [552, 86], dashed: true, label: 'simulacros con reloj y en voz alta', labelAt: [392, 74], tone: 'ok' },
+    { type: 'line', points: [[40, 172], [40, 182], [360, 182], [360, 172]], tone: 'line' },
+    { type: 'text', x: 60, y: 210, text: 'patrones de live coding', size: 20, tone: 'line', with: true },
+    { type: 'text', x: 392, y: 206, text: 'conceptual', size: 18, anchor: 'middle' },
+    { type: 'text', x: 456, y: 236, text: 'diseño', size: 18, anchor: 'middle' },
+    { type: 'text', x: 520, y: 206, text: 'conductual', size: 18, anchor: 'middle' },
+    { type: 'text', x: 24, y: 264, text: 'todos los días: uno o dos problemas, en voz alta', size: 18, tone: 'pencil' },
+  ]}
+/>
+
+| Semana | Foco | Temas |
+|---|---|---|
+| 1 | Método y el patrón más común | [El método para live coding](/casos/metodo-live-coding), [arreglos y hashing](/casos/arrays-y-hashing), tu presentación ([háblame de ti](/casos/hablame-de-ti)) |
+| 2 | Índices que se mueven | [Two pointers y sliding window](/casos/two-pointers-y-sliding-window), [pilas y colas](/casos/pilas-y-colas), [búsqueda binaria](/casos/busqueda-binaria) |
+| 3 | Estructuras enlazadas | [Listas enlazadas](/casos/listas-enlazadas), [árboles](/casos/arboles), [heaps y top-K](/casos/heaps-y-top-k) |
+| 4 | Recorridos y búsqueda exhaustiva | [Grafos](/casos/grafos), [backtracking](/casos/backtracking). Primer mock de live coding con alguien |
+| 5 | Lo más difícil, con calma | [Programación dinámica](/casos/programacion-dinamica), [intervalos y greedy](/casos/intervalos-y-greedy). Repasa los problemas que fallaste |
+| 6 | Preguntas conceptuales y LLD | [Estructuras de datos](/casos/estructuras-de-datos), [POO y SOLID](/casos/poo-y-solid), [backend y bases de datos](/casos/backend-y-bases-de-datos), [diseño orientado a objetos](/casos/diseno-orientado-a-objetos) |
+| 7 | System design | [El método de system design](/system-design/metodo-entrevista), [acortador de URLs](/casos/acortador-urls), [rate limiter](/casos/rate-limiter), [WhatsApp](/casos/whatsapp) |
+| 8 | Conductual, cierre y simulacros | [Entrevista conductual](/casos/entrevista-conductual), [otros formatos](/casos/otros-formatos), [oferta y negociación](/casos/oferta-y-negociacion). Dos simulacros completos |
+
+Tres reglas para que el plan funcione:
+
+- **Un poco todos los días gana a mucho el fin de semana.** Uno o dos problemas diarios, resueltos con el método completo y en voz alta, rinden más que diez seguidos en silencio.
+- **Repasa, no acumules.** Un problema que resolviste mirando la solución no cuenta: vuelve a él tres o cuatro días después, sin mirar.
+- **Simula las condiciones.** Desde la semana 4, practica con reloj, sin autocompletado y hablando. Si tu proceso es en inglés, practica en inglés desde el principio: pensar y hablar a la vez en otro idioma es una habilidad aparte.
+
+<Details summary="Profundizar: versión de 4 semanas y ajustes por nivel">
+
+**Si tienes 4 semanas**, comprime así: semana 1, método + arreglos y hashing + two pointers; semana 2, árboles, grafos y heaps; semana 3, system design (si aplica) o preguntas conceptuales; semana 4, conductual, simulacros y repaso. Deja fuera DP salvo que el puesto sea de una empresa conocida por preguntarla; pocas preguntas de DP valen el tiempo que cuesta prepararlas desde cero.
+
+**Junior**: cambia la semana 7 por más live coding y la 6 por preguntas conceptuales a fondo; es lo que más te van a preguntar.
+
+**Senior**: dedica dos o tres semanas a diseño con más casos ([Twitter](/casos/twitter), [YouTube](/casos/youtube), [Uber](/casos/uber), [sistema de pagos](/casos/pagos), [Ticketmaster](/casos/ticketmaster)) y prepara historias conductuales sobre decisiones técnicas que afectaron a otros equipos. Reduce el tiempo de patrones poco frecuentes.
+
+</Details>
+
+<Quiz
+  question="Te avisan que una de tus rondas será 'con asistente de IA'. ¿Qué preparación tiene más sentido?"
+  options={[
+    { text: 'Dejar de practicar algoritmos, porque la IA los resuelve.', why: 'Lo reportado es que se evalúa cómo descompones, verificas y explicas; para detectar una solución incorrecta del modelo necesitas entender el algoritmo mejor, no peor. Y el resto de las rondas siguen sin IA.' },
+    { text: 'Practicar leyendo código ajeno de varios archivos, pidiendo cambios acotados al asistente, revisando lo que genera y probándolo antes de aceptarlo.', correct: true, why: 'Es justo lo que los reportes dicen que se mira: especificar bien, juzgar la salida y verificar. Pide además un entorno de práctica al recruiter.' },
+    { text: 'Memorizar prompts que generen soluciones completas de una vez.', why: 'Aceptar una solución entera sin entenderla es la señal débil más clara en este formato: te van a pedir que expliques cada línea.' },
+  ]}
+/>
+
+<Takeaways>
+
+- Un proceso es una serie de filtros que miden cosas distintas: perfil, código sin ayuda, código en conversación, diseño y trabajo con otros. Prepárate para cada uno por separado.
+- La llamada con el recruiter es tu mejor fuente de información: pregunta formato, idioma y lenguaje de cada ronda.
+- Big tech, startups, empresas locales y agencias combinan las mismas piezas de forma distinta; a mayor seniority, más peso de diseño, conductual y ownership.
+- Las rondas con IA existen en algunas empresas según reportes de sitios de preparación, pero las rondas de algoritmos sin IA siguen siendo la norma. Confírmalo con tu recruiter.
+- Anota cada ronda apenas termina: esas notas valen más que el feedback, que a menudo no llega.
+- Un rechazo mide unas horas de un día. Usa el período de espera para atacar lo que tus notas dicen que falló.
+
+</Takeaways>
+
+## Fuentes y lecturas
+
+- Tech Interview Handbook, [Software Engineer interviews: Everything you need to prepare](https://www.techinterviewhandbook.org/software-engineering-interview-guide/): formatos de entrevista y cuán comunes son.
+- Tech Interview Handbook, [How candidates are evaluated in coding interviews](https://www.techinterviewhandbook.org/coding-interview-rubrics/): las cuatro áreas de evaluación del live coding.
+- Google Careers, [How we hire](https://www.google.com/about/careers/applications/how-we-hire/): el proceso oficial de Google y sus guías de preparación.
+- Gayle Laakmann McDowell, *Cracking the Coding Interview* ([sitio del libro](https://www.crackingthecodinginterview.com/)), y *Beyond Cracking the Coding Interview* (McDowell, Mroczka, Lerner y Mamano, 2025), con capítulos sobre el proceso, el feedback y el rechazo.
+- Intervue, [Meta Interview Experience 2026: the AI-assisted coding round](https://www.intervue.io/blog/meta-interview-experience) (noviembre de 2026): reporte, no anuncio oficial, sobre la ronda con IA de Meta.
+- Levelop, [Google coding interviews in 2026: what changed and what didn't](https://levelop.dev/blog/google-coding-interviews-in-2026-what-changed-and-what-didnt) (mayo de 2026): reporte sobre el piloto de code comprehension con IA.
+- Formation, [3 ways AI has changed FAANG interviews in 2026](https://formation.dev/blog/3-ways-ai-has-changed-faang-interviews-in-2026) (mayo de 2026): panorama de las rondas "AI-enabled" y qué se evalúa en ellas.

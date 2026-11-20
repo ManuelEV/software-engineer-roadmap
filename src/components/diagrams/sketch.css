@@ -1,0 +1,29 @@
+/* A drawing made straight on the notebook page: no frame, just ink. */
+.sketch__paper {
+  position: relative;
+}
+.sketch__paper svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  margin: 0 auto;
+  overflow: visible;
+}
+.sketch__foot {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--s-2);
+}
+.sketch__caption {
+  flex: 1;
+}
+.sketch__replay {
+  flex: none;
+  opacity: 0.6;
+  transition: opacity 160ms var(--ease-out);
+}
+.sketch__replay:hover,
+.sketch__replay:focus-visible {
+  opacity: 1;
+}

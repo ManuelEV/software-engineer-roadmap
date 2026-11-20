@@ -1,0 +1,250 @@
+import { ExtensionMap } from '../../components/widgets/ia/ExtensionMap'
+
+Un agente de código recién instalado sabe programar, pero no sabe nada de *tu* forma de programar: cómo se publica una versión en tu equipo, dónde está la base de staging, qué revisión de seguridad exige tu empresa, qué carpeta jamás se toca. Para eso existen los mecanismos de extensión, y elegir el correcto es la diferencia entre un agente que se adapta a tu equipo y un `CLAUDE.md` de 900 líneas que nadie mantiene.
+
+En este tema recorremos los seis mecanismos que hoy son estándar (con los nombres de Claude Code, pero con equivalentes en casi todas las herramientas): **skills**, **comandos slash**, **servidores MCP**, **subagentes**, **hooks** y **plugins**. Para cada uno: qué problema resuelve, cuándo entra en el contexto, quién lo dispara y cómo se ve su archivo.
+
+## Cuatro preguntas para elegir
+
+Antes del detalle, el criterio. Casi cualquier necesidad cae en una de estas categorías:
+
+- **¿Es conocimiento?** Algo que el agente debería *saber*. Si hace falta en casi toda sesión y es corto: `CLAUDE.md` / `AGENTS.md`. Si es un procedimiento largo u ocasional: un **skill**.
+- **¿Es una capacidad nueva?** Algo que el agente debería poder *hacer* y hoy no puede (consultar Linear, leer una base de datos, controlar un navegador): un **servidor MCP**.
+- **¿Es trabajo que conviene aislar?** Una exploración ruidosa, una revisión independiente, tareas paralelas: un **subagente**.
+- **¿Tiene que pasar siempre?** Una regla sin excepciones o un paso automático: un **hook** (o una regla de permisos).
+
+Y si quieres distribuir una combinación de todo lo anterior a tu equipo, con versiones: un **plugin**.
+
+## Skills: procedimientos bajo demanda
+
+Un **skill** es una carpeta con un archivo `SKILL.md` (instrucciones en Markdown con un frontmatter YAML) y, opcionalmente, archivos de apoyo: referencias, plantillas, scripts. Anthropic los presentó en octubre de 2025 y en diciembre los publicó como **estándar abierto** (*Agent Skills*) para que funcionen entre plataformas.
+
+```text
+.claude/skills/reporte-ventas/
+├── SKILL.md            ← instrucciones + frontmatter
+├── formato.md          ← referencia que se lee solo si hace falta
+└── scripts/
+    └── exportar.ts     ← código que el agente ejecuta, no lee
+```
+
+```markdown title=".claude/skills/reporte-ventas/SKILL.md"
+---
+name: reporte-ventas
+description: Genera el reporte mensual de ventas en PDF con el script interno.
+  Úsalo cuando pidan un reporte de ventas, exportar ventas o cerrar el mes.
+---
+
+## Pasos
+1. Corre `pnpm tsx .claude/skills/reporte-ventas/scripts/exportar.ts --mes AAAA-MM`.
+2. Verifica que el total coincida con `SELECT sum(total_cents) FROM orders ...`
+   para ese mes. Si no coincide, detente y reporta la diferencia.
+3. Para el formato de tablas y gráficos, lee `formato.md`.
+
+## Trampas
+- Los pedidos reembolsados se restan, no se excluyen.
+```
+
+La clave es la **divulgación progresiva**. Al iniciar la sesión, solo el nombre y la descripción de cada skill entran al contexto (la documentación de Claude Code trunca ese listado a 1.536 caracteres por skill). Cuando el modelo decide que el skill es relevante, o cuando tú escribes `/reporte-ventas`, se carga el `SKILL.md` completo. Y `formato.md` o el script solo se tocan si las instrucciones lo piden. El ejemplo canónico de Anthropic es su skill de PDF: las instrucciones para rellenar formularios viven en un `forms.md` aparte que solo se lee cuando hay un formulario, y un script extrae los campos sin que el PDF entre al contexto.
+
+Consecuencia práctica: **la descripción es lo más importante del skill**. Es lo único que el modelo ve para decidir si usarlo. Escríbela con los términos que usarían las personas al pedir la tarea ("reporte de ventas", "cerrar el mes"), no solo con el nombre técnico.
+
+<Callout type="tip" title="Contexto dinámico">
+
+En Claude Code, una línea con signo de exclamación y un comando entre comillas invertidas dentro del `SKILL.md` (por ejemplo, la línea `` !`git diff HEAD` ``) se ejecuta al invocar el skill y su salida se inserta antes de que el modelo lo lea. Es una forma barata de darle al skill el estado actual del repo sin una vuelta extra del loop.
+
+</Callout>
+
+<Callout type="warn" title="Los skills son código">
+
+Un skill contiene instrucciones y scripts que el agente ejecuta con tus permisos. Un skill malicioso puede pedirle al agente que exfiltre datos. Instala skills solo de fuentes confiables y revisa los de terceros como revisarías una dependencia: scripts incluidos, conexiones de red, dependencias.
+
+</Callout>
+
+## Comandos slash: flujos que disparas tú
+
+Un comando slash es un prompt guardado que invocas escribiendo `/nombre`. En Claude Code, los comandos personalizados se unificaron con los skills: un skill con `disable-model-invocation: true` funciona como comando, porque el modelo no lo invoca por su cuenta (su descripción ni siquiera entra al contexto) y solo corre cuando tú lo escribes. Es lo que quieres para flujos con efectos secundarios.
+
+```markdown title=".claude/skills/release/SKILL.md"
+---
+name: release
+description: Prepara una versión nueva del servicio de pagos
+disable-model-invocation: true
+allowed-tools: Bash(pnpm changelog) Bash(git tag *) Bash(git status *)
+---
+
+1. Verifica con `git status` que no haya cambios sin commitear.
+2. Corre `pnpm changelog` y muéstrame el resultado.
+3. Espera mi confirmación antes de crear el tag con la versión que te indique.
+4. No hagas push: dime el comando exacto para que lo ejecute yo.
+```
+
+`allowed-tools` preaprueba esas herramientas solo durante el turno en que invocas el skill; no restringe las demás. Los archivos antiguos en `.claude/commands/` siguen funcionando, pero para lo nuevo conviene la forma de skill, que admite archivos de apoyo.
+
+## MCP: herramientas y datos externos
+
+El **Model Context Protocol** es un protocolo abierto que estandariza cómo una aplicación con LLM se conecta a fuentes de datos y herramientas externas. La analogía que usa la propia especificación es el *Language Server Protocol*: así como LSP hizo que cualquier editor pudiera soportar cualquier lenguaje, MCP busca que cualquier agente pueda usar cualquier integración.
+
+<FlowDiagram
+  caption="Arquitectura de MCP. El host (el agente) mantiene un cliente por servidor; cada servidor expone herramientas, recursos y prompts. Los servidores locales corren como procesos (stdio); los remotos, por HTTP."
+  nodes={[
+    { id: 'm', label: 'Modelo', kind: 'llm', x: 0, y: 0, mx: 0, my: 0 },
+    { id: 'h', label: 'Claude Code', kind: 'agent', x: 0, y: 1.5, sub: 'host + clientes MCP', mx: 1, my: 0 },
+    { id: 's1', label: 'Servidor Notion', kind: 'external', x: 2, y: 0, sub: 'HTTP remoto + OAuth', mx: 0, my: 1 },
+    { id: 's2', label: 'Servidor Postgres', kind: 'server', x: 2, y: 1.5, sub: 'stdio local', mx: 0, my: 2 },
+    { id: 's3', label: 'Servidor navegador', kind: 'monitor', x: 2, y: 3, sub: 'stdio local', mx: 0, my: 3 },
+    { id: 'd1', label: 'Notion API', kind: 'storage', x: 3.5, y: 0, mx: 1, my: 1 },
+    { id: 'd2', label: 'DB staging', kind: 'db', x: 3.5, y: 1.5, mx: 1, my: 2 },
+    { id: 'd3', label: 'Chrome', kind: 'client', x: 3.5, y: 3, mx: 1, my: 3 },
+  ]}
+  edges={[
+    { from: 'h', to: 'm', bidir: true },
+    { from: 'h', to: 's1', label: 'JSON-RPC' },
+    { from: 'h', to: 's2' },
+    { from: 'h', to: 's3' },
+    { from: 's1', to: 'd1' },
+    { from: 's2', to: 'd2' },
+    { from: 's3', to: 'd3' },
+  ]}
+  steps={[
+    { title: 'Conexión', body: 'Al arrancar, el host se conecta a cada servidor configurado y descubre qué herramientas ofrece.', active: ['h', 's1', 's2', 's3'], flow: ['h-s1', 'h-s2', 'h-s3'] },
+    { title: 'El modelo ve las herramientas', body: <>Los nombres (con prefijo, como <code>mcp__postgres__query</code>) y, cuando hacen falta, sus definiciones, llegan al contexto del modelo.</>, active: ['h', 'm'], flow: ['h-m'] },
+    { title: 'Llamada', body: <>El modelo pide <code>mcp__postgres__query</code>. El host aplica permisos y reenvía la llamada al servidor correspondiente.</>, active: ['h', 's2', 'd2'], flow: ['h-s2', 's2-d2'] },
+    { title: 'Resultado', body: 'El servidor ejecuta la consulta contra staging y devuelve el resultado, que vuelve al modelo como cualquier tool_result.', active: ['s2', 'h', 'm'], flow: ['h-m'] },
+  ]}
+/>
+
+Lo esencial del protocolo:
+
+- **Mensajes JSON-RPC 2.0** entre *hosts* (la aplicación con LLM), *clientes* (conectores dentro del host, uno por servidor) y *servidores* (los que proveen capacidades).
+- **Primitivas de servidor:** *tools* (funciones que el modelo ejecuta), *resources* (datos y contexto) y *prompts* (plantillas y flujos para el usuario). Del lado del cliente, la especificación actual mantiene la *elicitation*: el servidor puede pedirle información adicional al usuario.
+- **Transportes:** procesos locales por stdio, o servidores remotos por HTTP con autorización basada en OAuth.
+
+El protocolo evoluciona rápido. La revisión 2026-07-28 de la especificación lo define como **sin estado**: cada request lleva en sí toda la metadata necesaria (versión, capacidades del cliente), en lugar de depender de una sesión previa. También marca como obsoletas algunas primitivas de cliente anteriores y agrega extensiones opcionales, como tareas asíncronas de larga duración y UI interactiva (*MCP Apps*).<Sidenote>Si lees tutoriales de 2025, vas a encontrar handshakes de inicialización, *sampling* y *roots*. Funcionan con servidores que implementan versiones anteriores, pero conviene revisar la versión de la especificación que soporta cada servidor.</Sidenote>
+
+### MCP en Claude Code
+
+```bash
+# Servidor remoto por HTTP
+claude mcp add --transport http notion https://mcp.notion.com/mcp
+
+# Servidor local por stdio (todo lo que va después de -- es el comando del servidor)
+claude mcp add --transport stdio --env DATABASE_URL=postgres://... postgres \
+  -- npx -y <paquete-del-servidor-postgres>
+
+# Compartido con el equipo: se guarda en .mcp.json en la raíz del repo
+claude mcp add --transport http notion --scope project https://mcp.notion.com/mcp
+```
+
+```json title=".mcp.json"
+{
+  "mcpServers": {
+    "notion": { "type": "http", "url": "https://mcp.notion.com/mcp" }
+  }
+}
+```
+
+Dos advertencias que la documentación de Claude Code y la especificación repiten:
+
+- **Contexto.** Cada servidor agrega definiciones de herramientas. Claude Code usa *tool search* por defecto: al conectar, el modelo ve los nombres, y las definiciones completas se cargan cuando hacen falta. Igual, no conectes servidores "por las dudas".
+- **Confianza.** Las herramientas son ejecución de código arbitrario; la especificación dice que incluso sus descripciones deben considerarse no confiables salvo que vengan de un servidor confiable. Un servidor que trae contenido externo (issues, páginas web, emails) es una puerta de *prompt injection*. Lo vemos a fondo en [Buenas prácticas y riesgos](/ia/buenas-practicas).
+
+<Quiz
+  question="Tu agente necesita consultar el estado de los pedidos en la base de staging. ¿Cuál es el mecanismo adecuado?"
+  options={[
+    { text: 'Un skill con las credenciales de la base y ejemplos de consultas SQL.', why: 'Un skill da conocimiento, no capacidades; y poner credenciales en instrucciones es una mala idea. El agente igual necesitaría una herramienta para conectarse.' },
+    { text: 'Un servidor MCP de Postgres con un usuario de solo lectura, configurado en .mcp.json.', correct: true, why: 'Exacto: es una capacidad nueva (consultar una base). MCP la expone como herramienta, con credenciales fuera del contexto y permisos mínimos.' },
+    { text: 'Pegar en CLAUDE.md un volcado reciente de la tabla orders.', why: 'Se desactualiza enseguida, ocupa contexto en cada sesión y puede contener datos sensibles.' },
+  ]}
+/>
+
+## Subagentes: trabajo delegado con contexto propio
+
+Un **subagente** es un asistente especializado con su propio system prompt, sus propias herramientas y, sobre todo, **su propia ventana de contexto**. No ve tu conversación: recibe una tarea que le escribe el agente principal, trabaja, y devuelve solo un resumen final.
+
+```markdown title=".claude/agents/revisor-seguridad.md"
+---
+name: revisor-seguridad
+description: Revisa diffs buscando inyección SQL, secretos expuestos, authz
+  rota y datos sensibles en logs. Úsalo antes de abrir un PR que toque pagos.
+tools: Read, Grep, Glob
+model: sonnet
+---
+
+Eres un revisor de seguridad de un servicio de pagos.
+- Revisa solo el diff indicado y el código que necesites para entenderlo.
+- Reporta hallazgos con archivo:línea, severidad (alta/media/baja) y una
+  sugerencia concreta. No reportes estilo.
+- Si no encuentras nada relevante, dilo en una línea.
+```
+
+El frontmatter controla qué puede hacer: `tools` es una lista blanca (aquí, solo lectura), `model` permite usar un modelo más barato para tareas acotadas, y hay campos para el modo de permisos, un tope de turnos, hooks propios o `isolation: worktree` para que trabaje en un *worktree* de git aparte. Claude Code trae subagentes incorporados como **Explore** (búsqueda rápida y de solo lectura en el código) y **Plan** (investigación durante el modo de planificación).
+
+¿Cuándo vale la pena? Cuando quieres **mantener ruido fuera** de la conversación principal (una exploración de 30 archivos), **paralelizar** investigaciones independientes, o una **revisión independiente** de alguien que no vio el razonamiento que produjo el código. No vale la pena "para que piense mejor": delegar la misma tarea no mejora la respuesta, y cada subagente cuesta sus propios tokens.
+
+## Hooks: automatización que no se negocia
+
+Los hooks ya los vimos a fondo en [Harness engineering](/ia/harness): comandos que el harness ejecuta en eventos del ciclo de vida (`PreToolUse`, `PostToolUse`, `Stop`, `SessionStart`…), con exit 2 para bloquear. Como mecanismo de extensión, piénsalos así: **son el único de los seis que no depende de que el modelo decida algo**. Un ejemplo que suele faltar en los repos es inyectar contexto dinámico al iniciar la sesión:
+
+```json title=".claude/settings.json"
+{
+  "hooks": {
+    "SessionStart": [
+      { "hooks": [{ "type": "command", "command": "echo \"Rama actual: $(git branch --show-current). Tareas abiertas:\"; grep -h '^- \\[ \\]' specs/*/tasks.md | head -20" }] }
+    ]
+  }
+}
+```
+
+La salida de un hook `SessionStart` se agrega al contexto de la sesión: el agente arranca sabiendo en qué rama está y qué falta, sin que se lo digas.
+
+## Plugins: empaquetar y distribuir
+
+Un **plugin** es un directorio que agrupa skills, subagentes, hooks y servidores MCP para instalarlos como una unidad, con un manifiesto en `.claude-plugin/plugin.json`. Se distribuyen por **marketplaces**: repositorios con un catálogo (`.claude-plugin/marketplace.json`) que se agregan una vez y desde los que se instalan plugins por nombre.
+
+```text
+pagos-toolkit/
+├── .claude-plugin/plugin.json   ← nombre, versión, descripción
+├── skills/release/SKILL.md      ← se invoca como /pagos-toolkit:release
+├── agents/revisor-seguridad.md
+├── hooks/hooks.json
+└── .mcp.json
+```
+
+Úsalos cuando quieras que todo un equipo tenga la misma configuración versionada, o para compartir tu setup entre proyectos. Dos costos que conviene conocer: un plugin habilitado está presente en **todas** las sesiones (las descripciones de sus skills y agentes ocupan contexto aunque no los uses) y **corre con tus permisos**, así que se revisa como cualquier dependencia.
+
+## El mapa completo
+
+Explora las propiedades de cada mecanismo y luego ponte a prueba con casos reales:
+
+<ExtensionMap />
+
+Fuera de Claude Code, el panorama es parecido aunque los nombres cambian: casi todos los agentes leen un archivo de instrucciones del repo (muchos adoptaron `AGENTS.md`), el soporte de MCP es prácticamente universal, y el formato de skills se publicó como estándar abierto para que funcione entre plataformas. Las ideas (contexto siempre presente vs. bajo demanda, capacidades vía protocolo, delegación con contexto aislado, reglas deterministas en el harness) se transfieren entre herramientas.
+
+<Quiz
+  question="Cada vez que el agente termina de editar un archivo TypeScript, quieres que se corra eslint --fix sobre ese archivo, sin excepciones. ¿Qué usas?"
+  options={[
+    { text: 'Una línea en CLAUDE.md: “después de editar, corre eslint --fix”.', why: 'El modelo lo hará casi siempre. Para algo que debe pasar siempre, conviene que lo ejecute el harness.' },
+    { text: 'Un skill llamado lint que el modelo invoque cuando lo considere necesario.', why: 'Sigue dependiendo de que el modelo decida invocarlo. No es determinista.' },
+    { text: 'Un hook PostToolUse con matcher Edit|Write que corre eslint --fix sobre el archivo editado.', correct: true, why: 'Exacto: el harness lo ejecuta tras cada edición, sin depender de la memoria del modelo; si queda algún error, su salida puede volver como feedback.' },
+  ]}
+/>
+
+<Takeaways>
+
+- Conocimiento frecuente y corto → `CLAUDE.md`/`AGENTS.md`; procedimientos largos u ocasionales → **skills** con divulgación progresiva.
+- En un skill, la **descripción** decide cuándo se usa: escríbela con las palabras de quien pide la tarea.
+- Flujos con efectos secundarios → comando slash (skill con `disable-model-invocation: true`).
+- Capacidades externas → **MCP**: JSON-RPC, herramientas/recursos/prompts, stdio o HTTP; trata servidores y sus descripciones como código no confiable.
+- **Subagentes** para aislar ruido, paralelizar o revisar con ojos frescos; no para "pensar mejor".
+- **Hooks** son lo único determinista: úsalos para lo que no admite excepciones.
+- **Plugins** empaquetan todo para un equipo; recuerda que suman contexto y corren con tus permisos.
+
+</Takeaways>
+
+## Fuentes y lecturas
+
+- Anthropic, [Equipping agents for the real world with Agent Skills](https://www.anthropic.com/engineering/equipping-agents-for-the-real-world-with-agent-skills) (octubre de 2025, actualizado en diciembre).
+- Anthropic, documentación de Claude Code: [skills](https://code.claude.com/docs/en/skills), [subagentes](https://code.claude.com/docs/en/sub-agents), [MCP](https://code.claude.com/docs/en/mcp), [hooks](https://code.claude.com/docs/en/hooks) y [plugins](https://code.claude.com/docs/en/plugins).
+- [Model Context Protocol: especificación](https://modelcontextprotocol.io/specification/latest) y [protocolo base](https://modelcontextprotocol.io/specification/2026-07-28/basic).
+- Anthropic, [Effective context engineering for AI agents](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents): por qué los subagentes devuelven resúmenes.
+- Simon Willison, [The lethal trifecta for AI agents](https://simonwillison.net/2025/Jun/16/the-lethal-trifecta/): el riesgo de mezclar herramientas MCP.

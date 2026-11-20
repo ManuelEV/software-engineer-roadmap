@@ -1,0 +1,242 @@
+import { ParallelWorktrees } from '../../components/widgets/ia/ParallelWorktrees'
+
+Tener un buen agente y un buen harness no alcanza: también importa **cómo trabajas con él**. El mismo agente puede producir un PR limpio o un desastre de 40 archivos según cómo lo dirijas en los primeros minutos, cuánto le hagas planificar, cuándo lo interrumpas y cuántas sesiones intentes llevar a la vez.
+
+Este tema recorre los flujos de trabajo que hoy usan los equipos, de los más supervisados a los más autónomos: el ciclo explorar-planificar-implementar, cómo dirigir una sesión, agentes en paralelo con *git worktrees*, agentes sin interfaz en CI, loops autónomos al estilo Ralph y orquestación multiagente. Para cada uno, cuándo conviene y qué guardarraíles necesita.
+
+## Explorar, planificar, implementar, commitear
+
+El flujo base para cualquier tarea que no sea trivial tiene cuatro fases, y su gracia es **separar el pensar del hacer**:
+
+<Steps>
+<Step title="Explorar">
+
+El agente lee el código relevante **sin editar nada**. Pídele que busque, lea y te explique.
+
+```text
+Lee src/payments/refunds/ y src/payments/captures/. Explícame cómo se registra
+hoy una captura y dónde encajaría un reembolso parcial. No edites nada todavía.
+```
+
+</Step>
+<Step title="Planificar">
+
+El agente propone un plan concreto: archivos a tocar, enfoque, riesgos, cómo lo va a verificar. Tú lo corriges. Corregir un plan cuesta una frase; corregir un PR, una tarde.
+
+```text
+Propón un plan para implementar R1–R3 de specs/reembolsos.md: archivos,
+cambios, orden y qué tests vas a escribir. Señala lo que no tengas claro.
+```
+
+</Step>
+<Step title="Implementar">
+
+Con el plan aprobado, el agente implementa y verifica contra los tests. Si el plan era bueno, esta es la fase en la que menos tienes que intervenir.
+
+</Step>
+<Step title="Commitear">
+
+Commits pequeños y descriptivos, idealmente uno por paso del plan. Te dan puntos de retorno y un historial que la próxima sesión puede leer.
+
+</Step>
+</Steps>
+
+Los agentes modernos tienen un **modo de planificación** para las dos primeras fases: en Claude Code, el modo `plan` deja que el agente lea archivos y ejecute comandos de solo lectura, pero no editar el código. Es la forma más barata de evitar el error más caro: que el agente resuelva con entusiasmo el problema equivocado.
+
+¿Cuándo saltarse la planificación? Cuando puedes describir el diff en una frase ("renombra `calcTotal` a `orderTotal` en todo el repo", "agrega un log en el catch de `refund()`"). Planificar un cambio de tres líneas es burocracia. La regla práctica: **si no sabrías qué revisar en el plan, no hace falta plan**.
+
+## Dirigir la sesión
+
+Ninguna configuración reemplaza mirar el primer minuto. La guía de Claude Code lo resume así: observa el comienzo, presiona Esc apenas el agente se desvíe y, después de dos correcciones fallidas, ejecuta `/clear` y escribe un prompt mejor en lugar de una tercera corrección. Los controles que vale la pena saber de memoria:
+
+- **Esc** detiene al agente en medio de una acción y conserva todo lo hecho hasta ahí, para redirigir sin perder trabajo.
+- **`/rewind`** (o Esc dos veces con el prompt vacío) abre el menú de *checkpoints*: puedes volver el código, la conversación o ambos a un punto anterior. Eso hace barato probar primero el enfoque más audaz. Ojo: los checkpoints cubren las ediciones hechas con las herramientas de archivos del agente, no lo que cambió un comando de shell. No reemplazan a git.
+- **`/clear`** empieza de cero. Una conversación con dos intentos fallidos adentro es contexto contaminado: el modelo sigue releyendo esos intentos.
+- **`/compact`** resume la conversación cuando una sesión larga empieza a perder foco, con instrucciones opcionales sobre qué conservar.
+- **Sesiones con nombre.** Para trabajo de varios días, nombra la sesión y retómala después (`claude --resume <nombre>`), con sus checkpoints.
+
+<Callout type="tip" title="Señales para intervenir">
+
+Interviene si el agente: lee archivos que no tienen relación con la tarea, edita antes de entender, toca algo que dijiste que no tocara, prueba la misma solución por tercera vez, o empieza a "arreglar" tests en lugar de código. Cada una de esas señales en el primer minuto suele predecir una mala sesión.
+
+</Callout>
+
+## Agentes en paralelo con worktrees
+
+Un agente trabajando solo te deja tiempo libre. La tentación natural es lanzar varios a la vez, y funciona, siempre que las ediciones no choquen. Para eso están los **git worktrees**: varias copias de trabajo del mismo repositorio, cada una en su propia carpeta y rama, que comparten el historial.
+
+```bash
+git worktree add ../pagos-reembolsos -b feat/reembolsos
+git worktree add ../pagos-flaky -b fix/test-flaky
+# una sesión del agente en cada carpeta, sin pisarse
+
+git worktree list
+git worktree remove ../pagos-flaky   # al terminar
+```
+
+Claude Code lo integra: `claude -w reembolsos` inicia una sesión en un worktree nuevo, y los subagentes pueden correr en worktrees aislados. Un worktree es un checkout limpio, así que los archivos ignorados por git (como `.env`) no están y las dependencias no están instaladas: la herramienta permite listar en un `.worktreeinclude` los archivos pequeños que hay que copiar, y conviene tener el comando de instalación en el `CLAUDE.md`.
+
+Dos patrones que funcionan muy bien:
+
+- **Tareas independientes en paralelo.** Una feature, un bug, una actualización de dependencias, cada una en su worktree. Funciona cuando las tareas no tocan los mismos archivos.
+- **Escritor y revisor.** Una sesión implementa; otra, que no vio cómo se escribió, revisa el diff. Pegas los hallazgos en la primera. Es la revisión independiente más barata que existe.
+
+Ahora, el límite. Cada agente terminado necesita **tu revisión**, y tú revisas de a uno. Juega con el modelo:
+
+<ParallelWorktrees />
+
+La lección del modelo es la teoría de colas de siempre: cuando tu tiempo de revisión se satura, sumar agentes no suma tareas integradas, solo agrega fila (y revisiones apuradas, que es peor). Las palancas reales están del otro lado: **bajar el costo de revisar** con specs claras, tests fuertes y diffs pequeños, o delegar unidades de trabajo más grandes y mejor verificadas.
+
+<Quiz
+  question="Tienes cuatro agentes en paralelo y notas que pasan la mitad del tiempo esperando tu revisión. ¿Qué cambio aumenta más las tareas integradas por día?"
+  options={[
+    { text: 'Lanzar dos agentes más para aprovechar mejor el tiempo.', why: 'Si tu revisión ya es el cuello de botella, más agentes solo alargan la fila.' },
+    { text: 'Reducir el tiempo de revisión por tarea: specs más claras, tests que den confianza y diffs más chicos.', correct: true, why: 'Exacto: el techo de throughput lo pone tu tiempo de revisión por tarea. Bajarlo sube el techo para todos los agentes.' },
+    { text: 'Aprobar los PRs más rápido sin leerlos con detalle.', why: 'Sube el número en el corto plazo y lo paga después en bugs. El objetivo es que revisar sea más fácil, no saltarse la revisión.' },
+  ]}
+/>
+
+## Agentes sin interfaz: scripts y CI
+
+Un agente no necesita una terminal interactiva. `claude -p "prompt"` ejecuta una vez y termina, y así es como los agentes entran en pipelines de CI, git hooks y scripts. Para que una ejecución desatendida sea reproducible y segura, se agregan algunas banderas:
+
+- `--allowedTools` preaprueba exactamente las herramientas necesarias, y `--permission-mode dontAsk` niega todo lo demás en lugar de quedarse esperando un permiso que nadie va a dar.
+- `--max-turns` y `--max-budget-usd` ponen techo a vueltas y gasto.
+- `--output-format json` devuelve un objeto parseable; `stream-json` emite eventos en vivo.
+- `--bare` ignora hooks, skills, plugins, MCP y `CLAUDE.md` para que la ejecución haga lo mismo en cualquier máquina (y por eso no sirve si necesitas tus hooks).
+
+El ejemplo de la documentación oficial, una migración mecánica archivo por archivo:
+
+```bash
+for file in $(cat files.txt); do
+  claude --bare -p "Migra $file a la nueva API de logger y commitea. Responde OK o FAIL." \
+    --allowedTools "Read,Edit,Bash(git add *),Bash(git commit *)" \
+    --permission-mode dontAsk \
+    --max-turns 20
+done
+```
+
+La recomendación que acompaña al ejemplo es oro: pruébalo con tres archivos, mira qué sale mal, arregla el prompt, y recién entonces corre el resto. Y antes de dejar cualquier ejecución sin supervisión, cinco preguntas:
+
+1. ¿Sabe qué es "terminado"? Una condición, una spec o un test que tiene que ponerse verde.
+2. ¿Puede verificar su trabajo? Tests, un hook `Stop`, un paso de revisión.
+3. ¿Qué puede tocar? Permisos, `dontAsk`, sandbox, un worktree, la única rama en la que puede hacer push.
+4. ¿Qué lo detiene? Tope de turnos, de presupuesto, de gasto.
+5. ¿A dónde va el resultado y quién lo aprueba? Un PR, un comentario o un resumen, y una persona que aprueba el merge.
+
+## Loops autónomos: Ralph y compañía
+
+En julio de 2025, Geoffrey Huntley describió una técnica tan simple que parecía una broma, y que se volvió referencia para los loops autónomos. La bautizó **Ralph** (por Ralph Wiggum), y en su forma más pura es un loop de bash:
+
+```bash
+while :; do cat PROMPT.md | claude-code ; done
+```
+
+El mismo prompt, una y otra vez, con sesiones nuevas cada vuelta. Lo que lo hace funcionar no es el loop sino lo que rodea cada iteración:
+
+- **Una sola cosa por vuelta.** El prompt pide elegir la tarea más importante de un plan y hacer solo esa.
+- **Un plan como estado.** Un `fix_plan.md` con la lista priorizada de pendientes, que el agente actualiza y que se regenera cuando queda viejo.
+- **Specs como contexto estable.** Una spec por archivo en una carpeta `specs/`, cargadas de la misma forma en cada vuelta ("asigna el contexto de forma determinista").
+- **Contrapresión.** Tests, typecheck y análisis estático que rechazan el trabajo malo; "la rueda tiene que girar rápido".
+
+<FlowDiagram
+  caption="Un loop autónomo al estilo Ralph. Cada vuelta es una sesión nueva con contexto limpio; el estado vive en archivos y en git, no en la conversación."
+  nodes={[
+    { id: 'p', label: 'PROMPT.md', kind: 'file', x: 0, y: 0, sub: 'mismo prompt', mx: 0, my: 0 },
+    { id: 's', label: 'specs/ + plan', kind: 'file', x: 0, y: 2, sub: 'fix_plan.md', mx: 1, my: 0 },
+    { id: 'a', label: 'Sesión nueva', kind: 'agent', x: 1.5, y: 1, sub: 'contexto limpio', mx: 0, my: 1 },
+    { id: 't', label: 'Tests + tipos', kind: 'check', x: 3, y: 0, sub: 'contrapresión', mx: 1, my: 1 },
+    { id: 'g', label: 'Commit', kind: 'workflow', x: 3, y: 2, sub: 'git como memoria', mx: 0, my: 2 },
+    { id: 'h', label: 'Tú, por lotes', kind: 'user', x: 4.2, y: 1, sub: 'revisas resultados', mx: 1, my: 2 },
+  ]}
+  edges={[
+    { from: 'p', to: 'a' },
+    { from: 's', to: 'a' },
+    { from: 'a', to: 't', label: 'una tarea' },
+    { from: 't', to: 'g', label: 'verde' },
+    { from: 'g', to: 's', label: 'marca [x]', dashed: true, route: 'straight' },
+    { from: 'g', to: 'h', dashed: true },
+  ]}
+  steps={[
+    { title: 'Arranca una vuelta', body: 'Sesión nueva. Lee el mismo PROMPT.md, las specs y el plan. Nada de la vuelta anterior contamina el contexto.', active: ['p', 's', 'a'], flow: ['p-a', 's-a'] },
+    { title: 'Una sola tarea', body: 'Elige la tarea pendiente más importante, verifica que no exista ya, y la implementa con tests.', active: ['a', 't'], flow: ['a-t'] },
+    { title: 'Contrapresión', body: 'Si los tests o el typecheck fallan, sigue intentando dentro de la vuelta o anota el bloqueo. El trabajo malo no pasa.', active: ['t'] },
+    { title: 'Estado a disco', body: 'Commit, tarea marcada en el plan, aprendizajes anotados. La próxima vuelta lee esto, no la conversación.', active: ['g', 's'], flow: ['t-g', 'g-s'] },
+    { title: 'Revisión humana', body: 'Tú revisas por lotes: commits, plan, specs. Si el loop se desvía, ajustas el prompt o las specs, no el código a mano.', active: ['g', 'h'], flow: ['g-h'] },
+  ]}
+/>
+
+Huntley es explícito sobre sus límites: la falla típica es que el agente busca en el código, concluye erróneamente que algo no existe y lo vuelve a implementar; los modelos tienden a dejar implementaciones placeholder si no se les prohíbe; puedes despertarte con un repo que no compila. Y dos advertencias que conviene tomar literalmente: él no usaría la técnica en un código existente (la recomienda para proyectos nuevos), y considera imposible hacerlo sin experiencia senior guiando el proceso.
+
+Una versión con guardarraíles modernos se ve así:
+
+```markdown title="PROMPT.md"
+Lee specs/*.md y fix_plan.md.
+1. Elige UNA tarea pendiente: la más importante.
+2. Antes de implementar, busca en el código si ya existe. No asumas que falta.
+3. Implementa con tests. Nada de implementaciones placeholder.
+4. Corre `pnpm test` y `pnpm tsc --noEmit`.
+5. Si pasan: marca la tarea [x], anota lo aprendido en fix_plan.md y commitea.
+6. Si tras 3 intentos no pasan: anota el bloqueo en fix_plan.md y termina.
+```
+
+```bash title="ralph.sh"
+#!/usr/bin/env bash
+set -euo pipefail
+git switch -c ralph/reembolsos            # nunca sobre main
+mkdir -p logs
+for i in $(seq 1 30); do                  # tope de vueltas
+  claude -p "$(cat PROMPT.md)" \
+    --permission-mode dontAsk \
+    --allowedTools "Read,Edit,Write,Bash(pnpm test *),Bash(pnpm tsc *),Bash(git add *),Bash(git commit *)" \
+    --max-turns 40 \
+    --max-budget-usd 5 \
+    --output-format json > "logs/vuelta-$i.json" || true
+  grep -q '^- \[ \]' fix_plan.md || { echo "Plan completo"; break; }
+done
+```
+
+Rama propia, permisos mínimos sin push, tope de vueltas, de turnos y de gasto, logs de cada vuelta, y una condición de salida. Corre esto dentro de un contenedor o con el sandbox activado, y revisa los primeros ciclos antes de dejarlo solo. Para tareas recurrentes dentro de una sesión, Claude Code tiene `/loop` (repite un prompt a intervalos) y, para correr en la nube con la laptop cerrada, tareas programadas.
+
+## Orquestación multiagente
+
+Un paso más allá del paralelismo manual es dejar que un agente **orquestador** divida el trabajo y lo reparta entre agentes **trabajadores**, como en el patrón *orchestrator-workers* de *Building effective agents*. Anthropic lo usa en su sistema de investigación: un agente líder planifica, lanza subagentes que buscan en paralelo y sintetiza. En su eval interna de investigación, la versión multiagente superó a un solo agente por un 90,2 %.
+
+Pero con dos asteriscos importantes del mismo artículo. Primero, el costo: los sistemas multiagente usaron unas **15 veces** los tokens de un chat. Segundo, el encaje: la mayoría de las tareas de código tienen **menos partes realmente paralelizables** que la investigación, porque los cambios dependen unos de otros y tocan los mismos archivos.
+
+Donde sí rinde en código:
+
+- **Migraciones mecánicas** en muchos archivos independientes (Claude Code tiene `/batch`, que divide un cambio grande en unidades, cada una en su worktree, con un plan que apruebas antes).
+- **Investigación en paralelo**: entender varios módulos, comparar librerías, buscar todos los usos de algo.
+- **Revisión desde varios ángulos**: seguridad, rendimiento y corrección, cada uno con un revisor distinto.
+
+Para una feature normal, un agente bien dirigido con buenas tareas suele ser más barato y más coherente que una orquesta.
+
+<Quiz
+  question="¿En cuál de estos escenarios tiene más sentido un loop autónomo tipo Ralph?"
+  options={[
+    { text: 'Arreglar un bug crítico en producción en un sistema legado de diez años.', why: 'Es justo lo contrario: código existente, alto riesgo y una tarea que pide juicio y supervisión cercana.' },
+    { text: 'Construir desde cero una herramienta interna con specs claras, buena cobertura de tests y en una rama aislada.', correct: true, why: 'Exacto: proyecto nuevo, specs como contexto estable, contrapresión fuerte (tests) y aislamiento. Es el escenario para el que Huntley lo recomienda.' },
+    { text: 'Explorar qué quiere el usuario en una feature todavía sin definir.', why: 'Sin specs ni criterios de terminado, el loop no tiene contra qué medir; producirá algo, con confianza, sin saber si es lo correcto.' },
+  ]}
+/>
+
+<Takeaways>
+
+- Separa pensar de hacer: explorar y planificar (modo plan) antes de implementar, salvo en cambios de una frase.
+- Mira el primer minuto; usa Esc, `/rewind` y `/clear` sin culpa; después de dos correcciones fallidas, empieza de nuevo con un prompt mejor.
+- Worktrees permiten agentes en paralelo sin choques; tu revisión es el cuello de botella, así que baja su costo.
+- En CI y scripts: `-p` con herramientas preaprobadas, `dontAsk`, topes de turnos y gasto, y prueba con pocos casos primero.
+- Loops autónomos (Ralph): una tarea por vuelta, estado en archivos y git, contrapresión de tests, rama aislada y límites duros.
+- Multiagente rinde en tareas paralelizables (migraciones, investigación, revisión) y cuesta muchos más tokens; para una feature normal, un buen agente suele bastar.
+
+</Takeaways>
+
+## Fuentes y lecturas
+
+- Anthropic, [Best practices for Claude Code](https://code.claude.com/docs/en/best-practices): *Steer the session*, *Let Claude run without you* y *Run sessions in parallel*.
+- Anthropic, [Run Claude Code programmatically (headless)](https://code.claude.com/docs/en/headless) y [worktrees](https://code.claude.com/docs/en/worktrees).
+- Geoffrey Huntley, [Ralph Wiggum as a "software engineer"](https://ghuntley.com/ralph/) (julio de 2025).
+- Anthropic, [How we built our multi-agent research system](https://www.anthropic.com/engineering/multi-agent-research-system) (junio de 2025).
+- Anthropic, [Building effective agents](https://www.anthropic.com/engineering/building-effective-agents): patrón orchestrator-workers.
+- Git, [documentación de git worktree](https://git-scm.com/docs/git-worktree).

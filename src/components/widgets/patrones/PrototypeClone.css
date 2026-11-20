@@ -1,0 +1,99 @@
+.pc-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  margin-bottom: var(--s-4);
+}
+.pc-cards {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--s-3);
+}
+@media (max-width: 520px) {
+  .pc-cards {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.pc-card {
+  display: grid;
+  gap: var(--s-2);
+  padding: var(--s-3);
+  border: 1.5px solid var(--ink-3);
+  border-radius: var(--radius-lg);
+  background: var(--card);
+}
+.pc-card.is-clone {
+  border-color: var(--line);
+}
+.pc-card__title {
+  font-weight: 700;
+  font-size: var(--step--1);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--ink-3);
+}
+.pc-card.is-clone .pc-card__title {
+  color: var(--line-ink);
+}
+.pc-row,
+.pc-box {
+  padding: 6px var(--s-2);
+  border-radius: var(--radius);
+  transition:
+    background-color 300ms var(--ease-out),
+    border-color 300ms var(--ease-out);
+}
+.pc-box {
+  border: 1.5px solid var(--rule);
+  background: var(--paper);
+}
+.pc-box.is-shared {
+  border-style: dashed;
+  border-color: var(--warn);
+}
+.pc-k {
+  font-family: var(--font-code);
+  font-size: 0.8rem;
+  color: var(--ink-3);
+}
+.pc-v {
+  font-family: var(--font-code);
+  font-size: 0.85rem;
+  color: var(--ink);
+}
+.pc-shared {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: var(--s-2);
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--warn);
+}
+.pc-items {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+  font-family: var(--font-code);
+  font-size: 0.85rem;
+}
+.pc-items li {
+  padding: 1px 4px;
+  border-radius: 4px;
+  transition: background-color 300ms var(--ease-out);
+}
+.is-flash {
+  background: color-mix(in oklab, var(--bad) 16%, var(--paper));
+}
+.pc-card.is-clone .is-flash {
+  background: var(--line-tint-2);
+}
+.pc-empty {
+  display: grid;
+  place-items: center;
+  min-height: 8rem;
+  border: 1.5px dashed var(--rule-strong);
+  border-radius: var(--radius-lg);
+  color: var(--ink-3);
+  font-size: var(--step--1);
+}

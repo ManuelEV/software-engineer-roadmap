@@ -1,0 +1,401 @@
+import { FanoutSimulator } from '../../components/widgets/casos-a/FanoutSimulator'
+
+"Diseña Twitter." Nadie espera que diseñes Twitter completo en 45 minutos. La pregunta real, la que el entrevistador tiene en mente, es: **¿cómo armas el home timeline?** Es decir, cuando abres la app, ¿cómo aparecen en milisegundos los tweets más recientes de las cientos de cuentas que sigues?
+
+Es el ejemplo canónico de un trade-off que vas a encontrar en todas partes: **hacer el trabajo al escribir o hacerlo al leer**. Si cada tweet se copia al timeline de cada seguidor, leer es instantáneo pero escribir puede costar millones de operaciones. Si cada lectura junta los tweets de todos tus seguidos, escribir es gratis pero leer es lento. Y existe un tipo de usuario que rompe cualquier estrategia pura: **la celebridad** con decenas de millones de seguidores.
+
+Twitter contó públicamente cómo resolvió esto, con números, en la charla *Timelines at Scale* de Raffi Krikorian (QCon 2012). Este recorrido la usa como ancla.
+
+<Sketch
+  width={640}
+  height={320}
+  speed={1.15}
+  caption="La decisión central del caso: copiar cada tweet a los timelines al escribir, o juntarlos al leer. Las celebridades obligan a mezclar ambas."
+  items={[
+    { type: 'line', points: [[320, 20], [320, 300]], dashed: true, tone: 'muted' },
+    { type: 'text', x: 24, y: 32, text: 'push: copiar al escribir', size: 20, tone: 'line' },
+    { type: 'circle', x: 60, y: 142, r: 30, label: 'autor', size: 18 },
+    { type: 'cells', x: 170, y: 120, values: ['tl', 'tl', 'tl'], size: 44, font: 'hand' },
+    { type: 'arrow', from: [86, 126], to: [190, 116], bend: -20 },
+    { type: 'arrow', from: [86, 126], to: [280, 116], bend: -40, with: true },
+    { type: 'text', x: 24, y: 226, text: ['escribir: O(seguidores)', 'leer: 1 lista'], size: 18, tone: 'pencil' },
+    { type: 'text', x: 344, y: 32, text: 'pull: juntar al leer', size: 20, tone: 'line' },
+    { type: 'cells', x: 360, y: 120, values: ['a', 'b', 'c'], size: 44, font: 'hand' },
+    { type: 'circle', x: 580, y: 142, r: 30, label: 'tú', size: 20 },
+    { type: 'arrow', from: [382, 116], to: [554, 128], bend: -40 },
+    { type: 'arrow', from: [470, 116], to: [554, 130], bend: -20, with: true },
+    { type: 'text', x: 344, y: 226, text: ['escribir: 1', 'leer: O(seguidos) + merge'], size: 18, tone: 'pencil' },
+    { type: 'text', x: 24, y: 296, text: 'celebridad: 50 M copias', size: 20, tone: 'bad' },
+    { type: 'cross', x: 266, y: 289, size: 18 },
+    { type: 'text', x: 344, y: 296, text: 'híbrido: mezclar al leer', size: 20, tone: 'ok' },
+    { type: 'check', x: 602, y: 290, size: 20 },
+  ]}
+/>
+
+## Requisitos
+
+**Funcionales**
+
+1. Publicar un tweet (texto de hasta 280 caracteres, referencias a imágenes o videos).
+2. Seguir y dejar de seguir cuentas.
+3. Ver el **home timeline**: tweets de las cuentas que sigues, del más nuevo al más viejo, paginado.
+4. Ver el **user timeline**: los tweets de una cuenta concreta.
+
+**No funcionales**
+
+- **Lectura rápida**: el home timeline carga en menos de 200 ms en p99 (supuesto razonable).
+- **Entrega casi en tiempo real**: un tweet aparece en los timelines de sus seguidores en pocos segundos. Twitter se fijaba como meta 5 segundos.
+- **Disponibilidad por sobre consistencia**: si un seguidor ve un tweet 3 segundos después que otro, no pasa nada. Si el timeline no carga, sí.
+- **Muy asimétrico**: muchísimas más lecturas que escrituras.
+
+**Fuera de alcance**: búsqueda, mensajes directos, notificaciones, tendencias, anuncios y el pipeline de procesamiento de video (ese lo ves en el caso de [YouTube](/casos/youtube)).
+
+## Estimaciones
+
+Supongamos **200 millones de usuarios activos diarios**, que abren el home **10 veces al día**, y **500 millones de tweets diarios** (del orden de lo que Twitter reportaba hacia 2013). Supongamos también que una cuenta tiene en promedio **200 seguidores**.
+
+| Magnitud | Cálculo | Resultado |
+|---|---|---|
+| Lecturas del home | 200 M × 10 ÷ 86.400 | ~23.000/s promedio, ~70.000/s pico |
+| Tweets | 500 M ÷ 86.400 | ~5.800/s promedio; varias veces más en un gol de un Mundial |
+| Entregas a timelines (push) | 500 M × 200 | 100.000 M por día, ~1,2 M inserciones/s |
+| Almacenamiento de tweets | 500 M × ~300 B | ~150 GB/día, ~55 TB/año sin multimedia |
+| Timeline cacheado | 800 entradas × ~20 B | ~16 KB por usuario |
+| Caché de timelines | 200 M × 16 KB × 3 réplicas | ~10 TB de RAM |
+
+La fila que define el caso es la de **entregas**: el *fan-out* convierte 5.800 escrituras por segundo en más de un millón. Y es un promedio: el tweet de una cuenta con 50 millones de seguidores, por sí solo, son 50 millones de inserciones.
+
+<Callout type="note" title="Lo que contó Twitter en 2012">
+
+En *Timelines at Scale*, Krikorian describió: unos 150 millones de usuarios activos, **300.000 consultas por segundo** de lectura de timelines contra unas **6.000 escrituras por segundo**, unos 400 millones de tweets diarios y alrededor de 30.000 millones de entregas a timelines por día. Cada home timeline guardaba hasta **800 entradas** en Redis, replicadas **3 veces**, y solo para usuarios activos en los últimos 30 días. Un fan-out a un millón de seguidores tardaba unos 3,5 segundos en la mediana.
+
+</Callout>
+
+## Entidades y API
+
+Cuatro entidades: **User**, **Tweet**, **Follow** (una arista dirigida seguidor → seguido) y **Timeline** (una lista materializada de IDs de tweets por usuario).
+
+```http
+POST /v1/tweets
+{ "text": "Golazo en el minuto 90", "media_ids": ["m_7781"], "reply_to": null }
+
+201 Created
+{ "tweet_id": "1859328412345372672" }
+```
+
+```http
+GET /v1/timeline/home?limit=50&max_id=1859328412345372671
+
+200 OK
+{ "tweets": [ { "id": "1859328412345372670", "author": { … }, "text": "…" }, … ],
+  "next_max_id": "1859327000112231424" }
+```
+
+```http
+POST   /v1/users/8812/follow     → 204
+DELETE /v1/users/8812/follow     → 204
+GET    /v1/users/8812/tweets?limit=50&max_id=…
+```
+
+Fíjate en la **paginación por cursor** (`max_id`) en vez de `offset`. En un timeline entran tweets nuevos constantemente arriba: con `offset=50`, la segunda página repetiría o se saltaría tweets según cuántos llegaron mientras leías. Con un cursor ("dame los 50 anteriores a este ID") la página es estable. Funciona porque los IDs están ordenados por tiempo.
+
+<Quiz
+  question="¿Por qué el home timeline se pagina con max_id y no con offset?"
+  options={[
+    { text: 'Porque las bases de datos NoSQL no soportan OFFSET.', why: 'Algunas sí lo soportan; el motivo es de corrección, no de soporte.' },
+    { text: 'Porque llegan tweets nuevos arriba mientras paginas; un offset se desplaza y duplica o salta tweets, un cursor no.', correct: true, why: 'Con un cursor anclado a un ID ordenado por tiempo, la página siguiente siempre empieza justo después del último tweet que viste. Además, un OFFSET grande obliga a recorrer y descartar filas.' },
+    { text: 'Porque max_id permite saltar a cualquier página arbitraria.', why: 'Al revés: con cursores no puedes saltar a la página 37, solo avanzar. Para un feed infinito es lo que quieres.' },
+  ]}
+/>
+
+## Modelo de datos
+
+**IDs de tweet: Snowflake.** Twitter creó Snowflake en 2010 para generar IDs únicos de 64 bits sin un coordinador central: **41 bits** de timestamp en milisegundos (desde una época propia), **10 bits** de ID de máquina y **12 bits** de secuencia (4.096 IDs por milisegundo por máquina). Dos propiedades valen oro aquí: los IDs **se ordenan por tiempo** (ordenar por ID es ordenar por fecha, sin índice extra) y cada máquina los genera **localmente**.
+
+<Details summary="Profundizar: un generador Snowflake en Java">
+
+Cada instancia lleva un ID de máquina único (asignado por configuración o por un coordinador al arrancar) y genera IDs sin hablar con nadie. Lo delicado es el reloj: si retrocede (por un ajuste de NTP), el generador podría repetir IDs, así que esta versión se niega a generar hasta que vuelva a avanzar.
+
+```java title="Snowflake.java"
+/** IDs de 64 bits: 41 bits de tiempo, 10 de máquina y 12 de secuencia. */
+final class Snowflake {
+    private static final long EPOCH_MS = 1288834974657L; // la época de Twitter (noviembre de 2010)
+    private final long machineId; // 0..1023
+    private long lastMs = -1;
+    private long sequence = 0;    // 0..4095 dentro del mismo milisegundo
+
+    Snowflake(long machineId) {
+        if (machineId < 0 || machineId > 1023) throw new IllegalArgumentException("machineId");
+        this.machineId = machineId;
+    }
+
+    synchronized long nextId() {
+        long now = System.currentTimeMillis();
+        if (now < lastMs) throw new IllegalStateException("el reloj retrocedió");
+        if (now == lastMs) {
+            sequence = (sequence + 1) & 4095;
+            if (sequence == 0) {                     // se agotaron los 4.096 IDs de este ms
+                while (now <= lastMs) now = System.currentTimeMillis();
+            }
+        } else {
+            sequence = 0;
+        }
+        lastMs = now;
+        return ((now - EPOCH_MS) << 22) | (machineId << 12) | sequence;
+    }
+}
+```
+
+</Details>
+
+```text
+tweets            PK tweet_id                         → author_id, text, created_at, reply_to, media
+                  (KV distribuido, particionado por tweet_id)
+
+user_tweets       PK author_id, CK tweet_id DESC      → (vacío: es un índice)
+                  (wide-column; una partición por autor, dividida por mes si crece)
+
+followers         PK followee_id, CK follower_id      ← "¿a quién le entrego este tweet?"
+following         PK follower_id, CK followee_id      ← "¿a quién sigo?"
+
+home_timeline     Redis LIST tl:{user_id}             → [tweet_id, author_id, flags] × 800 máx.
+```
+
+Decisiones a justificar:
+
+- **El grafo se guarda dos veces**, una por dirección. El fan-out necesita "seguidores de X" y el modo pull necesita "seguidos de Y". Twitter tenía un servicio dedicado para esto (FlockDB). Las listas de seguidores de una celebridad son enormes: se leen paginadas.
+- **El home timeline guarda solo IDs**, no el tweet completo. Una entrada pesa unos 20 bytes (ID del tweet, ID del autor y unos bytes de flags para retweets o respuestas). El contenido se "hidrata" al leer. Si un tweet se borra o se edita, no hay que tocar millones de timelines.
+- **El timeline es un caché, no la fuente de verdad.** Si se pierde, se reconstruye desde `following` + `user_tweets`. Por eso puede vivir en memoria.
+
+## Diseño de alto nivel
+
+<FlowDiagram
+  caption="Home timeline con fan-out en escritura. Recorre la publicación de un tweet y la lectura del timeline, incluida la mezcla de celebridades."
+  nodes={[
+    { id: 'c', label: 'App', kind: 'mobile', x: 0, y: 1.5 },
+    { id: 'gw', label: 'API gateway', kind: 'gateway', x: 1, y: 1.5 },
+    { id: 'tw', label: 'Tweet service', kind: 'service', x: 2, y: 0.5, sub: 'genera Snowflake' },
+    { id: 'tdb', label: 'Tweets', kind: 'db', x: 3, y: 0, sub: 'KV particionado' },
+    { id: 'q', label: 'Kafka', kind: 'stream', x: 3, y: 1, sub: 'tweet creado' },
+    { id: 'g', label: 'Grafo social', kind: 'network', x: 4, y: 0, sub: 'seguidores' },
+    { id: 'fo', label: 'Fan-out', kind: 'worker', x: 4, y: 1, sub: 'workers' },
+    { id: 'tl', label: 'Timeline service', kind: 'service', x: 2, y: 2.5 },
+    { id: 'rc', label: 'Redis timelines', kind: 'cache', x: 4, y: 2.5, sub: '800 IDs × usuario' },
+    { id: 'hc', label: 'Caché de tweets', kind: 'cache', x: 3, y: 3.4, sub: 'y de usuarios' },
+  ]}
+  edges={[
+    { from: 'c', to: 'gw' },
+    { from: 'gw', to: 'tw' },
+    { from: 'tw', to: 'tdb' },
+    { from: 'tw', to: 'q' },
+    { from: 'q', to: 'fo' },
+    { from: 'fo', to: 'g' },
+    { from: 'fo', to: 'rc' },
+    { from: 'gw', to: 'tl' },
+    { from: 'tl', to: 'rc' },
+    { from: 'tl', to: 'hc' },
+  ]}
+  steps={[
+    {
+      title: 'Publicar',
+      body: <>La app envía <code>POST /v1/tweets</code>. El Tweet service genera un ID Snowflake localmente, persiste el tweet y lo agrega a <code>user_tweets</code> del autor.</>,
+      active: ['c', 'gw', 'tw', 'tdb'],
+      flow: ['c-gw', 'gw-tw', 'tw-tdb'],
+    },
+    {
+      title: 'Responder rápido, repartir después',
+      body: <>Publica un evento <code>tweet_created</code> en Kafka y responde <code>201</code>. El usuario no espera el fan-out: puede tardar segundos o minutos.</>,
+      active: ['tw', 'q'],
+      flow: ['tw-q'],
+    },
+    {
+      title: 'Buscar seguidores',
+      body: <>Los workers de fan-out consumen el evento y piden al grafo social la lista de seguidores, paginada. Descartan a los inactivos de los últimos 30 días: su timeline se reconstruirá si vuelven.</>,
+      active: ['q', 'fo', 'g'],
+      flow: ['q-fo', 'fo-g'],
+    },
+    {
+      title: 'Insertar en cada timeline',
+      body: <>Para cada seguidor, <code>LPUSH tl:{'{id}'}</code> con la entrada de 20 bytes y <code>LTRIM</code> a 800. Con 200 seguidores son 200 escrituras; con 50 millones, otra historia (ver la profundización).</>,
+      active: ['fo', 'rc'],
+      flow: ['fo-rc'],
+    },
+    {
+      title: 'Leer el home',
+      body: <>La app pide <code>GET /v1/timeline/home</code>. El Timeline service lee la lista de IDs de Redis: una sola operación, sin importar a cuántas cuentas sigas.</>,
+      active: ['c', 'gw', 'tl', 'rc'],
+      flow: ['c-gw', 'gw-tl', 'tl-rc'],
+    },
+    {
+      title: 'Hidratar y mezclar',
+      body: <>Con los IDs, hace un multiget al caché de tweets y de usuarios, descarta borrados y cuentas bloqueadas, y mezcla los tweets recientes de las pocas celebridades que sigues (que no se repartieron por fan-out). Responde con 50 tweets y el cursor.</>,
+      active: ['tl', 'hc'],
+      flow: ['tl-hc'],
+    },
+  ]}
+/>
+
+## Profundizaciones
+
+### 1. Push o pull: dónde pagas el costo
+
+**Fan-out en escritura (push).** Cada tweet se copia, como ID, al timeline precalculado de cada seguidor. Leer es una sola operación de lista. Es lo que hacía Twitter para el home timeline, y la razón es la asimetría: en 2012 había 50 lecturas por cada escritura. Si vas a leer algo 50 veces, conviene precalcularlo una.
+
+**Fan-out en lectura (pull).** No hay timelines precalculados. Al abrir el home, buscas los tweets recientes de cada cuenta que sigues y los mezclas (un *k-way merge* ordenado por ID). Escribir es gratis; leer cuesta tantas consultas como cuentas sigues: 400 cuentas, 400 consultas en paralelo, y la latencia la marca la más lenta.
+
+Prueba las combinaciones en el simulador. Mira qué pasa con la estrella pop en modo push, y con el lector en modo pull.
+
+<FanoutSimulator />
+
+| | Push | Pull |
+|---|---|---|
+| Costo al publicar | O(seguidores) inserciones | 1 escritura |
+| Costo al leer | 1 lectura de lista | O(seguidos) consultas + merge |
+| Latencia de lectura | Baja y predecible | Alta y variable (cola larga) |
+| Memoria | Un timeline por usuario activo | Ninguna extra |
+| Frescura | Retraso del fan-out (segundos) | Inmediata |
+| Se rompe con | Celebridades | Usuarios que siguen a miles de cuentas |
+
+<Sidenote>Twitter usaba pull para la búsqueda: un tweet se indexaba en un solo shard (escritura O(1)) y cada búsqueda consultaba todos los shards en paralelo (scatter-gather) en unos 100 ms. El mismo trade-off, resuelto al revés porque el patrón de acceso es distinto.</Sidenote>
+
+### 2. Las celebridades y el modelo híbrido
+
+Una cuenta con 50 millones de seguidores, a un millón de inserciones por segundo, tarda **50 segundos** en completar el fan-out de un solo tweet. Si publica tres tweets seguidos, la cola de fan-out se atasca y retrasa también los tweets de todos los demás. Twitter reportó un p99 de hasta 5 minutos para fan-outs grandes, y un efecto colateral curioso: **respuestas que llegaban antes que el tweet original**, porque el fan-out de quien respondía (con pocos seguidores) terminaba antes que el de la celebridad.
+
+La solución, que el propio Krikorian presentó como el siguiente paso, es el **modelo híbrido**:
+
+1. Las cuentas por debajo de un umbral de seguidores (supongamos 100.000) hacen fan-out normal.
+2. Las cuentas por encima **no** hacen fan-out. Sus tweets solo se guardan en su `user_tweets`.
+3. Al leer, el Timeline service toma tu timeline precalculado y le **mezcla** los tweets recientes de las celebridades que sigues. Como sigues a pocas celebridades (unas pocas o decenas, no cientos), son pocas consultas extra, y los tweets de una celebridad están en caché porque millones los piden.
+
+Ahora el costo de escritura tiene un techo y el costo de lectura apenas sube. En el simulador, cambia a **Híbrido** y mueve el umbral: si lo bajas demasiado, el lector termina haciendo decenas de consultas; si lo subes demasiado, vuelves a los fan-outs gigantes.
+
+La mezcla al leer es un *k-way merge*: el timeline precalculado y la lista reciente de cada celebridad ya vienen ordenados por ID, así que basta con un heap que siempre saque el ID más grande. Con k listas y una página de m tweets cuesta O(m log k).
+
+```java title="HomeTimeline.java"
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.Iterator;
+import java.util.List;
+import java.util.PriorityQueue;
+
+record Entry(long tweetId, long authorId) {}
+
+final class HomeTimeline {
+    private record Head(Entry entry, Iterator<Entry> rest) {}
+
+    /**
+     * Mezcla el timeline precalculado con los tweets recientes de cada celebridad.
+     * Cada lista viene ordenada por tweetId descendente (con Snowflake, el más nuevo primero).
+     */
+    static List<Entry> merge(List<List<Entry>> sources, int limit) {
+        // PriorityQueue es un min-heap: invertimos el comparador para sacar el ID más grande
+        PriorityQueue<Head> heap = new PriorityQueue<>(
+            Comparator.comparingLong((Head h) -> h.entry().tweetId()).reversed());
+        for (List<Entry> source : sources) {
+            Iterator<Entry> it = source.iterator();
+            if (it.hasNext()) heap.add(new Head(it.next(), it));
+        }
+        List<Entry> page = new ArrayList<>();
+        while (!heap.isEmpty() && page.size() < limit) {
+            Head h = heap.poll();
+            page.add(h.entry());
+            if (h.rest().hasNext()) heap.add(new Head(h.rest().next(), h.rest()));
+        }
+        return page;
+    }
+}
+```
+
+<Callout type="tip" title="En Java">
+
+`PriorityQueue` es un min-heap. Para sacar primero el tweet más nuevo (el ID más grande) hay que invertir el comparador con `.reversed()` o `Collections.reverseOrder()`. Y compara los IDs como `long` con `comparingLong`: restarlos en un comparador (`a - b`) puede desbordar.
+
+</Callout>
+
+Otros refinamientos que valen puntos:
+
+- **No hacer fan-out a inactivos.** Twitter solo mantenía en Redis los timelines de usuarios activos en los últimos 30 días. Cuando un inactivo vuelve, su timeline se reconstruye con pull, una sola vez.
+- **Prioridad en la cola.** Separa el fan-out de cuentas grandes en otra cola, para que no bloquee a las pequeñas.
+- **El umbral no tiene que ser fijo.** Puede depender de cuántos seguidores **activos** tiene la cuenta, no del total.
+
+<Quiz
+  question="Con fan-out en escritura puro, una cuenta con 40 M de seguidores publica 5 tweets en un minuto. ¿Cuál es el problema principal?"
+  options={[
+    { text: 'Los 5 tweets ocupan demasiado espacio en la base de tweets.', why: 'Son 5 filas; el problema no es el tweet, son sus copias.' },
+    { text: 'Son 200 M de inserciones que saturan la cola de fan-out y retrasan la entrega de los tweets de todos los demás usuarios.', correct: true, why: 'La amplificación de escritura es proporcional a los seguidores. Por eso el modelo híbrido saca a las celebridades del fan-out y mezcla sus tweets al leer.' },
+    { text: 'Los seguidores no pueden leer su timeline hasta que termine el fan-out.', why: 'Pueden leerlo; simplemente no verán esos tweets todavía. El daño es la demora y el atasco, no el bloqueo.' },
+  ]}
+/>
+
+### 3. Leer el timeline: hidratación y casos borde
+
+Leer la lista de IDs es la parte fácil. Lo que sigue define la latencia real:
+
+- **Hidratación.** 50 IDs se convierten en 50 tweets y unos 30 autores con un *multiget* a cachés dedicados. Twitter tenía servicios separados para tweets y usuarios, con el conjunto de usuarios completo en caché y semanas de tweets recientes. Un multiget de 50 claves repartidas entre varios nodos de caché tarda lo que tarda el nodo más lento: por eso importa el p99 de cada nodo.
+- **Borrados, bloqueos y silenciados** se filtran **al leer**, no al escribir. Es mucho más barato descartar un tweet borrado durante la hidratación que buscarlo en millones de timelines.
+- **Seguir a alguien nuevo.** El timeline no tiene sus tweets. Un job asíncrono inserta sus tweets recientes en tu lista (respetando el orden por ID). Dejar de seguir se resuelve igual: filtrar al leer y limpiar en segundo plano.
+- **Si Redis pierde un timeline**, se reconstruye desde `following` y `user_tweets`: lento para ese usuario una vez, pero correcto. Las 3 réplicas hacen que casi nunca pase.
+
+<Quiz
+  question="Un usuario empieza a seguir a una cuenta que ya publicó 30 tweets esta semana. Con fan-out en escritura, ¿qué ve en su home?"
+  options={[
+    { text: 'Los 30 tweets aparecen solos, porque el fan-out es retroactivo.', why: 'El fan-out ocurrió cuando se publicaron, y este usuario no era seguidor entonces.' },
+    { text: 'Nada de esa cuenta hasta su próximo tweet, salvo que un job inserte sus tweets recientes en el timeline.', correct: true, why: 'Por eso el evento follow dispara un backfill asíncrono: lee los tweets recientes de la cuenta y los intercala en la lista por ID.' },
+    { text: 'El sistema reconstruye todo su timeline desde cero en cada follow.', why: 'Funcionaría, pero es carísimo hacerlo por cada follow; basta con intercalar los tweets de una sola cuenta.' },
+  ]}
+/>
+
+### 4. Del cronológico al "Para ti"
+
+Hoy el timeline por defecto no es cronológico, sino **ordenado por relevancia**. Cuando X publicó su algoritmo en 2023, describió un pipeline que vas a reconocer en el caso de [TikTok](/casos/tiktok):
+
+1. **Fuentes de candidatos**: unos 1.500 tweets por petición, aproximadamente mitad de cuentas que sigues (*in-network*) y mitad de fuera (*out-of-network*, por similitud de intereses y del grafo).
+2. **Ranking**: una red neuronal de unos 48 millones de parámetros predice la probabilidad de cada interacción (like, retweet, respuesta) y combina esas probabilidades en un puntaje.
+3. **Heurísticas y filtros**: diversidad de autores, balance entre seguidos y no seguidos, contenido ya visto, cuentas bloqueadas.
+
+El fan-out no desaparece: sigue siendo la fuente barata de candidatos *in-network*. Lo que cambia es que encima hay un paso de ranking con su propio presupuesto de latencia, y que la mitad de los candidatos ya no depende del grafo.
+
+## Cuellos de botella y trade-offs
+
+| Riesgo | Por qué duele | Mitigación |
+|---|---|---|
+| Amplificación de escritura | Un tweet son millones de inserciones | Híbrido con umbral; no fan-out a inactivos; colas por prioridad |
+| Memoria de Redis | Terabytes de RAM replicada | Solo IDs (20 B), límite de 800 entradas, solo usuarios activos |
+| Picos de eventos | Un gol multiplica los tweets por segundo en segundos | Kafka como amortiguador; el fan-out se atrasa en vez de fallar |
+| Claves calientes de lectura | Millones leyendo los tweets de una celebridad | Caché replicado, L1 en proceso |
+| Orden aparente | Respuestas antes que el original | Ordenar por ID al leer; fan-out separado para cuentas grandes |
+| Cola larga de hidratación | Un nodo lento de caché arruina el p99 | Réplicas, peticiones con timeout y respuesta parcial |
+
+## Qué espera el entrevistador
+
+<Callout type="interview" title="Por nivel">
+
+**Mid-level.** Entidades y API correctas, un diseño que funcione con push **o** pull, y saber explicar el costo de cada uno. Base de datos para tweets y grafo, caché para el timeline.
+
+**Senior.** Estimaciones que muestren la amplificación del fan-out, modelo híbrido con umbral y mezcla al leer, timelines de solo IDs con límite, hidratación, paginación por cursor, IDs ordenables por tiempo (Snowflake) y por qué. Anticipar los casos borde: follow, unfollow, borrados.
+
+**Staff.** Operación y evolución: picos de eventos y colas por prioridad, reconstrucción de timelines, réplicas entre centros de datos, costo de la RAM, cuándo pasar a un timeline rankeado y qué cambia en la arquitectura (candidatos, ranking, filtros), y métricas para decidir el umbral de celebridad.
+
+</Callout>
+
+<Takeaways>
+
+- El home timeline es el ejemplo de manual de **trabajo en escritura vs trabajo en lectura**: push paga al publicar, pull paga al leer.
+- Con muchas más lecturas que escrituras, **precalcular** gana; las **celebridades** rompen el push puro.
+- El **híbrido** hace fan-out para la mayoría y mezcla los tweets de celebridades al leer. El umbral es un parámetro a medir, no una constante.
+- El timeline guarda **solo IDs** (unos 20 bytes por entrada), tiene un límite de longitud y es un **caché reconstruible**, no la fuente de verdad.
+- IDs **Snowflake**: únicos sin coordinación y ordenados por tiempo, lo que habilita la paginación por cursor.
+- Borrados, bloqueos y unfollows se resuelven **filtrando al leer**, no reescribiendo millones de listas.
+
+</Takeaways>
+
+## Fuentes y lecturas
+
+- Raffi Krikorian, [Timelines at Scale](https://www.infoq.com/presentations/Twitter-Timeline-Scalability/), QCon San Francisco 2012 (InfoQ).
+- High Scalability, [The Architecture Twitter Uses to Deal with 150M Active Users](https://highscalability.com/the-architecture-twitter-uses-to-deal-with-150m-active-users/), resumen de la charla anterior.
+- Twitter Engineering, [Announcing Snowflake](https://blog.x.com/engineering/en_us/a/2010/announcing-snowflake) (2010).
+- Twitter Engineering, [The Infrastructure Behind Twitter: Scale](https://blog.x.com/engineering/en_us/topics/infrastructure/2017/the-infrastructure-behind-twitter-scale) (2017).
+- Twitter, [the-algorithm](https://github.com/twitter/the-algorithm): el código del timeline "Para ti" publicado en 2023.
+- Alex Xu, *System Design Interview*, vol. 1, cap. 11: [Design a News Feed System](https://bytebytego.com/courses/system-design-interview/design-a-news-feed-system).
+- Hello Interview, [Design Facebook's News Feed](https://www.hellointerview.com/learn/system-design/problem-breakdowns/fb-news-feed).

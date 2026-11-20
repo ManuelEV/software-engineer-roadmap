@@ -1,0 +1,49 @@
+.bss-pick {
+  display: grid;
+  gap: 4px;
+}
+.bss-pick select {
+  min-height: 40px;
+  max-width: 100%;
+  padding: 0 10px;
+  border: 1.5px solid var(--rule-strong);
+  border-radius: 8px;
+  background: var(--card);
+  color: var(--ink);
+  font-family: var(--font-code);
+  font-size: 0.82rem;
+}
+
+/* what the loop already knows about each discarded cell, aligned with the array */
+.bss-known {
+  display: grid;
+  grid-template-columns: repeat(var(--bss-n), minmax(0, 1fr));
+  column-gap: 4px;
+  max-width: calc(var(--bss-n) * (52px + 4px));
+  margin-top: -6px;
+  font-family: var(--font-code);
+  font-size: clamp(0.6rem, 2.2vw, 0.74rem);
+  font-weight: 600;
+  text-align: center;
+  white-space: nowrap;
+  min-height: 1.3em;
+}
+.bss-known span {
+  overflow: visible;
+}
+.bss-known .is-left {
+  color: var(--ink-3);
+}
+.bss-known .is-right {
+  color: var(--line-ink);
+}
+
+.bss-inv {
+  margin: 0;
+  font-family: var(--font-sign);
+  font-size: 0.9rem;
+  color: var(--ink-2);
+}
+.bss-inv b {
+  color: var(--ink);
+}

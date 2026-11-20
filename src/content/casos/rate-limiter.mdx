@@ -1,0 +1,456 @@
+import { RateLimiterLab } from '../../components/widgets/casos-a/RateLimiterLab'
+
+"Diseña un rate limiter para nuestra API." Parece un componente pequeño, casi una función: contar peticiones y decir que no cuando son demasiadas. Pero está delante de **cada** petición que recibe tu sistema, así que hereda requisitos durísimos: tiene que decidir en un milisegundo, ser consistente entre cientos de servidores que no comparten memoria y, sobre todo, no convertirse en la razón por la que tu API se cae.
+
+Es un clásico por tres motivos. Tiene **algoritmos con matemática precisa** que puedes comparar en la pizarra. Obliga a hablar de **estado compartido y atomicidad** (dos servidores leyendo el mismo contador al mismo tiempo). Y tiene un **dilema operativo** sin respuesta universal: cuando el limitador falla, ¿dejas pasar todo o bloqueas todo?
+
+<Sketch
+  width={640}
+  height={320}
+  caption="El token bucket, el algoritmo estándar de este caso: la capacidad fija la ráfaga, el ritmo de relleno fija el promedio, y un balde vacío responde 429."
+  items={[
+    { type: 'text', x: 24, y: 32, text: 'un balde de fichas', size: 22, tone: 'line' },
+    { type: 'path', d: 'M200 90 L220 250 L380 250 L400 90', len: 520 },
+    { type: 'circle', x: 250, y: 228, r: 14, fill: true, tone: 'line' },
+    { type: 'circle', x: 290, y: 228, r: 14, fill: true, tone: 'line', with: true },
+    { type: 'circle', x: 330, y: 228, r: 14, fill: true, tone: 'line', with: true },
+    { type: 'circle', x: 270, y: 198, r: 14, fill: true, tone: 'line', with: true },
+    { type: 'arrow', from: [300, 36], to: [300, 84], tone: 'line', label: 'se rellena a r por segundo', labelAt: [450, 56] },
+    { type: 'brace', x: 416, y1: 94, y2: 250, dir: -1, label: 'C: la ráfaga máxima' },
+    { type: 'arrow', from: [24, 150], to: [204, 150], tone: 'ok', label: 'cada petición gasta 1', labelAt: [108, 134] },
+    { type: 'text', x: 40, y: 300, text: 'balde vacío → 429 + Retry-After', size: 20, tone: 'bad' },
+    { type: 'cross', x: 374, y: 293, size: 20 },
+  ]}
+/>
+
+## Requisitos
+
+**Funcionales**
+
+1. Limitar peticiones por **clave** (ID de usuario, API key, IP) y por **regla** (por ejemplo, 100 peticiones por minuto a `POST /v1/charges`).
+2. Soportar varias reglas a la vez para una misma petición (por segundo **y** por día).
+3. Responder `429 Too Many Requests` con headers que digan al cliente cuándo reintentar.
+4. Cambiar reglas sin desplegar código.
+
+**No funcionales**
+
+- **Latencia agregada mínima**: supongamos un presupuesto de 1–2 ms en p99. El limitador no puede costar más que lo que protege.
+- **Alta disponibilidad**: si el limitador cae, la API no puede caer con él.
+- **Precisión razonable**: un exceso pequeño y ocasional (101 en vez de 100) es aceptable; dejar pasar el doble no.
+- **Escala**: millones de claves activas y cientos de miles de decisiones por segundo.
+
+**Fuera de alcance**: mitigación de DDoS volumétrico en capas 3 y 4 (eso se resuelve en el borde de la red, antes de que el tráfico llegue a tus servidores) y cuotas de facturación mensuales.
+
+### ¿Dónde vive el limitador?
+
+Antes de dibujar, decide la ubicación. Hay tres opciones habituales:
+
+- **En el cliente.** Nunca como única defensa: no controlas el cliente.
+- **Como librería dentro de cada servicio.** Flexible (puede limitar por conceptos de negocio, como "pagos por comercio"), pero cada equipo la integra a su manera.
+- **En el API gateway o en un sidecar** (Envoy, por ejemplo). Centralizado, uniforme y fuera del código de negocio. Es la respuesta por defecto para límites por cliente.
+
+En la práctica conviven: límites gruesos por IP en el borde, límites por API key en el gateway, y límites de negocio dentro del servicio.
+
+## Estimaciones
+
+Supongamos **1 millón de peticiones por segundo** en pico en el gateway y **50 millones de claves activas** por día.
+
+**Memoria por algoritmo.** Aquí la elección de algoritmo se vuelve cuantitativa.
+
+| Algoritmo | Estado por clave | Memoria para 50 M claves |
+|---|---|---|
+| Token bucket | 2 números (fichas, último relleno) | ~100 B con el overhead de Redis → ~5 GB |
+| Ventana fija | 1 contador | ~70 B → ~3,5 GB |
+| Contador deslizante | 2 contadores | ~140 B → ~7 GB |
+| Log deslizante | 1 timestamp por petición en la ventana | con un límite de 1.000/hora, hasta ~1.000 entradas de sorted set: decenas de KB por clave → **cientos de GB o más** |
+
+Los números por clave son aproximados (dependen de la codificación interna de Redis), pero el orden de magnitud es lo que importa: **el log deslizante no escala** para límites altos con muchas claves.
+
+**Throughput.** Un nodo de Redis atiende del orden de 100.000 operaciones simples por segundo; un script Lua por petición es algo más caro. Para 1 M de decisiones por segundo necesitas un clúster de unas 10 a 20 particiones, repartidas por hash de la clave.
+
+**Latencia.** Una ida y vuelta a Redis dentro de la misma zona de disponibilidad cuesta en torno a medio milisegundo. Cabe en el presupuesto, pero solo si haces **una** llamada por petición, no tres.
+
+## Entidades y API
+
+El limitador tiene dos interfaces: la configuración de reglas y la decisión por petición.
+
+```yaml title="rules.yaml"
+- id: charges-per-user
+  match: { method: POST, route: /v1/charges }
+  key: user_id
+  algorithm: token_bucket
+  capacity: 100          # ráfaga máxima
+  refill_per_sec: 10     # ritmo sostenido: 600/min
+- id: login-per-ip
+  match: { method: POST, route: /v1/login }
+  key: ip
+  algorithm: sliding_window
+  limit: 10
+  window_sec: 300
+  on_failure: closed     # si Redis cae, se bloquea (ver más abajo)
+```
+
+<CodeTabs>
+
+```java title="Java"
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
+
+record Decision(boolean allowed, int remaining, int retryAfterSec) {}
+
+// Una llamada por petición, para todas las reglas que aplican.
+interface RateLimiter {
+    CompletableFuture<Decision> check(String key, List<Rule> rules, int cost);
+}
+```
+
+```ts title="TypeScript"
+interface Decision {
+  allowed: boolean
+  remaining: number      // fichas o peticiones que quedan
+  retryAfterSec: number  // 0 si allowed
+}
+
+// Una llamada por petición, para todas las reglas que aplican.
+declare function check(key: string, rules: Rule[], cost?: number): Promise<Decision>
+```
+
+</CodeTabs>
+
+Y lo que ve el cliente cuando se pasa:
+
+```http
+HTTP/1.1 429 Too Many Requests
+Content-Type: application/json
+Retry-After: 7
+RateLimit-Policy: "charges";q=100;w=10
+RateLimit: "charges";r=0;t=7
+
+{ "error": "rate_limited",
+  "message": "Superaste 100 peticiones en 10 s para POST /v1/charges. Reintenta en 7 s." }
+```
+
+`429` está definido en el RFC 6585 y `Retry-After` en el RFC 9110. Los headers `RateLimit-Policy` y `RateLimit` vienen de un borrador del IETF todavía en curso; muchas APIs públicas usan la variante informal `X-RateLimit-Limit`, `X-RateLimit-Remaining` y `X-RateLimit-Reset`. Lo importante es que el cliente pueda **saber cuánto esperar** sin adivinar, y que el mensaje diga qué hacer.
+
+## Modelo de datos
+
+El estado vive en un almacén en memoria con operaciones atómicas: Redis es la respuesta estándar. Una clave por (regla, cliente):
+
+```text
+rl:{charges-per-user}:user_8812   →  hash { tokens: 37.5, ts: 1763560812345 }   TTL ≈ capacidad / ritmo
+rl:{login-per-ip}:203.0.113.7     →  sorted set de timestamps                    TTL = ventana
+```
+
+¿Por qué no una base relacional? Porque cada petición sería una escritura con bloqueo de fila y fsync al disco; a un millón por segundo, imposible. Y no necesitas durabilidad: si Redis pierde los contadores, el peor caso es que algunos clientes reciben una ventana de gracia. El TTL limpia solo las claves de clientes que dejaron de llamar.
+
+Las **reglas**, en cambio, sí son datos durables y poco cambiantes: viven en una base de configuración (o en un repositorio con GitOps) y se empujan a cada gateway, que las cachea en memoria.
+
+## Diseño de alto nivel
+
+<FlowDiagram
+  caption="Un limitador distribuido en el gateway. Recorre los pasos: decisión normal, rechazo, falla de Redis y cambio de reglas."
+  nodes={[
+    { id: 'c', label: 'Cliente', kind: 'client', x: 0, y: 1 },
+    { id: 'edge', label: 'Borde / CDN', kind: 'shield', x: 1, y: 1, sub: 'límites por IP' },
+    { id: 'gw', label: 'API gateway', kind: 'gateway', x: 2, y: 1, sub: 'middleware limitador' },
+    { id: 'redis', label: 'Redis Cluster', kind: 'cache', x: 2, y: 2.4, sub: 'shard por clave' },
+    { id: 'svc', label: 'Servicio', kind: 'service', x: 4, y: 1, sub: 'pagos, pedidos…' },
+    { id: 'cfg', label: 'Reglas', kind: 'file', x: 3, y: 0, sub: 'config versionada' },
+    { id: 'm', label: 'Métricas', kind: 'monitor', x: 4, y: 2.4, sub: 'rechazos por regla' },
+  ]}
+  edges={[
+    { from: 'c', to: 'edge' },
+    { from: 'edge', to: 'gw' },
+    { from: 'gw', to: 'redis', label: 'EVALSHA' },
+    { from: 'gw', to: 'svc' },
+    { from: 'cfg', to: 'gw', dashed: true },
+    { from: 'gw', to: 'm', dashed: true },
+  ]}
+  steps={[
+    {
+      title: 'Llega la petición',
+      body: <>El borde ya filtró floods groseros por IP. El gateway autentica, identifica la clave (por ejemplo, <code>user_8812</code>) y busca en su copia local qué reglas aplican a <code>POST /v1/charges</code>. Sin red: las reglas están en memoria.</>,
+      active: ['c', 'edge', 'gw'],
+      flow: ['c-edge', 'edge-gw'],
+    },
+    {
+      title: 'Una sola ida y vuelta',
+      body: <>Ejecuta un script Lua en el shard de Redis dueño de la clave. El script lee el estado, recalcula las fichas, decide y escribe, todo de forma atómica. Resultado: permitido, con 37 fichas restantes.</>,
+      active: ['gw', 'redis'],
+      flow: ['gw-redis'],
+    },
+    {
+      title: 'Permitido',
+      body: <>El gateway reenvía la petición al servicio y agrega <code>RateLimit</code> a la respuesta para que el cliente sepa cuánto margen le queda.</>,
+      active: ['gw', 'svc'],
+      flow: ['gw-svc'],
+    },
+    {
+      title: 'Rechazado',
+      body: <>Si no hay fichas, el gateway responde <code>429</code> con <code>Retry-After</code> sin tocar el servicio. Cada rechazo se cuenta por regla: un pico súbito de rechazos suele ser un cliente con un bug de reintentos, o una regla mal configurada.</>,
+      active: ['gw', 'm', 'c'],
+      flow: ['gw-m'],
+    },
+    {
+      title: 'Redis no responde',
+      body: <>El gateway espera como mucho unos pocos milisegundos. Si se agota el tiempo, aplica la política de la regla: <b>fail open</b> (dejar pasar, quizá con un límite local aproximado) para la API general, <b>fail closed</b> para límites de seguridad como intentos de login.</>,
+      active: ['gw', 'redis'],
+    },
+    {
+      title: 'Cambiar una regla',
+      body: <>Alguien sube el límite de un cliente empresarial. La configuración versionada se propaga a todos los gateways en segundos, sin despliegue. Las reglas nuevas conviene lanzarlas primero en modo observación: cuentan lo que bloquearían, sin bloquear.</>,
+      active: ['cfg', 'gw'],
+      flow: ['cfg-gw'],
+    },
+  ]}
+/>
+
+## Profundizaciones
+
+### 1. Los algoritmos, comparados con el mismo tráfico
+
+Hay cuatro algoritmos que tienes que poder dibujar y comparar. Juega con el simulador antes de leer la comparación: elige **Ventana fija** con **Ráfaga en el borde** y mira la franja roja.
+
+<RateLimiterLab />
+
+**Ventana fija.** Un contador por intervalo (`rl:user_8812:2026-11-19T10:05`). `INCR`, y si pasa del límite, rechazas. Es el más barato y el más fácil de explicar. Su defecto es el **borde**: un cliente puede gastar todo el cupo en el último segundo de una ventana y todo el cupo otra vez en el primer segundo de la siguiente. Resultado: el doble del límite en dos segundos.
+
+**Log deslizante.** Guardas el timestamp de cada petición (un sorted set) y cuentas las de los últimos N segundos. Es **exacto**, pero la memoria crece con el límite: inviable para "10.000 por hora" con millones de clientes.
+
+**Contador deslizante.** Mantienes el contador de la ventana actual y el de la anterior, y estimas la ventana móvil ponderando la anterior por la fracción que todavía se solapa:
+
+```text
+estimado = anterior × (1 − transcurrido / ventana) + actual
+
+ejemplo (límite 50/min): anterior = 42, actual = 18, van 15 s de la ventana
+estimado = 42 × 0,75 + 18 = 49,5  → se permite
+```
+
+Es el ejemplo exacto del artículo de Cloudflare sobre su limitador. Ellos midieron el error sobre 400 millones de peticiones de 270.000 orígenes: solo el **0,003 %** se permitió o se limitó por error. Dos enteros por clave, casi la precisión del log. El simulador muestra su punto débil: supone que la ventana anterior fue uniforme, así que una ráfaga concentrada justo antes del borde lo engaña.
+
+**Token bucket.** Un balde con capacidad C se rellena a ritmo r fichas por segundo; cada petición gasta una. Permite ráfagas de hasta C y luego limita al ritmo r. Es lo que usa Stripe para su limitador de peticiones, y lo que usan muchos gateways. Separa dos perillas que a los productos les importan: **cuánta ráfaga toleras** y **qué ritmo sostenido permites**. Ojo con lo que promete: en cualquier intervalo de W segundos pueden pasar hasta C + r·W peticiones.
+
+<Compare>
+<Option title="Ventana fija" verdict="Barato, pero con el problema del borde">
+
+1 contador. Deja pasar hasta 2× el límite en el cambio de ventana. Útil para cuotas largas (por día) donde el borde no importa.
+
+</Option>
+<Option title="Log deslizante" verdict="Exacto y caro">
+
+Un timestamp por petición. Úsalo solo con límites bajos (10 intentos de login en 5 minutos).
+
+</Option>
+<Option title="Contador deslizante" verdict="El mejor equilibrio general">
+
+2 contadores, error pequeño con tráfico real. Ideal para límites por minuto a gran escala.
+
+</Option>
+<Option title="Token bucket" verdict="El estándar para APIs">
+
+2 números, ráfagas controladas y ritmo sostenido configurables por separado.
+
+</Option>
+</Compare>
+
+<Sidenote>Hay una quinta variante elegante: GCRA (*Generic Cell Rate Algorithm*), equivalente a un token bucket pero que guarda **un solo** timestamp, el "tiempo teórico de llegada". Brandur Leach lo explica muy bien en su artículo sobre rate limiting.</Sidenote>
+
+<Quiz
+  question="Tu límite es 100 peticiones por minuto con ventana fija. ¿Cuántas peticiones puede hacer un cliente, como máximo, en un intervalo cualquiera de 60 segundos?"
+  options={[
+    { text: '100, porque ese es el límite.', why: 'Solo si el intervalo coincide con una ventana. Un intervalo que cruza el borde ve dos ventanas.' },
+    { text: '200: 100 al final de una ventana y 100 al inicio de la siguiente.', correct: true, why: 'Es el problema del borde. El contador se reinicia en el cambio de minuto, así que un intervalo de 60 s centrado en el borde puede contener dos cupos completos.' },
+    { text: '150, por el promedio entre ventanas.', why: 'La ventana fija no promedia nada; esa es la idea del contador deslizante.' },
+  ]}
+/>
+
+### 2. Atomicidad: el bug que aparece con dos servidores
+
+La implementación ingenua lee el contador, compara y escribe:
+
+<CodeTabs>
+
+```java title="Java"
+long count = Long.parseLong(Objects.requireNonNullElse(redis.get(key), "0")); // A lee 99; B también lee 99
+if (count < 100) {
+    redis.incr(key);                    // ambos incrementan: 101
+    return allow();                     // ambos permiten
+}
+```
+
+```ts title="TypeScript"
+const count = Number(await redis.get(key)) // gateway A lee 99; gateway B también lee 99
+if (count < 100) {
+  await redis.incr(key)                    // ambos incrementan: 101
+  return allow()                           // ambos permiten
+}
+```
+
+</CodeTabs>
+
+Es una condición de carrera de manual: entre el `GET` y el `INCR` otro servidor hizo lo mismo. Con cientos de gateways, el exceso deja de ser anecdótico. Hay dos arreglos:
+
+- **Operaciones atómicas de un solo paso** cuando el algoritmo lo permite: `INCR` devuelve el valor nuevo, así que comparas **después** de incrementar.
+- **Scripts Lua**: Redis ejecuta el script completo sin intercalar otros comandos. Es la forma estándar de implementar token bucket o contador deslizante.
+
+```lua title="token_bucket.lua"
+-- KEYS[1] = clave del balde
+-- ARGV[1] = capacidad, ARGV[2] = fichas por segundo, ARGV[3] = ahora (ms), ARGV[4] = costo
+local capacity = tonumber(ARGV[1])
+local rate     = tonumber(ARGV[2])
+local now      = tonumber(ARGV[3])
+local cost     = tonumber(ARGV[4])
+
+local state  = redis.call('HMGET', KEYS[1], 'tokens', 'ts')
+local tokens = tonumber(state[1]) or capacity
+local ts     = tonumber(state[2]) or now
+
+-- rellenar según el tiempo transcurrido, sin pasar de la capacidad
+tokens = math.min(capacity, tokens + (now - ts) / 1000 * rate)
+
+local allowed = 0
+if tokens >= cost then
+  tokens = tokens - cost
+  allowed = 1
+end
+
+redis.call('HSET', KEYS[1], 'tokens', tokens, 'ts', now)
+redis.call('PEXPIRE', KEYS[1], math.ceil(capacity / rate * 1000))
+
+-- Redis convierte los números de Lua a enteros: devolvemos las fichas como texto
+return { allowed, tostring(tokens) }
+```
+
+Dos detalles finos que impresionan:
+
+- **El reloj.** Si cada gateway pasa su propio `now`, un gateway con el reloj adelantado regala fichas. Puedes leer la hora dentro del script con `redis.call('TIME')`, de modo que todos usen el reloj del shard.
+- **`INCR` + `EXPIRE` por separado** también es un bug: si el proceso muere entre ambos, la clave queda sin TTL y el cliente queda bloqueado para siempre. Hazlo dentro del script o en una transacción `MULTI`.
+
+<Details summary="Profundizar: el mismo token bucket en memoria, en Java">
+
+Cuando el limitador vive dentro de cada servicio (o como respaldo local si Redis no responde), el estado está en la memoria del proceso y el problema de atomicidad pasa a ser entre hilos. La solución es la misma idea que el script Lua: leer, rellenar, decidir y escribir en un solo paso atómico por clave.
+
+```java title="LocalTokenBucket.java"
+import java.util.concurrent.ConcurrentHashMap;
+
+/** Token bucket en memoria, por clave. Sirve como respaldo local si Redis no responde. */
+final class LocalTokenBucket {
+    private record State(double tokens, long lastNanos) {}
+
+    private final double capacity;
+    private final double ratePerSec;
+    private final ConcurrentHashMap<String, State> buckets = new ConcurrentHashMap<>();
+
+    LocalTokenBucket(double capacity, double ratePerSec) {
+        this.capacity = capacity;
+        this.ratePerSec = ratePerSec;
+    }
+
+    boolean tryAcquire(String key, int cost) {
+        long now = System.nanoTime(); // reloj monótono: no salta con NTP
+        boolean[] allowed = new boolean[1];
+        // compute() es atómico por clave: leer, rellenar, decidir y escribir sin carreras
+        buckets.compute(key, (k, s) -> {
+            double tokens = s == null
+                ? capacity
+                : Math.min(capacity, s.tokens() + (now - s.lastNanos()) / 1e9 * ratePerSec);
+            allowed[0] = tokens >= cost;
+            return new State(allowed[0] ? tokens - cost : tokens, now);
+        });
+        return allowed[0];
+    }
+}
+```
+
+<Callout type="tip" title="En Java">
+
+- `ConcurrentHashMap.compute` ejecuta la función de forma atómica para esa clave. Un `get` seguido de un `put` reproduce la misma condición de carrera que el `GET` + `INCR` de Redis.
+- Usa `System.nanoTime()` para medir intervalos: es monótono. `System.currentTimeMillis()` puede saltar hacia atrás si el reloj del sistema se ajusta, y regalar o quitar fichas.
+- Este mapa nunca borra claves. En producción, expira las inactivas (por ejemplo, con una caché con expiración por acceso) o la memoria crece con cada cliente nuevo.
+
+</Callout>
+
+</Details>
+
+<Quiz
+  question="Implementas una ventana fija con dos comandos: INCR rl:user:minuto y luego EXPIRE rl:user:minuto 60 si el resultado es 1. ¿Qué puede salir mal?"
+  options={[
+    { text: 'Nada: INCR es atómico, así que el conteo siempre es correcto.', why: 'El conteo sí, pero el par de comandos no es atómico; el problema está en el TTL.' },
+    { text: 'Si el proceso cae entre INCR y EXPIRE, la clave nunca expira y el cliente queda limitado indefinidamente.', correct: true, why: 'La clave queda con un contador que solo crece. Ejecuta ambos pasos en un script Lua o en MULTI/EXEC, o crea la clave con SET … EX 60 NX antes de incrementar.' },
+    { text: 'Redis rechaza EXPIRE sobre claves creadas con INCR.', why: 'No es cierto; EXPIRE funciona sobre cualquier clave existente.' },
+  ]}
+/>
+
+### 3. Sincronizar muchos servidores
+
+Con un Redis central tienes precisión al costo de una ida y vuelta por petición. Hay alternativas, cada una con su trade-off:
+
+- **Contadores locales con límite dividido.** Cada uno de N gateways permite límite ÷ N sin hablar con nadie. Cero latencia, pero impreciso: el balanceador no reparte perfectamente, y cada vez que escalas cambia N.
+- **Local con sincronización periódica.** Cada gateway decide con su contador local más la última foto global, y empuja sus incrementos a Redis cada 100 ms en lote. Reduce las llamadas en órdenes de magnitud a cambio de permitir un exceso acotado durante el intervalo. Cloudflare hace algo parecido: cada PoP tiene su propio sistema de conteo, los incrementos son asíncronos, y cuando un cliente supera el umbral se guarda una marca de mitigación que los servidores cachean localmente hasta que expira.
+- **Enrutamiento por clave.** Usa [hashing consistente](/system-design/replicacion-y-sharding) para que todas las peticiones de una clave lleguen al mismo nodo limitador, que puede decidir en memoria. Es el modelo de los servicios de rate limiting globales detrás de Envoy.
+
+**Multi-región.** Un contador global entre continentes cuesta 100 ms o más por decisión: inaceptable. Lo habitual es **límite por región** (cada región aplica su parte) o contadores replicados asíncronamente que convergen, aceptando que un cliente que reparte tráfico entre regiones se pase un poco.
+
+### 4. Cuando el limitador falla
+
+Stripe lo resume en su artículo: atrapa las excepciones en todos los niveles para que un bug o una caída de Redis **no rompa las peticiones**. Es decir, por defecto, **fail open**. El razonamiento: el limitador existe para proteger el servicio; si su propia falla tumba el servicio, hizo exactamente lo contrario.
+
+Pero no todas las reglas son iguales. Un límite de **intentos de login** o de **envío de SMS con códigos** protege contra ataques (fuerza bruta, fraude de SMS), no contra sobrecarga. Si cae, abrirlo es invitar al ataque: ahí conviene **fail closed**, o un respaldo local estricto. Por eso el ejemplo de configuración tiene `on_failure` por regla.
+
+Otras prácticas operativas del mismo artículo de Stripe, que vale la pena citar en la entrevista: lanzar cada regla en **modo observación** (dark launch) antes de aplicarla, tener **interruptores** para apagarla rápido, y monitorear cuántas veces dispara cada una.
+
+<Callout type="idea" title="Rate limiting no es load shedding">
+
+El rate limiting reparte capacidad de forma **justa entre clientes**. El *load shedding* protege al **sistema** cuando está saturado, sin importar quién pide. Stripe describe cuatro limitadores en capas: uno de tasa por usuario, uno de peticiones concurrentes (por ejemplo, máximo 20 en curso), y dos de *load shedding* que reservan capacidad para el tráfico crítico (crear cobros por encima de listarlos). En una entrevista senior, mencionar esa distinción suma.
+
+</Callout>
+
+## Cuellos de botella y trade-offs
+
+| Decisión | Ganas | Pierdes |
+|---|---|---|
+| Redis central con Lua | Precisión, simplicidad | Una ida y vuelta por petición; dependencia crítica |
+| Contadores locales | Latencia cero | Precisión; sensibilidad al balanceo y al autoescalado |
+| Sincronización periódica | 100× menos llamadas | Exceso acotado durante el intervalo |
+| Fail open | Disponibilidad de la API | Protección mientras dure la falla |
+| Fail closed | Seguridad | Disponibilidad: una falla del limitador bloquea usuarios legítimos |
+| Log deslizante | Exactitud | Memoria proporcional al límite |
+
+Otros cuellos de botella frecuentes:
+
+- **Claves calientes**: un cliente enorme concentra millones de peticiones en una sola clave, que vive en un solo shard. Agrega localmente unos milisegundos antes de enviar, o reparte la clave en sub-claves (`user_8812#0..7`) y suma.
+- **Tormentas de reintentos**: clientes que reintentan de inmediato tras un `429` multiplican la carga. Documenta y usa `Retry-After`, y recomienda *backoff* exponencial con *jitter* en tus SDKs.
+
+## Qué espera el entrevistador
+
+<Callout type="interview" title="Por nivel">
+
+**Mid-level.** Explicar al menos dos algoritmos con sus defectos (ventana fija y token bucket), ubicar el limitador en el gateway, usar Redis con TTL, devolver `429` con `Retry-After`.
+
+**Senior.** Comparar los cuatro algoritmos con memoria y precisión, detectar la condición de carrera y resolverla con Lua, discutir fail open vs fail closed por tipo de regla, headers útiles, sincronización entre servidores y el costo de cada opción.
+
+**Staff.** Pensar en el sistema completo: capas de defensa (borde, gateway, servicio), multi-región, *load shedding* vs rate limiting, despliegue seguro de reglas (modo observación, interruptores), claves calientes, impacto en clientes y SDKs, y cómo medir que los límites son justos.
+
+</Callout>
+
+<Takeaways>
+
+- El limitador está en la ruta de **cada** petición: una sola ida y vuelta, presupuesto de 1–2 ms, y nunca debe tumbar la API.
+- **Ventana fija** deja pasar el doble en el borde; **log deslizante** es exacto pero caro; **contador deslizante** y **token bucket** son el equilibrio práctico.
+- Leer-comparar-escribir desde varios servidores es una **condición de carrera**: usa operaciones atómicas o scripts Lua, y pon el TTL en la misma operación.
+- Con muchos servidores eliges entre **precisión** (Redis central) y **latencia** (contadores locales, sincronización periódica, enrutamiento por clave).
+- **Fail open** para proteger capacidad, **fail closed** para proteger seguridad. Decide por regla.
+- Devuelve `429` con `Retry-After` y un mensaje accionable; lanza reglas nuevas en modo observación.
+
+</Takeaways>
+
+## Fuentes y lecturas
+
+- Paul Tarjan, Stripe, [Scaling your API with rate limiters](https://stripe.com/blog/rate-limiters).
+- Julien Desgats, Cloudflare, [How we built rate limiting capable of scaling to millions of domains](https://blog.cloudflare.com/counting-things-a-lot-of-different-things/).
+- Brandur Leach, [Rate Limiting, Cells, and GCRA](https://brandur.org/rate-limiting).
+- Alex Xu, *System Design Interview*, vol. 1, cap. 4: [Design a Rate Limiter](https://bytebytego.com/courses/system-design-interview/design-a-rate-limiter).
+- Hello Interview, [Design a Distributed Rate Limiter](https://www.hellointerview.com/learn/system-design/problem-breakdowns/distributed-rate-limiter).
+- Redis, [Scripting with Lua](https://redis.io/docs/latest/develop/interact/programmability/eval-intro/).
+- IETF, [RFC 6585](https://datatracker.ietf.org/doc/html/rfc6585) (código 429) y el borrador [RateLimit header fields for HTTP](https://datatracker.ietf.org/doc/draft-ietf-httpapi-ratelimit-headers/).
+- Google SRE Book, [Handling Overload](https://sre.google/sre-book/handling-overload/).

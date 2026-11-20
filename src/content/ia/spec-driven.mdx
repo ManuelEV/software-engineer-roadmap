@@ -1,0 +1,298 @@
+import { SddPipeline } from '../../components/widgets/ia/SddPipeline'
+
+Pídele a un agente "agrega reembolsos parciales" y te va a entregar reembolsos parciales. Con un endpoint que eligió él, un modelo de datos que inventó él, sin idempotencia porque nadie la mencionó, y con un test que verifica exactamente lo que implementó. Todo con mucha confianza. El problema no es que el agente sea malo: es que **la ambigüedad que un colega humano resolvería preguntando, el agente la resuelve adivinando**.
+
+*Spec-Driven Development* (SDD) es la respuesta que ganó tracción en 2025: escribir una especificación antes de generar código, y usarla como contrato entre tú y el agente. En este tema vas a ver qué significa exactamente (hay varias versiones), cómo lo implementan GitHub Spec Kit y Kiro, un ejemplo completo con `spec.md`, `plan.md` y `tasks.md`, y, tan importante como lo anterior, cuándo es pura burocracia.
+
+## Qué es SDD y qué no es
+
+La idea central es vieja: separar el **qué** y el **por qué** (la especificación) del **cómo** (el diseño y el código). Lo nuevo es el destinatario. Una spec para un agente tiene que ser lo bastante precisa como para que no tenga que adivinar, y lo bastante breve como para que tú la revises de verdad.
+
+Birgitta Böckeler (Thoughtworks), en su análisis de las herramientas de SDD publicado en el sitio de Martin Fowler, distingue tres niveles de compromiso que conviene tener presentes porque el término se usa para todos:
+
+1. **Spec-first.** Escribes una spec bien pensada, la usas para la tarea actual y luego la dejas de lado.
+2. **Spec-anchored.** La spec se conserva después de la tarea y se usa para mantener y evolucionar esa feature.
+3. **Spec-as-source.** La spec es el artefacto principal; los humanos solo editan la spec y el código se regenera a partir de ella.
+
+Böckeler encontró que todas las herramientas que analizó son spec-first, y pocas se comprometen de verdad con los otros dos niveles. Spec-as-source es la versión más ambiciosa y la más arriesgada: recuerda al *model-driven development* de los 2000, con el agravante de que un LLM no es determinista.
+
+Lo que SDD **no** es: no es escribir un documento de requisitos de 40 páginas antes de cada cambio. Una buena spec para un agente cabe en una pantalla o dos.
+
+## El pipeline: de la spec a la verificación
+
+Casi todas las variantes comparten la misma estructura. Cada fase produce un artefacto que tú revisas antes de pasar a la siguiente, y esa revisión es la gracia del método: corregir un requisito cuesta una línea; corregir un PR de 800 líneas construido sobre ese requisito equivocado cuesta una tarde.
+
+<SddPipeline />
+
+La clave está en las **puertas de calidad**. El valor de SDD no son los archivos, sino que te obliga a tomar decisiones en el momento más barato: antes de que exista código. Si te saltas las revisiones y apruebas todo de corrido, SDD se convierte en generar Markdown que nadie lee.
+
+<Callout type="idea" title="Por qué funciona con agentes">
+
+Un agente que trabaja contra una spec tiene tres cosas que no tiene un agente con un prompt suelto: un **criterio de terminado** (los requisitos), una **forma de dividir el trabajo** en pasos que caben en una sesión (las tareas) y **trazabilidad** para que tú verifiques (cada tarea apunta a un requisito y a un test).
+
+</Callout>
+
+## GitHub Spec Kit
+
+[Spec Kit](https://github.com/github/spec-kit) es el kit de herramientas open source de GitHub para SDD. Consiste en una CLI (`specify`) que prepara el proyecto para tu agente de código, y un conjunto de comandos que corres dentro del agente, uno por fase.
+
+```bash
+uv tool install specify-cli
+specify init pagos --integration copilot   # u otro agente soportado
+```
+
+El flujo completo, según la guía de inicio actual:
+
+| Comando | Qué hace |
+| --- | --- |
+| `/speckit-constitution` | Define los principios del proyecto, contra los que se evalúa cada fase. Se corre una vez. |
+| `/speckit-specify` | Crea la spec de la feature a partir de una descripción en lenguaje natural: qué y por qué, sin stack. |
+| `/speckit-clarify` | Hace preguntas sobre las zonas subespecificadas y agrega las respuestas a la spec. |
+| `/speckit-plan` | Genera los artefactos de diseño a partir de la spec. Aquí entra el stack técnico. |
+| `/speckit-checklist` | Genera un checklist de calidad de los requisitos, para el revisor. |
+| `/speckit-tasks` | Genera un `tasks.md` ordenado por dependencias. |
+| `/speckit-analyze` | Reporta conflictos, huecos y ambigüedades entre spec, plan y tareas (solo lectura). |
+| `/speckit-implement` | Ejecuta las tareas en orden, de una vez o por fases. |
+| `/speckit-converge` | Compara el código con spec, plan y tareas; si encuentra huecos, agrega tareas nuevas. Se repite con implement hasta que reporta convergencia. |
+
+La versión corta del flujo se salta `clarify`, `checklist` y `analyze`; para features chicas tiene sentido.<Sidenote>La sintaxis cambió con las versiones: los primeros releases usaban `/specify`, `/plan` y `/tasks`, luego `/speckit.specify` y similares, y la documentación actual usa la forma con guion. Además, cada agente tiene su propia forma de invocar comandos. Revisa la versión que instalaste.</Sidenote>
+
+La **constitución** merece una mención aparte. Es un documento corto de principios no negociables ("test primero", "dinero en centavos", "sin dependencias nuevas sin ADR") que el agente debe respetar en cada plan. Bien usada, evita que cada feature reabra discusiones que el equipo ya cerró. Mal usada, se vuelve una lista de deseos que el agente aplica de más o ignora: Böckeler observó ambas cosas.
+
+## Kiro: requisitos EARS, diseño y tareas
+
+[Kiro](https://kiro.dev), el IDE agéntico de AWS, integra el flujo en el editor. Cada spec produce tres archivos:
+
+- **`requirements.md`**: historias de usuario con criterios de aceptación en notación **EARS**. En las specs de bugs, se reemplaza por `bugfix.md`, que registra el comportamiento actual, el esperado y el que no debe cambiar.
+- **`design.md`**: arquitectura técnica, diagramas de secuencia, consideraciones de implementación.
+- **`tasks.md`**: plan de implementación en tareas discretas, que Kiro puede ejecutar una por una o todas a la vez agrupando las independientes en "olas" que corren en paralelo.
+
+Kiro ofrece variantes (empezar por requisitos o por diseño, o una *Quick Spec* que genera los tres archivos de una pasada para features bien entendidas) y un mecanismo de memoria del proyecto llamado *steering*, típicamente con archivos como `product.md`, `tech.md` y `structure.md`.
+
+### EARS en dos minutos
+
+*Easy Approach to Requirements Syntax* nació en Rolls-Royce, analizando regulaciones de aeronavegabilidad para el sistema de control de un motor a reacción, y se publicó en 2009. Su gracia es que restringe la forma de las oraciones a unos pocos patrones, lo que vuelve cada requisito **testeable** y difícil de escribir ambiguo:
+
+| Patrón | Plantilla | Ejemplo |
+| --- | --- | --- |
+| Ubicuo | El sistema deberá… | El sistema deberá registrar todo reembolso en la tabla `refunds`. |
+| Por evento (WHEN) | Cuando *disparador*, el sistema deberá… | Cuando soporte solicita un reembolso parcial, el sistema deberá reembolsar el monto al medio de pago original. |
+| Por estado (WHILE) | Mientras *condición*, el sistema deberá… | Mientras el proveedor de pagos no responda, el sistema deberá mantener el reembolso en estado `pending`. |
+| Opcional (WHERE) | Donde *feature presente*, el sistema deberá… | Donde la cuenta tenga reembolsos automáticos, el sistema deberá aprobar montos menores a 10 USD sin revisión. |
+| No deseado (IF/THEN) | Si *situación*, entonces el sistema deberá… | Si el monto excede lo reembolsable, entonces el sistema deberá rechazar con `REFUND_EXCEEDS_BALANCE`. |
+
+En Kiro el formato aparece en inglés (`WHEN ... THE SYSTEM SHALL ...`); en esta guía lo escribimos en español con las palabras clave en mayúsculas. Lo importante no es el idioma sino la disciplina: cada oración tiene un disparador o condición, un sistema y una respuesta observable. Si no puedes imaginar el test que la verifica, el requisito está mal escrito.
+
+<Quiz
+  question="¿Cuál de estos requisitos está mejor escrito para que un agente lo implemente y lo pruebe?"
+  options={[
+    { text: '“El sistema debe manejar bien los reembolsos que superen el saldo.”', why: '“Manejar bien” no es observable: el agente va a decidir qué significa, y su test va a verificar su propia interpretación.' },
+    { text: '“SI el monto solicitado excede el saldo reembolsable, ENTONCES el sistema DEBERÁ rechazar la solicitud con el error REFUND_EXCEEDS_BALANCE y no llamar al proveedor de pagos.”', correct: true, why: 'Exacto: patrón EARS de comportamiento no deseado, con disparador claro y respuesta observable (error concreto y ausencia de llamada). Se traduce directo a un test.' },
+    { text: '“Usar un CHECK constraint en Postgres para validar el saldo de reembolsos.”', why: 'Es una decisión de implementación (el cómo), no un requisito. Va en el plan, y quizás ni siquiera sea la mejor forma.' },
+  ]}
+/>
+
+## Un ejemplo completo: reembolsos parciales
+
+Veamos los tres artefactos para una feature real en el servicio de pagos que usamos en toda la unidad. Fíjate en lo que **no** está en cada uno.
+
+### spec.md: el qué y el por qué
+
+```markdown title="specs/014-reembolsos-parciales/spec.md"
+# Reembolsos parciales
+
+## Contexto
+Hoy soporte solo puede anular un pedido completo. Cuando llega un ítem
+dañado, anulan todo y piden al cliente que compre de nuevo: perdemos
+ventas y generamos tickets. Queremos reembolsar solo una parte.
+
+## Historias
+H1. Como agente de soporte quiero reembolsar parte de un pedido pagado
+    para compensar un ítem dañado sin anular la venta.
+H2. Como cliente quiero ver en mi pedido cuánto se me reembolsó.
+
+## Requisitos
+R1. CUANDO soporte solicita un reembolso parcial de un pedido pagado,
+    EL SISTEMA DEBERÁ reembolsar el monto indicado al medio de pago original.
+R2. SI el monto excede el saldo reembolsable (total pagado menos reembolsos
+    exitosos), ENTONCES EL SISTEMA DEBERÁ rechazar con REFUND_EXCEEDS_BALANCE
+    sin contactar al proveedor de pagos.
+R3. CUANDO llega una solicitud con una Idempotency-Key ya usada,
+    EL SISTEMA DEBERÁ devolver el resultado original sin reembolsar de nuevo.
+R4. MIENTRAS el proveedor no confirme, EL SISTEMA DEBERÁ mostrar el
+    reembolso como "pendiente" en el detalle del pedido.
+R5. SI el proveedor rechaza el reembolso, ENTONCES EL SISTEMA DEBERÁ marcarlo
+    como fallido, conservar el saldo reembolsable y notificar a soporte.
+
+## Fuera de alcance
+- Reembolsar a un medio de pago distinto del original.
+- Reembolsos iniciados por el cliente.
+
+## Preguntas abiertas
+- [RESUELTA] ¿Se reembolsa el envío? Sí, cuenta dentro del total pagado.
+- [ABIERTA] ¿Límite de reembolsos por pedido? Producto decide antes de T6.
+
+## Criterios de éxito
+- Soporte deja de anular pedidos completos por ítems dañados (medir en tickets).
+```
+
+No hay endpoints, tablas ni librerías. Hay requisitos numerados que se pueden citar, un alcance explícito y las preguntas abiertas marcadas en lugar de adivinadas.
+
+### plan.md: el cómo, en este código
+
+```markdown title="specs/014-reembolsos-parciales/plan.md"
+# Plan técnico
+
+## Enfoque
+- Nuevo agregado Refund en src/payments/refunds/ (sigue el patrón de
+  src/payments/captures/, no el de src/legacy/).
+- Endpoint: POST /orders/:id/refunds { amountCents, reason }
+  con header Idempotency-Key obligatorio.
+- Saldo reembolsable = order.totalCents - sum(refunds con status=succeeded).
+- PaymentGateway.refund() ya existe pero solo acepta reembolsos totales:
+  se extiende con un parámetro amountCents.
+- Confirmación asíncrona: el proveedor avisa por webhook (ya tenemos
+  /webhooks/psp); se agrega el evento refund.updated.
+
+## Modelo de datos
+refunds(id, order_id FK, amount_cents int, status enum(pending, succeeded,
+        failed), reason text, idempotency_key text UNIQUE, created_at)
+
+## Alternativas descartadas
+- Guardar reembolsos como columna en orders: no soporta varios reembolsos.
+- Reembolso síncrono esperando al proveedor: su p99 supera los 8 s.
+
+## Riesgos
+- Carrera entre dos reembolsos simultáneos del mismo pedido: lock por
+  order_id (SELECT ... FOR UPDATE) al calcular el saldo.
+
+## Chequeo de constitución
+Test primero ✔ · centavos ✔ · idempotencia ✔ · sin dependencias nuevas ✔
+```
+
+El plan sí habla de tablas y endpoints, pero sobre todo **ancla la feature en el código existente**: qué patrón seguir, qué ya existe, qué se descartó y por qué. Esa sección de alternativas descartadas es la que evita que el agente "redescubra" la peor opción a mitad de la implementación.
+
+### tasks.md: pasos chicos y verificables
+
+```markdown title="specs/014-reembolsos-parciales/tasks.md"
+# Tareas
+
+## Fase 1: base
+- [ ] T1  Migración: tabla refunds con índice único en idempotency_key  (R1, R3)
+- [ ] T2  Test (rojo): saldo reembolsable con reembolsos previos         (R2)
+- [ ] T3  Refund.create(): validación de saldo con lock por pedido       (R1, R2)
+
+## Fase 2: integración (T4 y T5 son paralelizables: no comparten archivos)
+- [ ] T4  [P] Test + implementación de idempotencia                      (R3)
+- [ ] T5  [P] PaymentGateway.refund(paymentId, amountCents)              (R1)
+
+## Fase 3: superficie
+- [ ] T6  Endpoint POST /orders/:id/refunds + validación de entrada      (R1-R3)
+- [ ] T7  Webhook refund.updated: pending → succeeded | failed           (R4, R5)
+- [ ] T8  Detalle del pedido muestra reembolsos y su estado              (R4)
+
+## Fase 4: verificación
+- [ ] T9  Test e2e contra el sandbox del proveedor                       (R1, R5)
+- [ ] T10 Revisión: cada R tiene al menos un test que lo cubre
+
+Regla: no marcar [x] sin tests en verde. Un commit por tarea.
+```
+
+Cada tarea cabe en una sesión corta, tiene su test, cita los requisitos que cubre y declara qué se puede paralelizar. Con esto puedes darle al agente "implementa T3" y revisar un diff pequeño, o lanzar T4 y T5 en dos worktrees a la vez.
+
+## SDD liviano: sin herramientas especiales
+
+No necesitas Spec Kit ni Kiro para aprovechar la idea. El flujo mínimo que recomiendan las guías de Claude Code es: **que el agente te entreviste, que escriba la spec, y que otra sesión limpia la implemente**.
+
+<Steps>
+<Step title="Entrevista">
+
+```text
+Quiero agregar reembolsos parciales al servicio de pagos.
+Antes de escribir código, entrevístame: hazme preguntas de a una sobre
+casos borde, errores, idempotencia y lo que quede fuera de alcance.
+Cuando tengas suficiente, escribe specs/reembolsos.md con requisitos
+numerados (formato EARS), fuera de alcance y preguntas abiertas.
+No implementes nada.
+```
+
+</Step>
+<Step title="Revisión">
+
+Lee la spec con calma. Corrige requisitos, resuelve preguntas abiertas, recorta alcance. Es el paso que más valor aporta y el que más tentación hay de saltar.
+
+</Step>
+<Step title="Plan en modo planificación">
+
+En una sesión nueva, en modo plan (solo lectura): "Lee specs/reembolsos.md y el código relevante. Propón un plan y una lista de tareas en el mismo archivo."
+
+</Step>
+<Step title="Implementación por tareas">
+
+Sesión limpia por tarea o por fase: "Implementa T1–T3 de specs/reembolsos.md. Test primero. Marca cada tarea al terminar."
+
+</Step>
+<Step title="Revisión contra la spec">
+
+Un revisor que no vio la implementación (un subagente o una sesión aparte): "Revisa el diff contra specs/reembolsos.md: ¿cada requisito está implementado y tiene test? Reporta huecos de corrección, ignora estilo."
+
+</Step>
+</Steps>
+
+La sesión limpia para implementar no es un capricho: la conversación de la entrevista está llena de idas y vueltas que ya no importan. La spec es el resumen destilado; empezar desde ella es ingeniería de contexto aplicada.
+
+## Cuándo SDD es demasiado
+
+SDD tiene críticos serios, y sus críticas son útiles para saber cuándo no usarlo. Böckeler reporta, entre otras cosas:
+
+- **Un tamaño no sirve para todo.** Usando Kiro para un bug pequeño obtuvo cuatro historias de usuario con dieciséis criterios de aceptación. Spec Kit le resultó pesado para una feature mediana en un código existente.
+- **Sobrecarga de revisión.** Spec Kit generó muchos archivos Markdown repetitivos; su conclusión fue que prefería revisar código antes que todos esos documentos.
+- **Falsa sensación de control.** Los agentes igual ignoraban instrucciones (duplicaban clases existentes) o aplicaban la constitución de más. Una spec no garantiza obediencia.
+- **El fantasma del MDD.** Spec-as-source puede combinar la rigidez del *model-driven development* con el no determinismo de los LLM: la misma spec puede generar código distinto cada vez.
+
+Ninguna de estas críticas dice "no especifiques". Dicen: **ajusta el peso del proceso al tamaño y la ambigüedad del problema**.
+
+| Situación | Recomendación |
+| --- | --- |
+| Bug con test que lo reproduce | Sin spec. El test *es* la spec. |
+| Cambio chico y claro (renombrar, ajustar un texto) | Sin spec. Un buen prompt alcanza. |
+| Feature mediana en código existente | Spec liviana de una pantalla + plan en modo plan. |
+| Feature grande, varias sesiones o varios agentes | SDD completo: spec, plan, tareas, revisión por fases. |
+| Agente en segundo plano o loop autónomo | Spec y tareas obligatorias: es lo único que el agente tiene para saber qué es "terminado". |
+| Exploración o prototipo descartable | Sin spec. Itera rápido y tira el código. |
+
+<Callout type="warn" title="El antipatrón del Markdown que nadie lee">
+
+Si tu equipo genera `spec.md`, `plan.md` y `tasks.md` para cada cambio y los aprueba sin leerlos, tienes el costo de SDD sin ninguno de sus beneficios, más una falsa sensación de rigor. Mejor una spec de diez líneas que alguien discutió que diez páginas generadas que nadie abrió.
+
+</Callout>
+
+<Quiz
+  question="Tienes un bug: el total del carrito se redondea mal con cupones del 33 %. Ya escribiste un test que lo reproduce. ¿Cuánto SDD conviene?"
+  options={[
+    { text: 'El flujo completo: constitución, spec con EARS, plan, tareas y análisis de consistencia.', why: 'Es exactamente el caso de “un tamaño no sirve para todo”: el proceso costaría más que el arreglo y no agregaría información.' },
+    { text: 'Ninguno formal: el test que falla ya es la especificación ejecutable; pídele al agente que lo haga pasar sin modificarlo.', correct: true, why: 'Exacto. Un test rojo es la spec más precisa posible: define el comportamiento esperado y verifica el resultado.' },
+    { text: 'Una spec-as-source, para que el código del carrito se regenere desde la spec.', why: 'Spec-as-source es el nivel más ambicioso y arriesgado; no tiene sentido para un bug puntual en un código existente.' },
+  ]}
+/>
+
+<Takeaways>
+
+- SDD separa el qué y el por qué (spec) del cómo (plan y código) para que el agente no tenga que adivinar.
+- Distingue los niveles: spec-first (lo más común), spec-anchored y spec-as-source (lo más ambicioso y arriesgado).
+- El valor está en las **puertas de revisión** entre fases, no en la cantidad de archivos.
+- Spec Kit: constitución → specify → clarify → plan → tasks → implement (→ converge). Kiro: requirements (EARS) → design → tasks, con specs de bugs y steering.
+- EARS vuelve cada requisito testeable: disparador o condición, sistema, respuesta observable.
+- Una spec buena es corta, numerada, con alcance explícito y preguntas abiertas marcadas.
+- Ajusta el peso al problema: un test rojo es la mejor spec para un bug; SDD completo para features grandes y agentes autónomos.
+
+</Takeaways>
+
+## Fuentes y lecturas
+
+- Birgitta Böckeler, [Understanding Spec-Driven-Development: Kiro, spec-kit, and Tessl](https://martinfowler.com/articles/exploring-gen-ai/sdd-3-tools.html) (martinfowler.com, octubre de 2025).
+- GitHub, [Spec Kit](https://github.com/github/spec-kit) y su [guía de inicio](https://github.com/github/spec-kit/blob/main/docs/quickstart.md).
+- Kiro, [Specs](https://kiro.dev/docs/specs/) y [Feature specs](https://kiro.dev/docs/specs/feature-specs/).
+- Alistair Mavin, [EARS: Easy Approach to Requirements Syntax](https://alistairmavin.com/ears/).
+- Anthropic, [Best practices for Claude Code](https://code.claude.com/docs/en/best-practices): entrevistar y revisar contra la spec.
+- Geoffrey Huntley, [Ralph Wiggum as a "software engineer"](https://ghuntley.com/ralph/): specs y planes como entrada de loops autónomos.

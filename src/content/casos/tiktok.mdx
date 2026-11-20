@@ -1,0 +1,375 @@
+import { RecommendationFunnel } from '../../components/widgets/casos-a/RecommendationFunnel'
+
+"Diseña TikTok." A primera vista parece un YouTube con videos más cortos. No lo es. En YouTube el usuario **busca** o **elige** qué ver; en TikTok el usuario desliza el dedo y el sistema decide, video tras video, qué viene después. El producto **es** el sistema de recomendación. Y como cada video dura segundos, cada usuario genera decenas de señales por minuto (vio hasta el final, deslizó a los 2 segundos, lo repitió, le dio like) que el sistema tiene que aprovechar mientras la sesión sigue abierta.
+
+Lo que hace difícil este caso son tres cosas que interactúan: un pipeline de **subida y procesamiento de video** que no puede tardar, un **embudo de recomendación** que elige unos pocos videos entre miles de millones en menos de lo que tarda un parpadeo, y una **entrega** que hace que deslizar se sienta instantáneo aunque el siguiente video no exista todavía en el teléfono. En la entrevista no te alcanzará el tiempo para todo: acuerda el alcance y elige dónde profundizar.
+
+<Sketch
+  width={640}
+  height={310}
+  caption="El recomendador como embudo: cada etapa recibe menos candidatos y puede gastar más cómputo en cada uno."
+  items={[
+    { type: 'text', x: 24, y: 30, text: 'el embudo: cada etapa más cara y más precisa', size: 20, tone: 'pencil' },
+    { type: 'path', d: 'M30 70 L610 130 L610 170 L30 230 Z', len: 1400 },
+    { type: 'path', d: 'M175 85 L175 215 M320 100 L320 200 M465 115 L465 185', len: 400, tone: 'pencil' },
+    { type: 'text', x: 102, y: 158, text: '~10⁹', size: 22, font: 'sign', anchor: 'middle', tone: 'line' },
+    { type: 'text', x: 247, y: 158, text: '~10³', size: 22, font: 'sign', anchor: 'middle', tone: 'line' },
+    { type: 'text', x: 392, y: 158, text: '~10²', size: 22, font: 'sign', anchor: 'middle', tone: 'line' },
+    { type: 'text', x: 537, y: 158, text: '10', size: 22, font: 'sign', anchor: 'middle', tone: 'line' },
+    { type: 'text', x: 102, y: 258, text: 'recuperación', size: 18, anchor: 'middle' },
+    { type: 'text', x: 247, y: 258, text: 'pre-ranking', size: 18, anchor: 'middle', with: true },
+    { type: 'text', x: 392, y: 258, text: 'ranking', size: 18, anchor: 'middle', with: true },
+    { type: 'text', x: 537, y: 258, text: 're-ranking', size: 18, anchor: 'middle', with: true },
+    { type: 'arrow', from: [40, 292], to: [600, 292], tone: 'pencil', label: 'cada vez más caro por candidato', labelAt: [320, 284] },
+  ]}
+/>
+
+## Requisitos
+
+**Funcionales**
+
+1. Subir un video corto (supongamos hasta 3 minutos) con descripción y sonido.
+2. Ver el feed **Para ti**: una secuencia infinita de videos personalizados, uno a pantalla completa.
+3. Interactuar: like, comentar, compartir, seguir. Estas acciones cambian el feed.
+4. Ver el feed **Siguiendo** (cuentas que sigues; es el caso de [Twitter](/casos/twitter) con videos).
+
+**No funcionales**
+
+- **Arranque instantáneo**: al deslizar, el siguiente video empieza a reproducirse en menos de 200 ms (supuesto). Esto exige *prefetch*.
+- **Personalización fresca**: lo que hiciste hace un minuto debería influir en lo que ves ahora.
+- **Publicación rápida**: un video subido está disponible en decenas de segundos a pocos minutos.
+- **Seguridad del contenido**: nada se recomienda sin pasar moderación.
+- **Escala global**: cientos de millones de usuarios diarios en todos los continentes.
+
+**Fuera de alcance**: transmisiones en vivo, mensajes directos, anuncios, búsqueda y analítica para creadores.
+
+## Estimaciones
+
+TikTok anunció en 2021 que superaba los 1.000 millones de usuarios mensuales. Para el ejercicio, supongamos **500 millones de usuarios activos diarios** que miran en promedio **60 minutos al día** y unos **100 videos** por día.
+
+| Magnitud | Cálculo | Resultado |
+|---|---|---|
+| Reproducciones | 500 M × 100 ÷ 86.400 | ~580.000 por segundo |
+| Espectadores simultáneos (promedio) | 500 M × 60 min ÷ 1.440 min | ~21 millones |
+| Ancho de banda de salida | 21 M × ~1,5 Mbps (720p) | **~30 Tbps** promedio |
+| Peticiones de feed | 50.000 M vistas ÷ 10 videos por lote | ~58.000/s promedio, ~150.000/s pico |
+| Eventos de interacción | ~4 eventos por vista | ~2,3 M eventos/s |
+| Videos nuevos | supongamos 10 M al día | ~115 por segundo |
+| Almacenamiento nuevo | 10 M × (30 MB original + ~30 MB en versiones) | ~600 TB por día |
+
+Tres conclusiones para decir en voz alta:
+
+1. **El ancho de banda manda.** Decenas de Tbps solo se sirven desde un [CDN](/system-design/piezas-especiales) con presencia en todas partes. El origen nunca debe ver la mayoría del tráfico.
+2. **La recomendación es un problema de cómputo.** 150.000 peticiones por segundo, cada una puntuando miles de candidatos con un modelo pesado, son millones de inferencias por segundo. Por eso existe el embudo.
+3. **Los eventos son el combustible.** Millones de eventos por segundo alimentan las features en tiempo real y el entrenamiento del modelo. Es un sistema de streaming tanto como uno de video.
+
+## Entidades y API
+
+Entidades principales: **Video** (metadatos y estado de procesamiento), **User**, **Interaction** (vista, like, comentario, compartido, seguir) y **FeedSession** (lo que ya se mostró en esta sesión).
+
+```http
+POST /v1/uploads
+{ "size_bytes": 31457280, "content_type": "video/mp4" }
+
+201 Created
+{ "upload_id": "up_92f1", "part_size": 8388608,
+  "parts": [ { "n": 1, "url": "https://upload.storage.ejemplo/…&signature=…" }, … ] }
+```
+
+```http
+POST /v1/videos
+{ "upload_id": "up_92f1", "caption": "Arepas en 30 segundos", "sound_id": "s_441" }
+
+202 Accepted
+{ "video_id": "v_7c21", "status": "processing" }
+```
+
+```http
+GET /v1/feed/for-you?count=10&cursor=c_88a
+
+200 OK
+{ "videos": [ { "id": "v_51ab", "manifest": "https://cdn.ejemplo/v_51ab/master.m3u8",
+                "cover": "https://cdn.ejemplo/v_51ab/cover.webp", "author": { … },
+                "stats": { "likes": 18200, "comments": 311 } }, … ],
+  "cursor": "c_88b" }
+```
+
+```http
+POST /v1/events
+{ "events": [
+  { "type": "view", "video_id": "v_51ab", "watched_ms": 14200, "duration_ms": 15000, "looped": true },
+  { "type": "swipe_away", "video_id": "v_51ac", "watched_ms": 1800 } ] }
+
+202 Accepted
+```
+
+Detalles que muestran criterio:
+
+- **Subida directa al almacenamiento** con URLs prefirmadas y por partes. Tus servidores de API nunca tocan los bytes del video, y una subida interrumpida en una red móvil se reanuda desde la última parte.
+- **`202 Accepted`** al crear el video: el procesamiento es asíncrono. La app consulta el estado o recibe una notificación cuando está publicado.
+- **Eventos en lote**: el cliente acumula eventos y los envía cada pocos segundos (y al pasar a segundo plano). Un evento por petición multiplicaría las conexiones.
+- **El feed entrega lotes de unos 10 videos** con el manifiesto de streaming, no el video. El cliente decide qué precargar.
+
+## Modelo de datos
+
+Hay datos de naturaleza muy distinta y cada uno pide un almacén distinto:
+
+```text
+videos            PK video_id → author_id, caption, sound_id, duration_ms, status,
+                                renditions[], created_at, moderation_state
+                  (KV o relacional particionado por video_id)
+
+objetos           s3://videos/{video_id}/original.mp4
+                  s3://videos/{video_id}/720p/seg_00001.m4s …  + master.m3u8 + cover.webp
+
+contadores        likes, vistas, comentarios por video (contadores particionados, ver Instagram)
+
+feature store     online: user_features:{user_id}, video_features:{video_id}  (KV en memoria, ms)
+                  offline: tablas columnares en el data lake para entrenamiento
+
+índice vectorial  embeddings de videos para búsqueda aproximada de vecinos (ANN)
+
+historial visto   seen:{user_id} → filtro de Bloom o conjunto reciente, para no repetir
+```
+
+Lo importante no es el nombre de cada base sino la separación: los metadatos del video son pocos y consultados por clave; los bytes viven en almacenamiento de objetos detrás de un CDN; las features para el modelo necesitan lecturas de un milisegundo y se actualizan en streaming; y el historial de vistos tiene que responder "¿ya vio esto?" para miles de candidatos por petición, lo que favorece un filtro de Bloom (un falso positivo solo esconde un video; nunca repite uno).
+
+## Diseño de alto nivel
+
+<FlowDiagram
+  caption="Dos flujos que se encuentran: la subida y publicación de un video, y la construcción del feed Para ti. Recorre los pasos."
+  nodes={[
+    { id: 'app', label: 'App', kind: 'mobile', x: 0, y: 1.3 },
+    { id: 'up', label: 'Upload API', kind: 'service', x: 1, y: 0 },
+    { id: 's3', label: 'Object storage', kind: 'storage', x: 2, y: 0, sub: 'originales y HLS' },
+    { id: 'tr', label: 'Procesamiento', kind: 'worker', x: 3, y: 0, sub: 'transcode + moderación' },
+    { id: 'cdn', label: 'CDN', kind: 'cdn', x: 4, y: 0.9, sub: 'segmentos de video' },
+    { id: 'feed', label: 'Feed service', kind: 'service', x: 1, y: 2.4 },
+    { id: 'rec', label: 'Recomendador', kind: 'brain', x: 2, y: 2.4, sub: 'embudo de 4 etapas' },
+    { id: 'ann', label: 'Índice ANN', kind: 'search', x: 3, y: 1.8, sub: 'embeddings' },
+    { id: 'fs', label: 'Feature store', kind: 'db', x: 3, y: 3, sub: 'online, en memoria' },
+    { id: 'ev', label: 'Kafka', kind: 'stream', x: 1, y: 3.6, sub: 'eventos' },
+    { id: 'ml', label: 'Entrenamiento', kind: 'workflow', x: 2, y: 3.6, sub: 'online, por minutos' },
+  ]}
+  edges={[
+    { from: 'app', to: 'up' },
+    { from: 'up', to: 's3' },
+    { from: 's3', to: 'tr', bidir: true },
+    { from: 'tr', to: 'ann', dashed: true },
+    { from: 'cdn', to: 's3', dashed: true, label: 'miss' },
+    { from: 'app', to: 'cdn' },
+    { from: 'app', to: 'feed' },
+    { from: 'feed', to: 'rec' },
+    { from: 'rec', to: 'ann' },
+    { from: 'rec', to: 'fs' },
+    { from: 'app', to: 'ev' },
+    { from: 'ev', to: 'ml' },
+    { from: 'ml', to: 'fs', dashed: true },
+  ]}
+  steps={[
+    {
+      title: 'Subir por partes',
+      body: <>La app pide una sesión de subida y envía el archivo en partes de 8 MB directo al almacenamiento de objetos con URLs prefirmadas. Si la red se corta, reanuda desde la última parte confirmada.</>,
+      active: ['app', 'up', 's3'],
+      flow: ['app-up', 'up-s3'],
+    },
+    {
+      title: 'Procesar',
+      body: <>Un evento de "subida completa" dispara el pipeline: validar, transcodificar a varias calidades en segmentos HLS, extraer portada, calcular la huella de audio, y pasar por moderación automática (y humana si hay dudas). El video queda en estado <code>in_review</code> hasta aprobarse.</>,
+      active: ['s3', 'tr'],
+      flow: ['s3-tr'],
+    },
+    {
+      title: 'Publicar',
+      body: <>Aprobado, se calcula su embedding y entra al índice de candidatos. Los videos nuevos reciben primero una audiencia pequeña de exploración; si retienen bien, el sistema los muestra a más gente.</>,
+      active: ['tr', 'ann'],
+      flow: ['tr-ann'],
+    },
+    {
+      title: 'Pedir el feed',
+      body: <>La app pide 10 videos más cuando le quedan pocos en cola. El Feed service llama al recomendador con el usuario y el contexto de la sesión (qué acaba de ver y cómo).</>,
+      active: ['app', 'feed', 'rec'],
+      flow: ['app-feed', 'feed-rec'],
+    },
+    {
+      title: 'Recuperar y rankear',
+      body: <>Recuperación: miles de candidatos desde varias fuentes (vecinos en el espacio de embeddings, creadores que sigues, tendencias locales). Ranking: un modelo predice ver completo, like, compartir y más para cada uno, con features leídas del feature store. Re-ranking: reglas de diversidad y filtros.</>,
+      active: ['rec', 'ann', 'fs'],
+      flow: ['rec-ann', 'rec-fs'],
+    },
+    {
+      title: 'Reproducir desde el borde',
+      body: <>La app recibe manifiestos, no videos. Pide los segmentos al PoP del CDN más cercano y precarga el inicio de los dos o tres siguientes. Un video popular casi nunca llega al origen.</>,
+      active: ['app', 'cdn'],
+      flow: ['app-cdn'],
+    },
+    {
+      title: 'Cerrar el ciclo',
+      body: <>Cada vista, deslizamiento y like viaja en lotes a Kafka. Un job de streaming actualiza las features de sesión en segundos, y el entrenamiento online ajusta el modelo y sincroniza parámetros con los servidores en cuestión de minutos.</>,
+      active: ['app', 'ev', 'ml', 'fs'],
+      flow: ['app-ev', 'ev-ml', 'ml-fs'],
+    },
+  ]}
+/>
+
+## Profundizaciones
+
+### 1. Subida y procesamiento: del archivo crudo al video publicable
+
+El pipeline de procesamiento es un **DAG de tareas** (lo desarrollo en detalle en el caso de [YouTube](/casos/youtube)). Para videos cortos, los pasos típicos son:
+
+1. **Validación**: formato, duración, que no esté corrupto.
+2. **Transcodificación** a una escalera de calidades (por ejemplo 360p, 540p, 720p, 1080p) en segmentos de 2 a 4 segundos para streaming adaptativo. Codecs más eficientes (H.265, AV1) reducen el ancho de banda a cambio de más cómputo al codificar y menos compatibilidad con dispositivos viejos, así que suele haber más de una versión.
+3. **Portada y miniaturas**, que el feed necesita antes que el video.
+4. **Huella de audio y video**, para asociar el sonido (los sonidos son una entidad de primera clase en TikTok) y detectar contenido con derechos de autor o duplicado.
+5. **Moderación**: modelos automáticos primero, revisión humana para los casos dudosos. El video no entra al sistema de recomendación hasta pasar.
+
+Dos decisiones con trade-off:
+
+- **¿Transcodificar todo de inmediato?** Puedes generar primero solo una o dos calidades (las más usadas) para publicar rápido, y producir el resto en segundo plano o solo si el video gana tracción. La mayoría de los videos recibe pocas vistas: codificar todo en todos los codecs para todos es tirar cómputo.
+- **¿Empujar al CDN o dejar que lo jale?** Lo normal es que el CDN jale del origen ante un *miss*. Para videos que el sistema va a recomendar masivamente (porque está en fase de expansión), conviene precalentar los PoPs de las regiones donde se va a mostrar.
+
+### 2. El embudo de recomendación
+
+No puedes pasar miles de millones de videos por un modelo pesado en cada petición. La solución universal, que usan YouTube, Instagram, X y TikTok, es un **embudo de etapas**, cada una más precisa y más cara que la anterior:
+
+1. **Recuperación (*candidate generation*)**: de miles de millones a unos miles. Varias fuentes en paralelo: búsqueda de vecinos aproximados (ANN) entre el embedding del usuario y los de los videos (modelo *two-tower*), videos similares a los que viste, creadores que sigues, tendencias de tu región, videos con el mismo sonido o hashtag, y un pool de contenido nuevo para exploración.
+2. **Pre-ranking**: un modelo ligero reduce los miles a unos cientos.
+3. **Ranking**: un modelo pesado *multi-tarea* predice, para cada candidato, varias probabilidades: ver completo, tiempo de visualización esperado, like, compartir, comentar, seguir. Un **modelo de valor** las combina en un solo puntaje con pesos.
+4. **Re-ranking**: reglas sobre la lista final. Diversidad, filtros de seguridad, contenido ya visto, inserción de exploración.
+
+Meta describió exactamente esta estructura para Instagram Explore en 2023, incluida la fórmula del modelo de valor: un valor esperado igual a una suma ponderada de probabilidades predichas, donde ajustar los pesos cambia qué métricas de engagement priorizas.
+
+<RecommendationFunnel />
+
+Prueba esto en el simulador: sube el peso de **ver completo** al máximo y baja los demás a cero, con el re-ranking apagado. Verás tres videos del mismo creador de cocina seguidos. El modelo tiene razón en que los vas a ver completos; la sesión, igual, se vuelve aburrida. TikTok explica en su propio artículo sobre el feed que en general evita mostrar dos videos seguidos del mismo creador o con el mismo sonido, y que mezcla a propósito contenido fuera de tus intereses expresados.
+
+El modelo de valor y la regla de diversidad caben en pocas líneas. Esta versión greedy toma, en cada posición, el candidato de mayor valor que no repita creador ni sonido respecto del anterior; es O(k · n) para k posiciones y n candidatos, suficiente para unos cientos de candidatos. Los pesos son supuestos: elegirlos es una decisión de producto.
+
+```java title="ReRanker.java"
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
+
+record Candidate(String videoId, String creatorId, String soundId,
+                 double pFinish, double pLike, double pShare) {}
+
+final class ReRanker {
+    // pesos del modelo de valor (supuestos): cambiarlos cambia qué métrica priorizas
+    static final double W_FINISH = 1.0, W_LIKE = 2.0, W_SHARE = 4.0;
+
+    static double value(Candidate c) {
+        return W_FINISH * c.pFinish() + W_LIKE * c.pLike() + W_SHARE * c.pShare();
+    }
+
+    /** Elige el mejor candidato que no repita creador ni sonido respecto del anterior. */
+    static List<Candidate> rerank(List<Candidate> ranked, int count) {
+        List<Candidate> pool = new ArrayList<>(ranked);
+        pool.sort(Comparator.comparingDouble(ReRanker::value).reversed());
+        List<Candidate> feed = new ArrayList<>();
+        while (feed.size() < count && !pool.isEmpty()) {
+            Candidate prev = feed.isEmpty() ? null : feed.get(feed.size() - 1);
+            int pick = 0; // si ninguno cumple la regla, va el de mayor valor
+            for (int i = 0; i < pool.size(); i++) {
+                Candidate c = pool.get(i);
+                if (prev == null || (!c.creatorId().equals(prev.creatorId())
+                        && !c.soundId().equals(prev.soundId()))) {
+                    pick = i;
+                    break;
+                }
+            }
+            feed.add(pool.remove(pick));
+        }
+        return feed;
+    }
+}
+```
+
+¿Qué señales pesan más? Según TikTok, las señales fuertes son las de comportamiento, como **terminar de ver un video largo**, y las débiles son las de contexto (país, idioma, tipo de dispositivo). El número de seguidores del creador **no** es un factor directo, lo que permite que un video de una cuenta nueva se vuelva viral.
+
+<Quiz
+  question="¿Por qué el recomendador usa una etapa de recuperación barata antes del modelo de ranking, en lugar de rankear todo el catálogo?"
+  options={[
+    { text: 'Porque el modelo de ranking es menos preciso que la recuperación.', why: 'Es al revés: el ranking es la etapa más precisa. Por eso es cara.' },
+    { text: 'Porque puntuar miles de millones de videos con un modelo pesado en cada petición es computacionalmente imposible dentro de unos cientos de milisegundos.', correct: true, why: 'Cada etapa recorta los candidatos en uno o dos órdenes de magnitud para que la siguiente, más cara, pueda permitirse más features y un modelo más grande.' },
+    { text: 'Porque la recuperación garantiza diversidad en el feed.', why: 'La diversidad se aplica sobre todo en el re-ranking; la recuperación se ocupa de cobertura y relevancia gruesa.' },
+  ]}
+/>
+
+<Callout type="example" title="Un presupuesto de latencia razonable">
+
+Supongamos 250 ms para responder el feed: 10 ms para leer el contexto del usuario, 40 ms para la recuperación (las fuentes en paralelo), 20 ms de pre-ranking, 120 ms de ranking en GPU sobre unos cientos de candidatos, 10 ms de re-ranking y el resto de margen de red. Como el cliente pide el siguiente lote cuando todavía le quedan videos, esta latencia queda oculta para el usuario.
+
+</Callout>
+
+### 3. Aprender en tiempo real
+
+La sensación de que TikTok "te entiende" en pocos minutos viene en buena parte de la **frescura**, no solo de la calidad del modelo. Hay dos ciclos de distinta velocidad:
+
+- **Features de sesión, en segundos.** Un job de streaming mantiene "los últimos N videos que viste y cuánto de cada uno", temas y creadores recientes. El ranking los lee del feature store en la siguiente petición. Esto no requiere reentrenar nada: el modelo ya sabe usar esa información.
+- **Parámetros del modelo, en minutos.** ByteDance publicó en 2022 el paper de **Monolith**, su sistema de recomendación con entrenamiento en tiempo real. Sus ideas centrales: una **tabla de embeddings sin colisiones** (basada en un *cuckoo hashmap*, en lugar de compartir posiciones vía hashing) con embeddings que **expiran** y filtrado por frecuencia para controlar la memoria; **entrenamiento online** que consume el stream de interacciones; y sincronización frecuente de parámetros con los servidores de inferencia. El paper concluye que el intervalo de sincronización conviene que sea lo más corto posible, y que se puede sacrificar algo de confiabilidad del sistema a cambio de aprender en tiempo real.
+
+**Arranque en frío.** Para un **usuario nuevo**, TikTok describe dos caminos: elegir categorías de interés, que siembran un primer feed, o, si se salta ese paso, un feed general de videos populares; las primeras interacciones empiezan a personalizar casi de inmediato. Para un **video nuevo**, el problema es el inverso: no hay señales de engagement. La solución general es reservar una parte del tráfico para **exploración**: mostrar videos nuevos a audiencias pequeñas, medir su retención, y expandir los que funcionan. Es un problema de tipo *multi-armed bandit*: explotar lo que sabes que funciona vs explorar para descubrir.
+
+### 4. Que deslizar se sienta instantáneo
+
+El requisito de arranque en menos de 200 ms no lo cumple ningún backend por sí solo: lo cumple el **cliente**.
+
+- **Cola local de videos.** La app mantiene, digamos, los próximos 5 a 10 videos con sus metadatos. Cuando quedan 3, pide el siguiente lote, que ya incluye las señales de los últimos minutos.
+- **Precarga parcial.** Precargar videos completos desperdicia ancho de banda (muchos se descartan a los 2 segundos). Lo razonable es precargar solo el **primer segmento** (1 a 2 segundos) de los dos o tres siguientes, en una calidad modesta, y subir de calidad con el [streaming adaptativo](/casos/youtube) una vez que el usuario se queda.
+- **Portada inmediata.** La portada se muestra mientras arranca el primer fotograma, así nunca hay pantalla negra.
+
+<Quiz
+  question="Un compañero propone precargar completos los próximos 5 videos del feed para que nunca haya espera. ¿Cuál es el problema principal?"
+  options={[
+    { text: 'Ninguno: más precarga siempre mejora la experiencia.', why: 'Mejora la espera, pero a un costo que se multiplica por cientos de millones de usuarios.' },
+    { text: 'Desperdicia ancho de banda y datos móviles en videos que el usuario descartará en 2 segundos; basta con precargar el inicio de los siguientes.', correct: true, why: 'Una gran fracción de los videos se desliza rápido. Precargar el primer segmento oculta la latencia de arranque; el resto se descarga solo si el usuario se queda.' },
+    { text: 'El CDN no permite descargar varios videos en paralelo.', why: 'Los CDN sirven peticiones en paralelo sin problema; la restricción es de costo y de datos del usuario.' },
+  ]}
+/>
+
+## Cuellos de botella y trade-offs
+
+| Tensión | Trade-off |
+|---|---|
+| Frescura vs estabilidad | Sincronizar el modelo cada pocos minutos aprende rápido pero propaga más rápido un modelo defectuoso; necesitas validación automática y rollback |
+| Engagement inmediato vs salud de la sesión | Optimizar solo "ver completo" produce feeds repetitivos; el re-ranking sacrifica puntaje a cambio de diversidad |
+| Explotar vs explorar | Más exploración descubre creadores y contenido nuevo, pero cada video de exploración es una apuesta con menor retención esperada |
+| Calidad de video vs costo de salida | Codecs eficientes bajan decenas de Tbps, pero cuestan cómputo al codificar y compatibilidad |
+| Precarga vs datos móviles | Más precarga, menos espera, más desperdicio |
+| Moderación previa vs rapidez | Moderar todo antes de publicar retrasa la publicación; publicar antes de moderar es inaceptable para la recomendación masiva |
+
+Riesgos operativos que suman puntos: el **pipeline de eventos** atrasado degrada silenciosamente la personalización (monitorea el retraso del consumidor); el **feature store** está en la ruta crítica de cada petición de feed (réplicas y caché local); y los **videos virales** concentran tráfico en pocos objetos, lo que favorece al CDN pero castiga al origen si el caché se enfría.
+
+## Qué espera el entrevistador
+
+<Callout type="interview" title="Por nivel">
+
+**Mid-level.** Subida directa al almacenamiento, procesamiento asíncrono, CDN para servir video, y un feed que llama a un servicio de recomendación aunque sea una caja negra con una explicación general (candidatos y luego ranking).
+
+**Senior.** El embudo con sus etapas y por qué existe, señales y modelo de valor, re-ranking con diversidad, feature store y eventos en streaming, prefetch en el cliente, estimaciones de ancho de banda que justifiquen el CDN, estados de procesamiento y moderación.
+
+**Staff.** Ciclos de aprendizaje en tiempo real y sus riesgos (validación de modelos, rollback), exploración de contenido nuevo, costos de transcodificación selectiva y de salida, distribución regional (datos y modelos por región, cumplimiento legal), métricas de salud a largo plazo frente a engagement inmediato.
+
+</Callout>
+
+<Takeaways>
+
+- En TikTok el producto **es** el recomendador: el usuario no elige, desliza.
+- El **embudo** (recuperación, pre-ranking, ranking, re-ranking) existe porque el cómputo no alcanza para puntuar todo el catálogo; cada etapa recorta uno o dos órdenes de magnitud.
+- El **modelo de valor** combina probabilidades predichas con pesos; el **re-ranking** sacrifica puntaje para lograr diversidad y exploración.
+- La personalización fresca sale de **features de sesión en streaming** (segundos) y **entrenamiento online** (minutos), como describe el paper de Monolith.
+- Subida **directa al almacenamiento**, procesamiento como **DAG asíncrono**, nada se recomienda sin **moderación**.
+- El arranque instantáneo lo logra el **cliente**: cola local, precarga del primer segmento y portada inmediata, con un CDN sirviendo decenas de Tbps.
+
+</Takeaways>
+
+## Fuentes y lecturas
+
+- TikTok Newsroom, [How TikTok recommends videos #ForYou](https://newsroom.tiktok.com/en-us/how-tiktok-recommends-videos-for-you) (2020).
+- Zhuoran Liu y otros (ByteDance), [Monolith: Real Time Recommendation System With Collisionless Embedding Table](https://arxiv.org/abs/2209.07663), ORSUM @ RecSys 2022.
+- Meta Engineering, [Scaling the Instagram Explore recommendations system](https://engineering.fb.com/2023/08/09/ml-applications/scaling-instagram-explore-recommendations-system/) (2023).
+- Paul Covington, Jay Adams, Emre Sargin, [Deep Neural Networks for YouTube Recommendations](https://research.google/pubs/deep-neural-networks-for-youtube-recommendations/), RecSys 2016.
+- Xinyang Yi y otros, [Sampling-Bias-Corrected Neural Modeling for Large Corpus Item Recommendations](https://research.google/pubs/sampling-bias-corrected-neural-modeling-for-large-corpus-item-recommendations/), RecSys 2019 (modelos two-tower).
+- Eugene Yan, [System Design for Recommendations and Search](https://eugeneyan.com/writing/system-design-for-discovery/).
+- TikTok Newsroom, [Thanks a billion!](https://newsroom.tiktok.com/en-us/1-billion-people-on-tiktok) (2021).

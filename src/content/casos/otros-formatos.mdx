@@ -1,0 +1,340 @@
+import { ReviewHunt } from '../../components/widgets/entrevistas/ReviewHunt'
+
+No todas las rondas técnicas son un problema de LeetCode en una pizarra. Cada vez más empresas usan formatos que se parecen al trabajo real: una tarea para hacer en casa, revisar el pull request de alguien, encontrar un bug en un repositorio que nunca viste, programar en pareja con el entrevistador o, desde hace poco, resolver un problema con un asistente de IA al lado. Para muchos desarrolladores son formatos más cómodos, porque se parecen a lo que hacen todos los días. Pero tienen sus propias reglas, y quien llega sin conocerlas pierde puntos por cosas que no tienen nada que ver con su capacidad técnica.
+
+Este tema repasa cada formato: qué evalúan, cómo prepararte y los errores que más se repiten. El hilo común es que en todos ellos **la comunicación pesa tanto como el código**: el README de tu take-home, el tono de tus comentarios de review, cómo narras lo que haces mientras depuras.
+
+<Sketch
+  width={640}
+  height={290}
+  caption="En los formatos que se parecen al trabajo real, lo que explicas pesa tanto como lo que programas."
+  items={[
+    { type: 'text', x: 24, y: 34, text: 'en estos formatos pesan igual', size: 20, tone: 'pencil' },
+    { type: 'path', d: 'M300 252 L340 252 L320 214 Z', len: 120 },
+    { type: 'line', points: [[100, 212], [540, 212]] },
+    { type: 'line', points: [[250, 254], [390, 254]], with: true },
+    { type: 'box', x: 60, y: 146, w: 170, h: 60, label: 'código' },
+    { type: 'text', x: 60, y: 120, text: 'que funcione y se lea', size: 19, tone: 'pencil' },
+    { type: 'box', x: 410, y: 146, w: 170, h: 60, label: 'comunicación', fill: true, tone: 'line' },
+    { type: 'text', x: 410, y: 62, text: ['README', 'comentarios de review', 'narrar en voz alta'], size: 19, tone: 'pencil' },
+    { type: 'text', x: 320, y: 186, text: '=', size: 30, anchor: 'middle', tone: 'line' },
+  ]}
+/>
+
+| Formato | Duración típica | Qué evalúa sobre todo |
+| --- | --- | --- |
+| Take-home | De 2 a 8 horas, en tu casa | Alcance, calidad, tests, criterio documentado |
+| Code review | 45 a 60 minutos | Detectar problemas, priorizar, comunicar con tacto |
+| Debugging / comprensión de código | 45 a 60 minutos | Orientarte rápido, hipótesis, método |
+| Pair programming | 60 a 90 minutos | Colaboración, cómo recibes ideas, cómo piensas en voz alta |
+| Ronda de proyecto | 45 a 60 minutos | Profundidad real sobre algo que construiste |
+| Ronda con asistente de IA | Alrededor de 60 minutos | Especificar, validar y entender lo que genera la IA |
+
+Las duraciones son orientativas: varían mucho entre empresas, así que pregúntale al reclutador por el formato exacto de cada ronda. Es una pregunta normal y la respuesta te ahorra sorpresas.
+
+## Take-home: la tarea para la casa
+
+Te dan un enunciado ("una API para gestionar reservas de salas con estos endpoints") y unos días para entregarlo. Después, casi siempre, hay una conversación donde lo defiendes. Es el formato donde más candidatos se hunden por exceso, no por falta.
+
+### Acota el alcance antes de escribir código
+
+El enunciado suele decir algo como "debería llevarte unas 4 horas". Tómalo en serio. Quien revisa ve decenas de entregas y valora el **criterio**: qué decidiste hacer, qué dejaste fuera y por qué. Una entrega de 4 horas con un núcleo sólido, tests y un README claro gana a una de 20 horas con autenticación, Docker, Kubernetes y una interfaz que nadie pidió.
+
+<Sketch
+  width={640}
+  height={270}
+  caption="Acotar el alcance: lo que entra en las horas pedidas va adentro; lo demás va a la lista de qué harías con más tiempo."
+  items={[
+    { type: 'text', x: 24, y: 34, text: 'take-home de 4 horas', size: 22 },
+    { type: 'circle', x: 190, y: 150, rx: 160, ry: 92, tone: 'line', fill: true },
+    { type: 'text', x: 190, y: 122, text: 'núcleo que funciona', size: 20, anchor: 'middle' },
+    { type: 'text', x: 190, y: 158, text: 'tests de la lógica', size: 20, anchor: 'middle' },
+    { type: 'text', x: 190, y: 194, text: 'README claro', size: 20, anchor: 'middle' },
+    { type: 'cross', x: 392, y: 86, size: 18 },
+    { type: 'text', x: 412, y: 94, text: 'Kubernetes', size: 20, tone: 'muted', with: true },
+    { type: 'cross', x: 392, y: 136, size: 18 },
+    { type: 'text', x: 412, y: 144, text: 'login no pedido', size: 20, tone: 'muted', with: true },
+    { type: 'cross', x: 392, y: 186, size: 18 },
+    { type: 'text', x: 412, y: 194, text: 'UI pulida', size: 20, tone: 'muted', with: true },
+    { type: 'arrow', from: [470, 210], to: [470, 236], tone: 'pencil', head: 'end' },
+    { type: 'text', x: 390, y: 260, text: '"qué haría con más tiempo"', size: 18, tone: 'pencil' },
+  ]}
+/>
+
+Un plan que funciona:
+
+1. **Lee el enunciado dos veces** y anota los requisitos explícitos. Si algo es ambiguo, pregunta por correo; si no hay respuesta, decide, y deja la decisión escrita.
+2. **Haz primero el camino feliz de punta a punta**, aunque sea feo. Una entrega incompleta pero que funciona vale más que tres partes pulidas que no se conectan.
+3. **Después, tests** sobre lo que tiene lógica: las reglas de negocio, los casos borde que el enunciado sugiere (sala ocupada, horario inválido).
+4. **Al final, pulido**: nombres, manejo de errores, README.
+5. **Lo que no te dio el tiempo, va a una lista** en el README, no a medio implementar en el código.
+
+### El README es la mitad de la entrega
+
+Quien revisa puede tener diez minutos para tu código. El README es lo que lee primero, y lo primero que tiene que lograr es que **tu proyecto corra en un minuto**. Recién después vienen las decisiones:
+
+```text
+# Reservas de salas
+
+## Cómo correrlo
+npm install && npm test && npm start     # requiere Node 22; usa SQLite, sin dependencias externas
+
+## Qué hice
+- POST /reservas, GET /salas/:id/disponibilidad, DELETE /reservas/:id
+- Validación de solapamiento con una restricción en la base, no solo en el código
+
+## Decisiones y trade-offs
+- SQLite en vez de Postgres: cero configuración para quien revisa. El acceso a datos está detrás
+  de un repositorio, así que cambiarlo es una clase.
+- Horarios en UTC en la base; la zona horaria se convierte solo en la respuesta.
+- Sin autenticación: el enunciado no la pedía. Asumo un header X-User-Id.
+
+## Qué haría con más tiempo
+- Idempotencia en POST /reservas (Idempotency-Key)
+- Paginación en el listado
+- Tests de carga del chequeo de solapamiento
+
+## Tiempo invertido: ~4,5 horas
+```
+
+La sección de trade-offs es donde se nota el nivel. "Usé SQLite" no dice nada; "usé SQLite para que lo corras sin configurar nada, y el repositorio permite cambiarlo" muestra que pensaste en quien revisa y en la evolución del código.
+
+### Si te piden demasiadas horas
+
+Algunas empresas piden tareas que, honestamente, son una semana de trabajo sin pago. Tienes opciones razonables:
+
+- **Preguntar** cuántas horas esperan y qué priorizan. A veces la respuesta es "no esperamos que lo termines todo".
+- **Acotar tú** y decirlo: "Le dediqué 5 horas y prioricé X e Y; en el README explico qué haría con el resto".
+- **Proponer una alternativa**: un repositorio tuyo existente que muestre lo mismo, o una sesión de pair programming.
+- **Declinar**, si el costo no se justifica para ti. Es una decisión legítima, y también una señal sobre cómo la empresa valora el tiempo de las personas.
+
+### La conversación posterior
+
+Casi siempre hay una ronda donde recorres tu entrega con uno o dos ingenieros. Es tan importante como el código. Prepárate para: explicar la estructura en dos minutos, justificar cada decisión del README, responder "¿qué pasa si esto recibe mil peticiones por segundo?" y, a veces, **extender el código en vivo** ("agrega un endpoint para cancelar"). Si escribiste el código tú, esto es fácil. Si lo copiaste o lo generaste sin entenderlo, aquí se nota.
+
+<Callout type="interview">
+
+En la defensa de un take-home, lo que más suma es **reconocer las debilidades de tu propia entrega antes de que te las señalen**: "el chequeo de disponibilidad tiene una carrera si llegan dos peticiones a la vez; lo resolví con una restricción en la base, pero no lo testeé con concurrencia real". Eso muestra criterio, y desarma la pregunta incómoda.
+
+</Callout>
+
+## Code review como entrevista
+
+Te dan un pull request (a veces en GitHub, a veces en un documento compartido) y tienes que revisarlo como lo harías con un compañero. Algunas empresas lo hacen en vivo, comentando en voz alta; otras te dan un tiempo para escribir los comentarios y después los discuten contigo. Evalúa algo que los algoritmos no miden: si sabes **leer código ajeno con ojo crítico** y **comunicar problemas sin generar conflicto**.
+
+### Cómo recorrer el PR
+
+1. **Lee la descripción y entiende el objetivo** antes de mirar el código. Si no hay descripción, pregunta: "¿qué problema resuelve este cambio?". Muchos candidatos se lanzan a buscar errores sin saber qué debía hacer el código.
+2. **Primera pasada completa, sin comentar**: entiende la forma general. ¿Dónde entra la petición, qué toca, qué devuelve?
+3. **Segunda pasada con una lista mental**, de lo grave a lo menor: corrección (casos borde, carreras, unidades), seguridad (entradas, inyección, permisos, secretos), datos y dinero (idempotencia, transacciones), rendimiento (consultas en bucles), tests (¿fallarían si el código estuviera mal?), legibilidad.
+4. **Prioriza al comentar**: separa lo bloqueante de lo importante y de los detalles. Diez comentarios de estilo y ninguno sobre la inyección SQL es la peor señal posible.
+
+Practica con este PR. Tiene siete problemas plantados de distinta gravedad, y está en dos versiones: un controlador de Spring con `JdbcTemplate` (Java) y un handler al estilo de Express (TypeScript). Los problemas son los mismos; cambian los detalles de cada lenguaje:
+
+<ReviewHunt />
+
+### Cómo redactar los comentarios
+
+Un buen comentario de review tiene tres partes: **qué problema ves, por qué importa y qué propones**, con la severidad por delante.
+
+<Sketch
+  width={640}
+  height={220}
+  caption="La anatomía de un comentario de review: la severidad primero, luego el problema, por qué importa y qué propones."
+  items={[
+    { type: 'highlight', x: 16, y: 14, w: 122, h: 30, tone: 'bad' },
+    { type: 'text', x: 22, y: 36, text: 'bloqueante:', size: 20, tone: 'bad', with: true },
+    { type: 'text', x: 150, y: 36, text: 'la severidad, primero', size: 18, tone: 'pencil' },
+    { type: 'box', x: 20, y: 62, w: 180, h: 60, label: 'el problema' },
+    { type: 'arrow', from: [204, 92], to: [228, 92] },
+    { type: 'box', x: 232, y: 62, w: 180, h: 60, label: 'por qué importa' },
+    { type: 'arrow', from: [416, 92], to: [440, 92] },
+    { type: 'box', x: 444, y: 62, w: 180, h: 60, label: 'la propuesta', fill: true, tone: 'line' },
+    { type: 'text', x: 110, y: 156, text: 'salaId va al SQL', size: 19, anchor: 'middle', tone: 'pencil' },
+    { type: 'text', x: 322, y: 156, text: 'permite inyección', size: 19, anchor: 'middle', tone: 'pencil' },
+    { type: 'text', x: 534, y: 156, text: 'usa un parámetro', size: 19, anchor: 'middle', tone: 'pencil' },
+    { type: 'text', x: 20, y: 200, text: 'sobre el código, nunca sobre la persona', size: 19, tone: 'line' },
+  ]}
+/>
+
+Compara:
+
+<Compare>
+<Option title="Comentario débil">
+
+"Esto está mal."
+
+"¿Por qué no usaste parámetros?"
+
+"No me gusta este nombre."
+
+</Option>
+<Option title="Comentario fuerte">
+
+"**Bloqueante:** salaId viene del body y se interpola en el SQL, así que permite inyección. Propongo usar un parámetro como en la consulta de abajo y validar el body con un schema."
+
+"**nit:** data2 no dice qué es; ¿monto?"
+
+</Option>
+</Compare>
+
+Otras reglas que el entrevistador nota:
+
+- **Comenta el código, no a la persona.** "Esta función hace tres cosas" en lugar de "hiciste una función enorme".
+- **Pregunta cuando no estás seguro.** "¿Este endpoint puede recibir reintentos del cliente? Si sí, cobraríamos dos veces" es mejor que afirmar algo que quizá está resuelto en otra capa.
+- **Marca la severidad.** Bloqueante, importante, sugerencia, nit. Las etiquetas de Conventional Comments (`issue`, `suggestion`, `question`, `nitpick`, `praise`) son una convención útil.
+- **Reconoce lo bueno.** Un "buen uso de parámetros en esta consulta" no es adulación: le dice al autor qué mantener.
+- **Cierra con un veredicto**: aprobar, aprobar con comentarios o pedir cambios, y por qué.
+
+Si quieres repasar los criterios generales de revisión, están en [prácticas de ingeniería](/casos/practicas-de-ingenieria).
+
+<Quiz
+  question="Tienes 20 minutos para revisar un PR y encontraste una inyección SQL, un N+1 y cinco nombres de variables mejorables. ¿Cómo organizas tus comentarios?"
+  options={[
+    { text: 'Comentar todo en el orden en que aparece en el archivo, para ser exhaustivo.', why: 'El autor no distingue lo grave de lo menor, y la inyección queda perdida entre cinco comentarios de nombres.' },
+    { text: 'Marcar la inyección como bloqueante, el N+1 como importante y agrupar los nombres en uno o dos nits, con un resumen al inicio que diga qué hay que cambiar antes de aprobar.', correct: true, why: 'Priorizar es lo que más se evalúa. El resumen deja claro qué bloquea el merge, y agrupar los nits evita el ruido.' },
+    { text: 'Solo comentar la inyección SQL: lo demás es menor y distrae.', why: 'El N+1 es un problema real de rendimiento y conviene mencionarlo. Lo menor se puede incluir marcado como opcional.' },
+  ]}
+/>
+
+## Debugging y comprensión de código
+
+Te dan acceso a un repositorio que nunca viste (a veces de miles de líneas) y una tarea: "hay un bug en el cálculo de envíos, encuéntralo" o "explícame cómo fluye una petición desde que llega hasta que se guarda". Evalúa cómo te orientas en código ajeno, que es buena parte del trabajo real.
+
+### Orientarte rápido
+
+<Steps>
+<Step title="Lee lo que hay alrededor del código">
+
+El README, el archivo de dependencias (`package.json`, `pyproject.toml`) y la estructura de carpetas. En dos minutos sabes el lenguaje, el framework, cómo se corre y cómo se organiza.
+
+</Step>
+<Step title="Encuentra los puntos de entrada">
+
+El `main`, el archivo de rutas, los handlers. Desde ahí sigues una petición concreta, no lees archivo por archivo. Narra en voz alta: "la ruta POST /envios llama a este controlador, que llama a este servicio".
+
+</Step>
+<Step title="Usa los tests como documentación">
+
+Los tests dicen qué se supone que hace el código y con qué datos. Si hay un test del cálculo de envíos, empieza por ahí.
+
+</Step>
+<Step title="Busca, no leas todo">
+
+Busca el texto del mensaje de error, el nombre del campo, la ruta. `grep` (o la búsqueda del editor) es tu mejor herramienta. `git log` sobre un archivo te dice qué cambió hace poco.
+
+</Step>
+<Step title="Reproduce antes de arreglar">
+
+Un test que falla o un comando que muestra el bug. Sin reproducción, no sabes si lo arreglaste.
+
+</Step>
+</Steps>
+
+### Depurar con hipótesis
+
+La diferencia entre un junior y un senior depurando no es la velocidad, es el **método**: formular una hipótesis, diseñar la forma más barata de confirmarla o descartarla, y repetir. "Creo que el problema está en la conversión de moneda; si es así, un pedido en pesos debería fallar y uno en dólares no. Lo pruebo." Cada experimento corta el espacio de búsqueda a la mitad, como una búsqueda binaria; si el bug apareció entre dos versiones, `git bisect` hace literalmente eso sobre la historia.
+
+Lo que resta puntos: cambiar cosas al azar hasta que funcione, agregar `console.log` en todas partes sin una pregunta concreta, y quedarte callado. En este formato, el entrevistador evalúa tu razonamiento; si no lo dices, no existe.
+
+## Pair programming, presentaciones y la ronda de proyecto
+
+**Pair programming.** Trabajas con un ingeniero de la empresa sobre un problema, a veces en su propio código. A diferencia del live coding clásico, el entrevistador participa: propone ideas, escribe partes, te deja manejar. Evalúa si **se puede trabajar contigo**: si escuchas sus sugerencias (y las evalúas en lugar de aceptarlas o rechazarlas por reflejo), si explicas lo que haces, si preguntas cuando no entiendes una parte del código. Lo mejor es tratarlo como trabajarías con un compañero nuevo y competente: "¿Te parece si primero escribo el test? ¿O prefieres que vayamos directo a la implementación?".
+
+**Presentaciones técnicas.** Algunas empresas, sobre todo para roles senior, te piden presentar un tema o un proyecto en 20 a 30 minutos, con preguntas al final. Estructura: el problema y por qué importaba, las restricciones, las opciones que consideraste, la que elegiste y por qué, el resultado medido y lo que harías distinto. Pocas diapositivas, un diagrama claro, y deja tiempo para preguntas: ahí es donde realmente te evalúan.
+
+**La ronda de proyecto** (*project deep dive*). Eliges algo que construiste y el entrevistador profundiza hasta llegar al borde de lo que sabes. "¿Por qué Kafka y no una cola simple?" "¿Qué pasaba si ese servicio se caía?" "¿Cuánto tráfico tenía?" "¿Qué parte hiciste tú?". Prepárate así:
+
+- Elige un proyecto donde tomaste **decisiones técnicas reales**, no solo implementaste tickets.
+- Ten claro **tu rol**: "nosotros" es válido para el contexto, pero el entrevistador necesita saber qué hiciste tú.
+- Prepara **números** (tráfico, latencia, tamaño de los datos, tiempo ahorrado), aunque sean aproximados y lo digas.
+- Ten listo **lo que salió mal** y qué aprendiste. Un proyecto perfecto suena a proyecto inventado.
+- Repasa las alternativas que descartaste y por qué. Es la pregunta que siempre llega.
+
+Este formato se cruza con la [entrevista conductual](/casos/entrevista-conductual): las historias de tu banco de historias son el material de esta ronda, contadas con más profundidad técnica.
+
+## Rondas con asistente de IA
+
+El formato más nuevo. En lugar de prohibir la IA, la ronda te la da como herramienta y evalúa **cómo la usas**. Conviene ser preciso sobre lo que se sabe: lo que sigue viene de **reportes de candidatos y de sitios de preparación de entrevistas**, no de anuncios oficiales de las empresas, y los formatos están cambiando rápido.
+
+- **Meta.** Según Intervue, Meta empezó en octubre de 2025 a reemplazar una de sus dos rondas presenciales de código por una ronda con asistente de IA, y la extendió durante 2026 a más roles, aunque no en todos lados. El formato reportado: unos 60 minutos en CoderPad, con un panel de chat donde puedes elegir entre varios modelos, sobre un proyecto pequeño de varios archivos. Formation también recoge reportes de candidatos sobre esta ronda "AI-enabled", separada de la ronda clásica de estructuras de datos.
+- **Google.** Según Levelop, Google estaría probando en 2026 una ronda de 60 minutos en CoderPad con un explorador de archivos, un editor y un chat con Gemini, sobre un código de varios archivos que no escribiste. Las fases reportadas: corregir un bug, implementar una funcionalidad y optimizar. El piloto estaría limitado a roles junior y semi senior en algunos equipos de EE. UU.
+
+Los reportes coinciden en algo importante: **te evalúan por cómo usas la IA, no por la calidad de lo que genera**. Este es el ciclo que se espera ver:
+
+<FlowDiagram
+  caption="El ciclo de trabajo en una ronda con asistente de IA. Recorre los pasos: lo que se evalúa está en los extremos (entender, revisar, probar, explicar), no en el prompt."
+  nodes={[
+    { id: 'repo', label: 'Repositorio', kind: 'file', x: 0, y: 1, sub: 'código ajeno', mx: 0, my: 0 },
+    { id: 'tu', label: 'Tú', kind: 'user', x: 1, y: 1, mx: 0, my: 1 },
+    { id: 'ia', label: 'Asistente', kind: 'llm', x: 2, y: 0, sub: 'chat del editor', mx: 1, my: 0 },
+    { id: 'cambio', label: 'Cambio', kind: 'terminal', x: 3, y: 1, sub: 'propuesto', mx: 1, my: 2 },
+    { id: 'tests', label: 'Tests', kind: 'check', x: 3, y: 2.2, sub: 'casos borde', mx: 1, my: 3 },
+    { id: 'ent', label: 'Entrevistador', kind: 'user', x: 1, y: 2.2, mx: 0, my: 3 },
+  ]}
+  edges={[
+    { from: 'repo', to: 'tu', label: 'lees' },
+    { from: 'tu', to: 'ia', label: 'especificas' },
+    { from: 'ia', to: 'cambio', label: 'propone' },
+    { from: 'tu', to: 'cambio', label: 'revisas', dashed: true },
+    { from: 'cambio', to: 'tests' },
+    { from: 'tu', to: 'ent', label: 'explicas' },
+  ]}
+  steps={[
+    { title: '1. Entender antes de pedir', body: 'Lees el código y el enunciado, ubicas dónde va el cambio y lo dices en voz alta. Pegar el enunciado entero en el chat como primer paso es la señal más negativa del formato.', active: ['repo', 'tu'], flow: ['repo-tu'] },
+    { title: '2. Especificar en pedazos', body: <>Divides la tarea y pides una parte concreta, con contexto y restricciones: "en <code>envios.ts</code>, agrega una función que calcule el costo por peso usando la tabla <code>TARIFAS</code>; los pesos vienen en gramos; no cambies la firma de <code>cotizar</code>".</>, active: ['tu', 'ia'], flow: ['tu-ia'] },
+    { title: '3. Recibir una propuesta', body: 'El asistente devuelve código. Puede estar bien, casi bien (el caso más peligroso) o mal. Hasta aquí no demostraste nada todavía.', active: ['ia', 'cambio'], flow: ['ia-cambio'] },
+    { title: '4. Revisar como si fuera de otro', body: 'Lees cada línea. ¿Usa las unidades correctas? ¿Maneja la lista vacía? ¿Inventó una función que no existe en el repositorio? Detectar y explicar un error del asistente es de lo que más suma.', active: ['tu', 'cambio'], flow: ['tu-cambio'] },
+    { title: '5. Probar', body: 'Corres los tests existentes y agregas los casos borde que el asistente no consideró. Verificar es tu trabajo, no del modelo.', active: ['cambio', 'tests'], flow: ['cambio-tests'] },
+    { title: '6. Explicar y responder', body: 'Al final tienes que poder explicar cada línea de la solución, su complejidad y por qué la elegiste. Si no puedes, para el entrevistador ese código no es tuyo.', active: ['tu', 'ent'], flow: ['tu-ent'] },
+  ]}
+/>
+
+Lo que miran, según los reportes y en línea con cómo se trabaja bien con agentes de código:
+
+- **Descomposición y especificación.** Divides el problema antes de pedir, das contexto y restricciones. Es la misma habilidad que se cubre en [ingeniería de contexto](/ia/ingenieria-de-contexto) y [spec-driven development](/ia/spec-driven).
+- **Juicio.** Detectas cuando la salida está mal o "casi bien", y explicas por qué. Esto es exactamente lo que se cubre en [verificación: tests, evals y review](/ia/verificacion).
+- **Verificación.** Pruebas lo que se generó, incluidos los casos borde que el modelo no vio.
+- **Propiedad.** Puedes explicar cada línea al final. No pegas nada que no entiendas.
+- **Comunicación.** Narras lo que haces y por qué aceptas o rechazas cada sugerencia.
+
+Los errores más comunes son los mismos que en el trabajo diario con IA, que repasa [buenas prácticas y riesgos](/ia/buenas-practicas): aceptar código que no entiendes, no correr los tests, dejar que el asistente reescriba más de lo pedido y no detectar APIs inventadas. Y uno propio de la entrevista: **usar la IA para todo**. Si la función es de tres líneas y la sabes escribir, escríbela; elegir cuándo no usarla también es criterio.
+
+<Callout type="warn" title="Cómo prepararte">
+
+Practica con el mismo tipo de herramienta: un editor con chat integrado, sobre un repositorio que no conoces. Ponte un temporizador de 60 minutos y narra en voz alta. Y sigue practicando sin IA: las rondas clásicas de algoritmos y de system design siguen existiendo en los mismos procesos.
+
+</Callout>
+
+<Quiz
+  question="En una ronda con asistente de IA, el modelo te devuelve una función que pasa los dos tests existentes, pero notas que no maneja la lista vacía. ¿Qué haces?"
+  options={[
+    { text: 'Aceptarla: pasa los tests, y el entrevistador valora la velocidad.', why: 'Lo que se evalúa es el juicio y la verificación. Dejar pasar un caso borde que viste es justo lo que resta.' },
+    { text: 'Decirlo en voz alta, agregar un test para la lista vacía, verlo fallar y corregir la función (a mano o con un pedido concreto al asistente).', correct: true, why: 'Muestra juicio (detectaste el error), verificación (un test que lo prueba) y propiedad (entiendes y controlas el código final). Es exactamente el ciclo que se espera.' },
+    { text: 'Borrar todo y escribir la función desde cero sin IA, para demostrar que sabes programar.', why: 'Descartar una propuesta casi correcta es ineficiente; la ronda evalúa cómo trabajas con la herramienta, no si puedes evitarla.' },
+    { text: 'Pedirle al asistente que revise su propio código y aceptar lo que diga.', why: 'Delegas el juicio en el mismo modelo que se equivocó. La verificación la haces tú, con tests.' },
+  ]}
+/>
+
+<Takeaways>
+
+- En los formatos que no son de pizarra, la comunicación pesa tanto como el código: README, comentarios de review, narrar mientras depuras.
+- En el take-home, acota: núcleo funcionando, tests sobre la lógica y un README que corre en un minuto y explica decisiones y trade-offs. Lo que no hiciste va a una lista, no a medio implementar.
+- En el code review, entiende el objetivo antes de buscar errores, prioriza de lo bloqueante a los nits y escribe comentarios con problema, impacto y propuesta.
+- En código desconocido: puntos de entrada, tests como documentación, búsqueda en vez de lectura, reproducir antes de arreglar, hipótesis antes que cambios al azar.
+- En la ronda de proyecto: decisiones reales, tu rol claro, números aproximados y lo que salió mal.
+- En las rondas con IA (reportadas en Meta y en piloto en Google), te evalúan por especificar, revisar, probar y poder explicar cada línea, no por lo que genera el modelo.
+
+</Takeaways>
+
+## Fuentes y lecturas
+
+- Intervue, [Meta Interview Experience 2026: The AI-Assisted Coding Round and E4 / E5 / E6 Loops](https://www.intervue.io/blog/meta-interview-experience) (reporte de un sitio de preparación, no oficial).
+- Formation, [3 ways AI has changed FAANG interviews in 2026](https://formation.dev/blog/3-ways-ai-has-changed-faang-interviews-in-2026) (reportes de candidatos sobre la ronda con IA de Meta).
+- Levelop, [Google Coding Interview 2026: What Changed](https://levelop.dev/blog/google-coding-interviews-in-2026-what-changed-and-what-didnt) (reporte no oficial del piloto de Google).
+- GitHub Blog, [How GitHub does take-home technical interviews](https://github.blog/developer-skills/career-growth/how-github-does-take-home-technical-interviews/).
+- Jane Philipps, [The Essential Guide to Take-home Coding Challenges](https://www.freecodecamp.org/news/the-essential-guide-to-take-home-coding-challenges-a0e746220dd7/), freeCodeCamp.
+- 18F, [Code review interview](https://guides.18f.org/eng-hiring/interviews/code-review/): guía de contratación de 18F, el equipo de tecnología del gobierno de EE. UU.
+- Google, [What to look for in a code review](https://google.github.io/eng-practices/review/reviewer/looking-for.html) y [Conventional Comments](https://conventionalcomments.org/).
+- OWASP, [SQL Injection Prevention Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/SQL_Injection_Prevention_Cheat_Sheet.html) y Stripe, [Idempotent requests](https://docs.stripe.com/api/idempotent_requests): los dos problemas más graves del PR de práctica.
+- Julia Evans, [A few debugging resources](https://jvns.ca/blog/2019/06/23/a-few-debugging-resources/).

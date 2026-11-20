@@ -1,0 +1,188 @@
+.jx {
+  display: grid;
+  gap: var(--s-3);
+}
+.jx-sources {
+  display: grid;
+  gap: var(--s-3);
+  grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr);
+  align-items: start;
+}
+@media (max-width: 480px) {
+  .jx-sources {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.jx-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--font-code);
+  font-size: 0.82rem;
+  background: var(--card);
+  border: 1px solid var(--rule);
+}
+.jx-table caption {
+  caption-side: top;
+  text-align: left;
+  padding: 0 0 4px;
+  font-family: var(--font-code);
+  font-size: 0.78rem;
+  color: var(--ink-3);
+}
+.jx .jx-table th,
+.jx .jx-table td {
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--rule);
+  text-align: left;
+  vertical-align: middle;
+  white-space: nowrap;
+  font-size: 0.82rem;
+  letter-spacing: 0;
+}
+.jx .jx-table th {
+  font-family: var(--font-code);
+  font-weight: 700;
+  color: var(--ink-2);
+  background: var(--paper);
+  border-bottom: 1.5px solid var(--rule-strong);
+}
+.jx-table td {
+  color: var(--ink);
+}
+.jx-table tbody tr {
+  transition:
+    background-color 250ms var(--ease-out),
+    opacity 250ms var(--ease-out);
+}
+.jx-table tbody tr.is-match {
+  background: color-mix(in oklab, var(--ok) 20%, var(--card));
+}
+.jx-table tbody tr.is-alone {
+  background: color-mix(in oklab, var(--warn) 30%, var(--card));
+}
+.jx-table tbody tr.is-out {
+  opacity: 0.42;
+}
+.jx-table tbody tr.is-out td {
+  text-decoration: line-through;
+  text-decoration-color: var(--ink-3);
+}
+.jx-table tbody tr.is-sel {
+  outline: 2px solid var(--line);
+  outline-offset: -2px;
+}
+.jx-null {
+  font-style: italic;
+  font-weight: 600;
+  color: var(--ink-3);
+}
+.jx-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  font-size: 0.8rem;
+  color: var(--ink-2);
+}
+.jx-key {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.jx-key::before {
+  content: '';
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  border: 1px solid var(--rule-strong);
+}
+.jx-key.is-match::before {
+  background: color-mix(in oklab, var(--ok) 20%, var(--card));
+}
+.jx-key.is-alone::before {
+  background: color-mix(in oklab, var(--warn) 30%, var(--card));
+}
+.jx-key.is-out::before {
+  background: var(--card);
+  opacity: 0.5;
+}
+.jx-mid {
+  display: grid;
+  gap: var(--s-3);
+  grid-template-columns: minmax(0, 220px) minmax(0, 1fr);
+  align-items: center;
+}
+@media (max-width: 560px) {
+  .jx-mid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .jx-venn {
+    max-width: 260px;
+    justify-self: center;
+  }
+}
+.jx-venn {
+  width: 100%;
+  height: auto;
+}
+.jx-region {
+  fill: var(--line);
+  fill-opacity: 0;
+  transition: fill-opacity 300ms var(--ease-out);
+}
+.jx-region.is-on {
+  fill-opacity: 0.55;
+}
+.jx-ring {
+  fill: none;
+  stroke: var(--ink-2);
+  stroke-width: 1.75;
+}
+.jx-vlabel {
+  font-size: 13px;
+  fill: var(--ink-2);
+}
+.jx-sql {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--code-bg);
+  color: var(--code-ink);
+  font-family: var(--font-code);
+  font-size: 0.8rem;
+  line-height: 1.55;
+  overflow-x: auto;
+}
+.jx-sql code {
+  font: inherit;
+  background: none;
+  padding: 0;
+  border: 0;
+  color: inherit;
+  white-space: pre;
+}
+.jx-result {
+  max-width: 420px;
+}
+.jx .jx-result td:first-child {
+  padding: 0;
+}
+.jx-rowbtn {
+  display: block;
+  width: 100%;
+  min-height: 40px;
+  padding: 5px 8px;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.jx-rowbtn:hover {
+  background: var(--line-tint);
+}
+.jx-rowbtn:focus-visible {
+  outline: 2px solid var(--line);
+  outline-offset: -2px;
+}

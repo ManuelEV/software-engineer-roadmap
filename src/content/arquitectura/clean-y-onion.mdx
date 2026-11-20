@@ -1,0 +1,214 @@
+import { DependencyRings } from '../../components/widgets/arquitectura/DependencyRings'
+
+Entre 2005 y 2012 aparecieron varias arquitecturas con nombres distintos y dibujos distintos: hexagonal (Cockburn, 2005), Onion (Jeffrey Palermo, 2008), Clean Architecture (Robert C. Martin, 2012). En entrevistas y en equipos se discuten como si fueran rivales. No lo son. Son variaciones de **una sola idea**: poner el dominio en el centro y hacer que todas las dependencias de código apunten hacia él.
+
+Este tema explica esa idea con el vocabulario de Clean Architecture, que es el más detallado; muestra qué agrega Onion; compara las cuatro (incluidas las capas clásicas) en una tabla, y termina con la parte que más falta en los tutoriales: cuándo todo esto es exceso de ingeniería.
+
+## La regla de dependencia
+
+En 2012, Robert C. Martin (*Uncle Bob*) publicó en su blog *The Clean Architecture*. El artículo dice explícitamente que intenta unificar varias arquitecturas previas (hexagonal, Onion, *Screaming Architecture*, DCI y BCE) y que todas comparten un objetivo: separar intereses dividiendo el software en capas, con al menos una para las reglas de negocio y otra para las interfaces.
+
+El dibujo son cuatro círculos concéntricos, de adentro hacia afuera:
+
+- **Entidades** (*Entities*): reglas de negocio de la empresa, las que existirían aunque no hubiera software. "Un pedido no puede tener total negativo".
+- **Casos de uso** (*Use Cases*): reglas de negocio de **esta** aplicación. "Al confirmar un pedido, reservar stock y cobrar". Orquestan entidades.
+- **Adaptadores de interfaz** (*Interface Adapters*): controladores, *presenters*, *gateways*, repositorios. Convierten datos entre el formato cómodo para los casos de uso y el formato cómodo para el exterior.
+- **Frameworks y drivers**: el framework web, el driver de la base, la UI. Pegamento, idealmente poco código.
+
+Y una sola regla, que es lo único que tienes que recordar: **las dependencias de código fuente solo pueden apuntar hacia adentro**<Sidenote>En el original: "source code dependencies can only point inwards". Martin aclara que cuatro círculos es un esquema: puedes tener más, pero la regla siempre aplica.</Sidenote>. Nada en un círculo interior puede conocer el nombre de algo en un círculo exterior: ni una clase, ni una función, ni un tipo.
+
+Prueba la regla con imports reales. Activa las violaciones de abajo y lee el arreglo de cada una.
+
+<DependencyRings />
+
+### Qué cruza las fronteras
+
+La regla también aplica a los datos. Martin propone que por las fronteras crucen **estructuras simples**: DTOs, argumentos de función, objetos planos. No entidades y, sobre todo, no filas de la base de datos ni objetos del framework. Si tu caso de uso recibe un `Request` de Express o devuelve un `Row` de `pg`, el círculo interior acaba de conocer un nombre del exterior.
+
+## Flujo de control vs dirección de dependencias
+
+Aquí está el truco que confunde a todos la primera vez. En ejecución, el caso de uso **llama** a la base de datos y **produce** una respuesta para la UI: el flujo de control va de adentro hacia afuera. ¿Cómo puede ser que la dependencia de código apunte hacia adentro?
+
+Con el **principio de inversión de dependencias**. El caso de uso define una interfaz (un puerto de salida) y la usa; el adaptador de afuera la implementa. En ejecución el control va hacia afuera; en el código, el adaptador importa la interfaz de adentro.
+
+<FlowDiagram
+  caption="El flujo de control sale del caso de uso hacia el presenter, pero la dependencia de código apunta hacia adentro gracias a una interfaz definida en el círculo de casos de uso."
+  nodes={[
+    { id: 'ctl', label: 'Controller', kind: 'gateway', x: 0, y: 0, mx: 0, my: 0, sub: 'adaptador' },
+    { id: 'in', label: 'InputPort', kind: 'decision', x: 1.5, y: 0, mx: 1, my: 0.6, sub: 'interfaz', tone: 'line' },
+    { id: 'uc', label: 'Interactor', kind: 'core', x: 3, y: 0.5, mx: 0, my: 1.6, sub: 'caso de uso' },
+    { id: 'out', label: 'OutputPort', kind: 'decision', x: 1.5, y: 1, mx: 1, my: 2.6, sub: 'interfaz', tone: 'line' },
+    { id: 'pre', label: 'Presenter', kind: 'monitor', x: 0, y: 1, mx: 0, my: 3.4, sub: 'adaptador' },
+    { id: 'gw', label: 'OrderGateway', kind: 'decision', x: 3, y: 1.6, mx: 1, my: 4.4, sub: 'interfaz', tone: 'line' },
+    { id: 'db', label: 'PgOrderGateway', kind: 'db', x: 4, y: 2.4, mx: 0, my: 5.2, sub: 'adaptador' },
+  ]}
+  edges={[
+    { from: 'ctl', to: 'in', label: 'llama' },
+    { from: 'uc', to: 'in', dashed: true, label: 'implementa' },
+    { from: 'uc', to: 'out', label: 'llama' },
+    { from: 'pre', to: 'out', dashed: true, label: 'implementa' },
+    { from: 'uc', to: 'gw', label: 'llama' },
+    { from: 'db', to: 'gw', dashed: true, label: 'implementa' },
+  ]}
+  groups={[{ label: 'Círculo de casos de uso', x1: 1.5, y1: 0, x2: 3, y2: 1.6 }]}
+  steps={[
+    { title: 'Entrada', body: 'El controlador convierte la petición HTTP en un request model y llama al InputPort. La dependencia apunta hacia adentro: el controlador conoce la interfaz.', active: ['ctl', 'in'], flow: ['ctl-in'] },
+    { title: 'El interactor implementa el puerto', body: 'El caso de uso implementa InputPort. Ambos viven en el mismo círculo.', active: ['uc', 'in'] },
+    { title: 'Salida a la base', body: 'El interactor necesita persistir. Llama a OrderGateway, una interfaz de su propio círculo. En ejecución, el control termina en Postgres.', active: ['uc', 'gw', 'db'], flow: ['uc-gw'] },
+    { title: 'La dependencia apunta al revés del control', body: 'PgOrderGateway implementa OrderGateway: el adaptador importa la interfaz de adentro. El control va hacia afuera, la dependencia hacia adentro.', active: ['db', 'gw'], flow: ['db-gw'] },
+    { title: 'Salida a la UI', body: <>Lo mismo con la respuesta: el interactor llama a <code>OutputPort.present(response)</code> y el Presenter, afuera, lo implementa y arma el view model.</>, active: ['uc', 'out', 'pre'], flow: ['uc-out', 'pre-out'] },
+  ]}
+/>
+
+## Casos de uso como ciudadanos de primera clase
+
+Lo que Clean Architecture enfatiza más que hexagonal es el círculo de **casos de uso**. Cada caso de uso es una clase (o función) con nombre de negocio, un modelo de entrada y un modelo de salida. Martin lo conecta con otra idea suya, *Screaming Architecture*: si miras las carpetas de un sistema de pedidos, deberían "gritar" pedidos, pagos y envíos, no Spring, Rails o Express.
+
+```ts title="src/orders/use-cases/confirm-order.ts"
+import type { OrderGateway } from './ports'
+import { DomainError } from '../entities/order'
+
+// Modelos de entrada y salida: estructuras simples, sin tipos del framework.
+export interface ConfirmOrderInput {
+  orderId: string
+  confirmedBy: string
+}
+export interface ConfirmOrderOutput {
+  orderId: string
+  status: 'CONFIRMED'
+  totalCents: number
+}
+
+export class ConfirmOrder {
+  constructor(
+    private readonly orders: OrderGateway,
+    private readonly clock: () => Date,
+  ) {}
+
+  async execute(input: ConfirmOrderInput): Promise<ConfirmOrderOutput> {
+    const order = await this.orders.byId(input.orderId)
+    if (!order) throw new DomainError('Pedido inexistente')
+
+    order.confirm(input.confirmedBy, this.clock()) // la regla vive en la entidad
+    await this.orders.save(order)
+
+    return { orderId: order.id, status: 'CONFIRMED', totalCents: order.totalCents() }
+  }
+}
+```
+
+Fíjate en el `clock`. Hasta la hora actual es una dependencia del exterior: si el caso de uso llamara a `new Date()` directamente, no podrías probar "un pedido no se puede confirmar después de 30 minutos" sin esperar 30 minutos.
+
+### ¿Presenter o valor de retorno?
+
+El diagrama original de Martin usa un **presenter**: el caso de uso no devuelve nada, sino que llama a un puerto de salida. Esto tiene sentido cuando el mismo caso de uso alimenta varias salidas (pantalla, PDF, notificación) o en UIs con estado. En una API web típica, **devolver un modelo de salida** y dejar que el controlador lo serialice es más simple y respeta la regla de dependencia igual de bien: el modelo de salida vive en el círculo de casos de uso y el controlador lo importa. No pagues la indirección del presenter si no tienes varias salidas.
+
+<Quiz
+  question="Un caso de uso CreateInvoice necesita generar un PDF. ¿Dónde va el código que usa la librería de PDF?"
+  options={[
+    { text: 'Dentro del caso de uso, porque generar la factura es parte de la regla de negocio.', why: 'La regla es "emitir la factura con estos datos"; el formato PDF y la librería son detalles. Ponerla adentro hace que el caso de uso dependa de un paquete externo.' },
+    { text: 'En la entidad Invoice, con un método toPdf().', why: 'Peor aún: el círculo más interno dependería de una librería de presentación.' },
+    { text: 'En un adaptador que implementa un puerto InvoiceRenderer definido en el círculo de casos de uso.', correct: true, why: 'Exacto. El caso de uso dice "renderiza esta factura" a través de una interfaz propia; el adaptador decide si es PDF, HTML o un servicio externo.' },
+    { text: 'En el controlador HTTP, después de que el caso de uso termina.', why: 'Funciona si el PDF solo se usa en esa respuesta HTTP, pero si la factura también se envía por correo o desde un job, duplicas la generación en cada adaptador conductor.' },
+  ]}
+/>
+
+## Onion Architecture
+
+Jeffrey Palermo publicó *The Onion Architecture* en una serie de tres posts en 2008. Su crítica a las capas clásicas era directa: el gran problema es el **acoplamiento** que crean. La UI depende de la lógica, que depende del acceso a datos, que depende de la infraestructura; y como las dependencias son transitivas, todo termina dependiendo de la tecnología de acceso a datos, que cambia cada pocos años.
+
+Su propuesta, en sus propias palabras, se resume en cuatro principios:
+
+1. La aplicación se construye alrededor de un **modelo de objetos independiente**.
+2. Las capas internas **definen interfaces**; las capas externas las **implementan**.
+3. La dirección del acoplamiento es **hacia el centro**.
+4. Todo el código del núcleo de la aplicación puede **compilarse y ejecutarse separado de la infraestructura**.
+
+Las capas que dibuja Palermo son: el **modelo de dominio** en el centro; alrededor, las **interfaces de repositorios** y los **servicios de dominio**; luego los **servicios de aplicación**; y en el borde exterior, juntos, **UI, infraestructura y tests**. Que los tests estén en el mismo anillo que la UI no es casual: igual que en hexagonal, un test es solo otro cliente del núcleo.
+
+La frase que mejor resume Onion es suya: la base de datos **no es el centro**, es externa. Si vienes de diseñar empezando por el esquema de tablas, ese es el cambio de mentalidad.
+
+<Callout type="idea" title="Mismo principio, distinto énfasis">
+
+Hexagonal enfatiza la **simetría** adentro/afuera y los puertos por propósito. Onion enfatiza las **capas concéntricas dentro del núcleo** (dominio, servicios de dominio, aplicación). Clean enfatiza los **casos de uso** como unidad y las reglas sobre qué datos cruzan cada frontera. Mark Seemann lo resumió en un post de 2013 con un título que lo dice todo: *Layers, Onions, Ports, Adapters: it's all the same*.
+
+</Callout>
+
+## Comparación lado a lado
+
+| | Capas clásicas | Hexagonal | Onion | Clean |
+| --- | --- | --- | --- | --- |
+| Autor y año | Tradición (popularizada en los 90) | Alistair Cockburn, 2005 | Jeffrey Palermo, 2008 | Robert C. Martin, 2012 (libro en 2017) |
+| Qué está en el centro | Nada: la base está abajo | La aplicación (dominio + casos de uso) | El modelo de dominio | Las entidades |
+| Dirección de dependencias | Hacia abajo, hacia la persistencia | Hacia adentro, desde ambos lados | Hacia el centro | Hacia adentro (la regla de dependencia) |
+| Estructura interna del núcleo | No aplica | No la prescribe | Dominio, servicios de dominio, servicios de aplicación | Entidades y casos de uso |
+| Vocabulario clave | Presentación, negocio, persistencia | Puertos, adaptadores, conductor/conducido | Interfaces internas, implementaciones externas | Interactor, puertos de entrada/salida, presenter, gateway |
+| ¿Se prueba el núcleo sin infraestructura? | Difícil | Sí | Sí | Sí |
+| Riesgo típico | Dominio anémico, todo depende de la base | Puertos que copian la tecnología | Demasiadas capas internas | Ceremonia: interactor + presenter + DTOs para un CRUD |
+
+Lo que las tres modernas comparten es más importante que lo que las separa:
+
+- El **dominio no conoce la infraestructura**.
+- Las **interfaces las define quien las usa** (el núcleo), no quien las implementa.
+- La infraestructura es un **detalle reemplazable**, incluida la base de datos.
+- El núcleo se puede **probar sin levantar nada**.
+
+En una entrevista, si te preguntan la diferencia, da la tabla en una frase y después di lo importante: en la práctica casi nadie implementa ninguna de las tres "pura", y la mayoría de los equipos usa una mezcla con el vocabulario de hexagonal (puertos y adaptadores) y la estructura de casos de uso de Clean.
+
+<Quiz
+  question="Un compañero dice: 'Usamos Clean Architecture, no hexagonal'. ¿Cuál es la observación más precisa?"
+  options={[
+    { text: 'Son incompatibles: hay que elegir una.', why: 'No lo son. Clean se presenta explícitamente como una unificación de hexagonal, Onion y otras.' },
+    { text: 'Comparten el principio central (dependencias hacia el dominio, interfaces definidas por el núcleo); Clean agrega más estructura sobre casos de uso y datos que cruzan fronteras.', correct: true, why: 'Exacto. Un sistema bien hecho con Clean es casi siempre también hexagonal: los gateways de Clean son puertos conducidos y los controladores son adaptadores conductores.' },
+    { text: 'Hexagonal es para microservicios y Clean para monolitos.', why: 'Ninguna de las dos habla de despliegue. Ambas organizan el interior de una aplicación, del tamaño que sea.' },
+    { text: 'Clean es la versión moderna y hexagonal está obsoleta.', why: 'Hexagonal sigue siendo el vocabulario más usado para hablar de puertos y adaptadores; Clean no la reemplaza, la incorpora.' },
+  ]}
+/>
+
+## Cuándo es exceso de ingeniería
+
+La crítica más común a Clean Architecture no es al principio sino a cómo se aplica. Hay plantillas populares que, para un CRUD, generan cinco proyectos, un interactor, un presenter, un *request model*, un *response model*, un *view model*, un *gateway* y un *mapper* por cada endpoint. Eso no es Clean Architecture: es aplicar un dibujo sin preguntarse qué problema resuelve.
+
+Tres señales de que te pasaste:
+
+- **Los casos de uso solo delegan.** `GetOrderUseCase.execute(id)` llama a `repo.findById(id)` y devuelve el resultado. Para lecturas simples, deja que el adaptador lea directamente con una consulta optimizada (es lo que CQRS formaliza).
+- **Los *mappers* superan a la lógica.** Si para agregar un campo tocas ocho archivos de mapeo y ninguno de reglas, el costo de la separación es mayor que su beneficio.
+- **Las entidades son anémicas.** Si las "entidades" del círculo central solo tienen propiedades, toda la complejidad está en los casos de uso y el círculo interior no está protegiendo nada.
+
+Una alternativa que ganó adopción es la **Vertical Slice Architecture** que describe Jimmy Bogard: organizar por funcionalidad (cada *slice* es una petición con todo lo que necesita, de punta a punta) y aplicar abstracciones solo dentro de las slices que las necesitan. Combina bien con lo anterior: slices simples para lecturas y CRUD, y un núcleo con dominio rico y puertos para las partes del negocio con reglas de verdad.
+
+<Callout type="tip" title="Regla práctica">
+
+Aplica la regla de dependencia **siempre** (el dominio nunca importa infraestructura; cuesta casi nada). Aplica la **ceremonia completa** (interactor, presenter, modelos separados por capa) solo donde el dominio es complejo y cambia seguido. La regla es barata; la ceremonia no.
+
+</Callout>
+
+<Quiz
+  question="En tu servicio, el 70 % de los endpoints son lecturas que muestran datos casi tal cual están en la base. ¿Cómo aplicas Clean Architecture con criterio?"
+  options={[
+    { text: 'Un interactor, un presenter y un gateway para cada lectura, para ser consistentes.', why: 'Consistencia no es un objetivo en sí. Multiplicas archivos sin proteger ninguna regla de negocio.' },
+    { text: 'Abandonar Clean en todo el servicio, porque la mayoría es CRUD.', why: 'El 30 % restante puede tener reglas valiosas que sí merecen un núcleo protegido.' },
+    { text: 'Lecturas como consultas directas desde el adaptador (un modelo de lectura), y casos de uso con entidades y puertos solo para los comandos con reglas.', correct: true, why: 'Exacto. Es la separación de CQRS aplicada con pragmatismo: la regla de dependencia se mantiene en el núcleo, y las lecturas no pagan una ceremonia que no necesitan.' },
+    { text: 'Mover las lecturas a otro microservicio.', why: 'Distribuir no simplifica: agregas red y despliegues para resolver un problema de organización interna.' },
+  ]}
+/>
+
+<Takeaways>
+
+- Hexagonal, Onion y Clean son la misma idea: el dominio en el centro y todas las dependencias de código apuntando hacia él.
+- La regla de dependencia: nada interior conoce nombres exteriores, y por las fronteras cruzan estructuras simples, no entidades ni objetos del framework.
+- El flujo de control puede ir hacia afuera mientras la dependencia apunta hacia adentro: el núcleo define la interfaz y el adaptador la implementa.
+- Clean aporta los casos de uso como unidad con modelos de entrada y salida; Onion aporta las capas internas del núcleo y la frase "la base de datos no es el centro".
+- Devolver un modelo de salida suele bastar; el presenter paga cuando hay varias salidas para el mismo caso de uso.
+- La regla es barata y siempre vale; la ceremonia completa solo donde hay reglas de negocio complejas. Para lecturas y CRUD, slices o consultas directas.
+
+</Takeaways>
+
+## Fuentes y lecturas
+
+- Robert C. Martin, [*The Clean Architecture*](https://blog.cleancoder.com/uncle-bob/2012/08/13/the-clean-architecture.html) (2012) y el libro *Clean Architecture* (Prentice Hall, 2017).
+- Robert C. Martin, [*Screaming Architecture*](https://blog.cleancoder.com/uncle-bob/2011/09/30/Screaming-Architecture.html) (2011).
+- Jeffrey Palermo, [*The Onion Architecture, part 1*](https://jeffreypalermo.com/2008/07/the-onion-architecture-part-1/) y [*part 3*](https://jeffreypalermo.com/2008/08/the-onion-architecture-part-3/) (2008).
+- Mark Seemann, [*Layers, Onions, Ports, Adapters: it's all the same*](https://blog.ploeh.dk/2013/12/03/layers-onions-ports-adapters-its-all-the-same/) (2013).
+- Jimmy Bogard, [*Vertical Slice Architecture*](https://www.jimmybogard.com/vertical-slice-architecture/).
+- Herberto Graça, [*Explicit Architecture*](https://herbertograca.com/2017/11/16/explicit-architecture-01-ddd-hexagonal-onion-clean-cqrs-how-i-put-it-all-together/): cómo combinar DDD, hexagonal, Onion, Clean y CQRS.

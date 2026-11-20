@@ -1,0 +1,281 @@
+import { SyncChainCalculator } from '../../components/widgets/arquitectura/SyncChainCalculator'
+
+Durante una década, "microservicios" fue sinónimo de arquitectura moderna. Hoy el péndulo volvió un poco: hay equipos consolidando servicios, el monolito modular dejó de ser una mala palabra y el caso de Prime Video de 2023 se citó en todas partes. La verdad, como casi siempre, está en los trade-offs. Los microservicios resuelven problemas reales de **organizaciones grandes** y cobran un precio alto en **complejidad distribuida**. Elegirlos sin tener esos problemas es pagar el precio sin recibir nada.
+
+Este tema cubre lo que necesitas para decidir y para diseñar: qué los define de verdad, cuándo sí y cuándo no, cómo partir un sistema, cómo se comunican los servicios, cómo se manejan los datos, el papel del API gateway y del BFF, cómo reconocer un monolito distribuido y cómo migrar de forma incremental.
+
+## Qué los define de verdad
+
+Sam Newman los define como servicios **desplegables de forma independiente**, modelados alrededor de un **dominio de negocio**. James Lewis y Martin Fowler, en su artículo de 2014 que popularizó el término, describen características comunes: componentización vía servicios, organización alrededor de capacidades de negocio, equipos dueños de productos (no de proyectos), endpoints inteligentes y tuberías tontas, gobernanza y gestión de datos descentralizadas, automatización de infraestructura, diseño para la falla y diseño evolutivo.
+
+De todo eso, la propiedad que importa es la primera: **despliegue independiente**. Si para desplegar el servicio de Pedidos tienes que desplegar también Pagos e Inventario, no tienes microservicios; tienes un monolito con latencia de red. Y el despliegue independiente solo es posible si se cumplen otras dos condiciones:
+
+- **Datos propios.** Cada servicio es dueño de sus datos y nadie más accede a su base. Si dos servicios comparten tablas, un cambio de esquema los obliga a desplegarse juntos.
+- **Contratos estables.** Las APIs y los eventos entre servicios evolucionan de forma compatible hacia atrás, para que un consumidor no tenga que actualizarse al mismo tiempo que el proveedor.
+
+Fíjate que "micro" no aparece en ninguna de las definiciones serias. El tamaño es una consecuencia, no un objetivo. Un servicio debería ser tan grande como un bounded context lo justifique, y en la práctica muchos equipos exitosos tienen servicios bastante grandes.
+
+## Cuándo sí y cuándo no
+
+Las razones legítimas para pagar el costo de distribuir son pocas y concretas:
+
+- **Autonomía de equipos a escala.** Con muchos equipos sobre un mismo desplegable, el tren de despliegue y la coordinación se vuelven el cuello de botella. Servicios con dueños claros permiten que cada equipo entregue a su ritmo.
+- **Escalado diferenciado.** Una parte del sistema necesita 50 réplicas, otra necesita GPU, otra tiene picos que el resto no tiene.
+- **Aislamiento de fallas.** Un fallo de memoria en recomendaciones no debería tumbar el checkout.
+- **Requisitos de cumplimiento o seguridad.** Aislar el manejo de tarjetas (PCI DSS) reduce el alcance de la auditoría.
+- **Heterogeneidad tecnológica justificada.** Un componente de ML en Python dentro de un sistema en Java.
+
+Y las razones para **no** hacerlo pesan igual. Fowler escribió dos artículos que vale la pena leer juntos. En *MicroservicePremium* argumenta que los microservicios tienen un costo fijo (una "prima") que solo se compensa en sistemas complejos. En *MicroservicePrerequisites* lista lo mínimo que necesitas antes de empezar: **aprovisionamiento rápido** de infraestructura, **monitoreo básico** que detecte problemas rápido y **despliegue rápido** de aplicaciones. Sin esas tres capacidades, cada servicio nuevo multiplica el dolor operativo.
+
+<ProsCons
+  pros={[
+    'Equipos autónomos que despliegan sin coordinar con otros.',
+    'Escalado y elección tecnológica por servicio.',
+    'Aislamiento de fallas y de cumplimiento.',
+    'Fronteras de módulo imposibles de saltarse (están separadas por la red).',
+  ]}
+  cons={[
+    'Red entre cada llamada: latencia, fallas parciales, timeouts y reintentos.',
+    'Sin transacciones entre servicios: sagas, outbox, consistencia eventual.',
+    'Observabilidad distribuida obligatoria: tracing, logs centralizados, métricas por servicio.',
+    'Pruebas de integración y de contrato más caras; entornos de desarrollo más pesados.',
+    'Refactorizar fronteras equivocadas implica migrar datos y contratos.',
+  ]}
+/>
+
+<Callout type="example" title="Prime Video, 2023">
+
+En marzo de 2023, el equipo de Prime Video publicó cómo rediseñó su **servicio de monitoreo de calidad de audio y video**. La versión original era distribuida: funciones Lambda orquestadas con Step Functions, que se pasaban frames de video y resultados intermedios a través de S3. Las transiciones de estado y las lecturas y escrituras en S3 encarecían todo, y el diseño chocó con límites de escalado muy por debajo de la carga esperada. Lo consolidaron en un solo proceso (los datos pasan en memoria) corriendo en ECS sobre EC2, y reportaron una **reducción de más del 90 %** en costo de infraestructura. Ojo con la lectura: es **un** servicio con un patrón de datos muy específico (mucha transferencia de datos entre pasos), no "Amazon abandona los microservicios". La lección correcta es que la granularidad debe seguir al patrón de comunicación, y que mover datos pesados por la red entre componentes es caro.
+
+</Callout>
+
+<Quiz
+  question="Una startup de 6 ingenieros con producto aún sin product-market fit quiere empezar con 8 microservicios 'para escalar cuando crezcan'. ¿Cuál es el mejor consejo?"
+  options={[
+    { text: 'Adelante: es más fácil empezar distribuido que migrar después.', why: 'La evidencia de Fowler y Newman apunta a lo contrario: las fronteras correctas son difíciles de acertar al principio y cambiarlas entre servicios es muy caro.' },
+    { text: 'Empezar con un monolito modular con fronteras por capacidad de negocio, y extraer servicios cuando haya una razón concreta (escalado, equipos, aislamiento).', correct: true, why: 'Exacto. Seis personas no tienen problema de coordinación entre equipos, el dominio todavía cambia y la prima operativa de 8 servicios consumiría buena parte de su capacidad.' },
+    { text: 'Usar un solo microservicio por persona para que cada uno sea autónomo.', why: 'Partir por personas en lugar de por dominio produce fronteras arbitrarias y un monolito distribuido.' },
+    { text: 'Usar serverless para todo, que es lo mismo que microservicios pero sin operación.', why: 'Serverless reduce operación de infraestructura, no la complejidad distribuida: siguen existiendo red, consistencia eventual y fronteras difíciles.' },
+  ]}
+/>
+
+## Cómo partir un sistema
+
+La pregunta más difícil, y la que más se equivoca. Chris Richardson, en microservices.io, documenta dos patrones principales de descomposición que en la práctica convergen:
+
+- **Por capacidad de negocio**: algo que el negocio hace para generar valor. Gestión de catálogo, gestión de pedidos, facturación, logística. Las capacidades son estables: el negocio puede cambiar *cómo* gestiona pedidos, pero siempre los va a gestionar.
+- **Por subdominio** (DDD): usa los bounded contexts descubiertos con el análisis estratégico. Un servicio por contexto es un buen punto de partida; un servicio nunca debería mezclar dos contextos.
+
+Y dos antipatrones que conviene reconocer de inmediato:
+
+- **Servicios por entidad.** `CustomerService`, `ProductService`, `OrderService` como CRUDs de una tabla cada uno. Cualquier operación de negocio ("confirmar pedido") cruza cinco servicios en cadena. Es partir por sustantivos en lugar de por comportamiento.
+- **Servicios por capa técnica.** Un "servicio de datos", un "servicio de lógica", un "servicio de validación". Cada funcionalidad cruza todos.
+
+| Heurística | Pregunta |
+| --- | --- |
+| Cohesión | ¿Lo que cambia junto vive junto? Si cada funcionalidad toca tres servicios, la frontera está mal. |
+| Acoplamiento | ¿Puedo desplegar este servicio sin coordinar con otros? |
+| Propiedad | ¿Un solo equipo es dueño? Dos equipos sobre un servicio es una señal; un equipo con diez servicios, otra. |
+| Datos | ¿Las transacciones que el negocio necesita atómicas quedan dentro de un servicio? |
+| Lenguaje | ¿El servicio habla un solo lenguaje ubicuo? |
+
+<Callout type="tip" title="La prueba de la funcionalidad típica">
+
+Toma las cinco funcionalidades más frecuentes del último trimestre y cuenta cuántos servicios habría tocado cada una con tu propuesta de fronteras. Si la mayoría toca uno, vas bien. Si la mayoría toca tres o más, estás diseñando un monolito distribuido.
+
+</Callout>
+
+## Comunicación síncrona y asíncrona
+
+Los servicios se comunican de dos formas, y la elección define gran parte del comportamiento del sistema.
+
+**Síncrona** (HTTP/REST, gRPC): el cliente espera la respuesta. Es simple de entender y de depurar, y necesaria cuando el usuario necesita la respuesta ya ("¿cuál es el precio?"). Pero crea **acoplamiento temporal**: si el servicio llamado está caído o lento, el que llama también lo está.
+
+**Asíncrona** (mensajes en colas o eventos en un broker como Kafka, RabbitMQ, SQS): el emisor publica y sigue. El receptor procesa cuando puede. Elimina el acoplamiento temporal y absorbe picos, a cambio de consistencia eventual, mensajes duplicados, orden que hay que pensar y flujos más difíciles de seguir.
+
+El problema de las cadenas síncronas es matemático. Juega con la calculadora: cinco servicios con 99,9 % de disponibilidad cada uno, llamándose en cadena, dan menos de 99,5 % para el usuario.
+
+<SyncChainCalculator />
+
+Reglas prácticas que se derivan:
+
+- **Evita cadenas síncronas largas.** Si una petición de usuario necesita atravesar más de dos o tres servicios en serie, revisa las fronteras o usa datos replicados por eventos.
+- **Usa síncrono para consultas y asíncrono para propagar cambios.** "Dame el precio" es síncrono; "el pedido se confirmó, reacciona" es un evento.
+- **Toda llamada síncrona necesita timeout, reintentos con backoff exponencial y jitter, y un circuit breaker.** Sin timeout, un servicio lento consume todos los hilos del que lo llama; sin circuit breaker, los reintentos amplifican la caída. Los reintentos solo son seguros si la operación es idempotente.
+- **Los consumidores de mensajes deben ser idempotentes.** Casi todos los brokers garantizan entrega *al menos una vez*: el mismo mensaje puede llegar dos veces.
+
+<Quiz
+  question="El checkout llama de forma síncrona a Inventario, que llama a Precios, que llama a Promociones, que llama a Clientes. Black Friday: Clientes se pone lento. ¿Qué pasa y cuál es la mejor corrección estructural?"
+  options={[
+    { text: 'Solo Clientes se degrada; el resto sigue normal.', why: 'En una cadena síncrona, la lentitud se propaga hacia arriba: cada servicio espera al siguiente y acumula hilos y conexiones.' },
+    { text: 'La lentitud se propaga hasta el checkout. La corrección es acortar la cadena: que Promociones tenga una copia local de los datos de cliente que necesita, actualizada por eventos.', correct: true, why: 'Exacto. Timeouts y circuit breakers limitan el daño, pero la corrección estructural es eliminar dependencias síncronas en el camino crítico con datos replicados (event-carried state transfer).' },
+    { text: 'Aumentar los timeouts para que nadie falle.', why: 'Timeouts más largos retienen más recursos durante más tiempo y empeoran la cascada.' },
+    { text: 'Agregar más réplicas de Clientes y listo.', why: 'Puede ayudar a corto plazo, pero la arquitectura sigue haciendo que el checkout dependa de cinco servicios en serie.' },
+  ]}
+/>
+
+## Datos por servicio
+
+El patrón *database per service* es la regla que más cuesta aceptar: **cada servicio es dueño exclusivo de sus datos** y los demás solo acceden a ellos a través de su API o de sus eventos. Puede ser una base separada o un esquema separado con permisos estrictos en el mismo servidor; lo importante es que nadie más lo toque.
+
+¿Por qué tanto rigor? Porque una base compartida es el acoplamiento más fuerte que existe. Si Envíos lee la tabla `orders`, el equipo de Pedidos ya no puede renombrar una columna, cambiar de motor o partir la tabla sin coordinar. Pierdes el despliegue independiente, que era el punto.
+
+La consecuencia es que tienes que resolver de otra forma lo que antes hacía la base:
+
+| Necesidad | Antes (base compartida) | Con datos por servicio |
+| --- | --- | --- |
+| Consulta que cruza datos | JOIN | Composición de APIs, o un modelo de lectura (CQRS) alimentado por eventos |
+| Transacción entre entidades de distintos servicios | Una transacción ACID | Saga con compensaciones (ver el tema de transacciones distribuidas) |
+| Dato que varios necesitan | Leer la tabla del otro | Copia local alimentada por eventos (*event-carried state transfer*) |
+| Reportes globales | Consulta SQL a todo | Data warehouse o lake alimentado por eventos o CDC |
+
+La duplicación de datos que esto implica no es un error: es el precio de la autonomía. Lo que sí importa es que cada dato tenga **un solo dueño** que decide su verdad, y que las copias sean explícitamente eso, copias.
+
+## API gateway y BFF
+
+Con decenas de servicios, los clientes (web, app móvil, partners) no deberían conocer cada uno. Un **API gateway** es un punto de entrada único que enruta, y además concentra preocupaciones transversales: autenticación, rate limiting, TLS, logging.
+
+El patrón **Backend for Frontend** (BFF) va un paso más allá: un backend dedicado por tipo de cliente, que compone y adapta las respuestas a lo que esa interfaz necesita. El patrón surgió en equipos como el de SoundCloud (Phil Calçado lo describe) y Sam Newman lo documentó y popularizó. La app móvil necesita respuestas pequeñas y pocas llamadas; la web puede pedir más; el partner necesita un contrato estable y versionado.
+
+<FlowDiagram
+  caption="API gateway con BFFs por tipo de cliente. Cada BFF compone las llamadas a los servicios que su interfaz necesita."
+  nodes={[
+    { id: 'web', label: 'Web', kind: 'client', x: 0, y: 0, mx: 0, my: 0 },
+    { id: 'app', label: 'App móvil', kind: 'mobile', x: 0, y: 1.5, mx: 1, my: 0 },
+    { id: 'gw', label: 'API gateway', kind: 'gateway', x: 1, y: 0.75, mx: 0.5, my: 1, sub: 'auth · rate limit' },
+    { id: 'bw', label: 'BFF web', kind: 'service', x: 2, y: 0, mx: 0, my: 2 },
+    { id: 'bm', label: 'BFF móvil', kind: 'service', x: 2, y: 1.5, mx: 1, my: 2 },
+    { id: 'ord', label: 'Pedidos', kind: 'service', x: 3.5, y: 0, mx: 0, my: 3.2 },
+    { id: 'cat', label: 'Catálogo', kind: 'service', x: 3.5, y: 0.75, mx: 0.5, my: 4.2 },
+    { id: 'shp', label: 'Envíos', kind: 'service', x: 3.5, y: 1.5, mx: 1, my: 3.2 },
+  ]}
+  edges={[
+    { from: 'web', to: 'gw' },
+    { from: 'app', to: 'gw' },
+    { from: 'gw', to: 'bw' },
+    { from: 'gw', to: 'bm' },
+    { from: 'bw', to: 'ord' },
+    { from: 'bw', to: 'cat' },
+    { from: 'bm', to: 'ord' },
+    { from: 'bm', to: 'shp' },
+    { from: 'bm', to: 'cat' },
+  ]}
+  steps={[
+    { title: 'Un solo punto de entrada', body: 'Web y app hablan con el gateway, que valida el token, aplica rate limiting y termina TLS. Los servicios internos no se exponen.', active: ['web', 'app', 'gw'], flow: ['web-gw', 'app-gw'] },
+    { title: 'BFF web', body: 'La página de detalle de pedido en web necesita pedido + productos. El BFF web hace dos llamadas en paralelo y arma una respuesta rica.', active: ['gw', 'bw', 'ord', 'cat'], flow: ['gw-bw', 'bw-ord', 'bw-cat'] },
+    { title: 'BFF móvil', body: 'La app muestra pedido, miniaturas y tracking en una sola pantalla. Su BFF hace tres llamadas y devuelve un JSON compacto pensado para redes móviles.', active: ['gw', 'bm', 'ord', 'cat', 'shp'], flow: ['gw-bm', 'bm-ord', 'bm-cat', 'bm-shp'] },
+    { title: 'Dueños', body: 'Idealmente, cada BFF lo mantiene el equipo de su interfaz. Así el equipo móvil cambia su API sin pedirle nada a los servicios de dominio.', active: ['bw', 'bm'] },
+  ]}
+/>
+
+<Callout type="warn" title="El gateway que se vuelve monolito">
+
+Si el gateway o el BFF empiezan a contener reglas de negocio ("si el cliente es gold, aplicar descuento"), se convierten en el nuevo cuello de botella y en un acoplamiento central. Su trabajo es enrutar, componer y adaptar formato. Las reglas viven en los servicios de dominio.
+
+</Callout>
+
+## El monolito distribuido
+
+Es el resultado más común de una migración mal hecha: todos los costos de los microservicios y ninguno de sus beneficios. Los síntomas son reconocibles:
+
+- **Despliegues en bloque.** "Para este release hay que desplegar Pedidos, Pagos y Envíos en este orden".
+- **Base de datos compartida.** Varios servicios leen y escriben las mismas tablas.
+- **Librerías compartidas con modelos de dominio.** Un paquete `common-models` que todos importan; cambiar `Order` obliga a recompilar y desplegar a todos.
+- **Cadenas síncronas largas** en el camino crítico, con cascadas de fallas.
+- **Cambios que siempre cruzan servicios.** Cada funcionalidad requiere PRs coordinados en tres repositorios.
+- **Entornos compartidos imprescindibles.** Nadie puede probar su servicio sin levantar los otros diez.
+
+La raíz casi siempre es la misma: fronteras trazadas por capa técnica o por entidad, en lugar de por capacidad de negocio, y datos que nunca se separaron. La salida no es agregar más servicios, sino consolidar los que cambian juntos y separar los datos.
+
+<Quiz
+  question="¿Cuál de estos es el síntoma MÁS claro de un monolito distribuido?"
+  options={[
+    { text: 'Hay más de 20 servicios.', why: 'El número no dice nada. Hay sistemas sanos con cientos de servicios y monolitos distribuidos con cinco.' },
+    { text: 'Los servicios están escritos en lenguajes distintos.', why: 'La heterogeneidad tecnológica no tiene relación con el acoplamiento.' },
+    { text: 'La mayoría de los releases requieren desplegar varios servicios juntos y en un orden específico.', correct: true, why: 'Exacto. El despliegue independiente es la propiedad definitoria de los microservicios; si no la tienes, tienes un monolito con red de por medio.' },
+    { text: 'Algunos servicios se comunican por eventos.', why: 'La comunicación asíncrona es, en general, una herramienta para reducir acoplamiento, no un síntoma.' },
+  ]}
+/>
+
+## Migrar con strangler fig
+
+Si ya tienes un monolito y razones reales para extraer servicios, la estrategia que recomiendan Fowler y Newman es la **migración incremental**, no la reescritura. Fowler la bautizó *Strangler Fig Application* por las higueras estranguladoras que crecen alrededor de un árbol hasta reemplazarlo: el sistema nuevo crece alrededor del viejo, funcionalidad por funcionalidad, hasta que el viejo se puede apagar.
+
+<Steps>
+<Step title="Pon una fachada delante">
+
+Un proxy o gateway que recibe todo el tráfico y, al principio, lo manda entero al monolito. Esta pieza es la que permite redirigir sin que los clientes se enteren.
+
+</Step>
+<Step title="Elige la primera funcionalidad">
+
+Algo con fronteras claras, valor real y riesgo acotado. Newman sugiere empezar por algo poco acoplado (notificaciones, por ejemplo) para aprender a operar servicios antes de tocar el núcleo.
+
+</Step>
+<Step title="Construye el servicio y sus datos">
+
+Con su propia base. Los datos se migran o se sincronizan (por eventos o CDC) mientras dura la transición.
+
+</Step>
+<Step title="Redirige el tráfico gradualmente">
+
+La fachada envía un porcentaje creciente al servicio nuevo. Opcionalmente, *parallel run*: ambos procesan y comparas resultados antes de confiar en el nuevo.
+
+</Step>
+<Step title="Elimina el código viejo">
+
+El paso que más se olvida. Si el código del monolito sigue ahí "por si acaso", la migración nunca termina y mantienes dos sistemas.
+
+</Step>
+</Steps>
+
+<FlowDiagram
+  caption="Strangler fig: la fachada redirige funcionalidades una a una del monolito a servicios nuevos."
+  nodes={[
+    { id: 'u', label: 'Clientes', kind: 'users', x: 0, y: 1, mx: 0, my: 0 },
+    { id: 'f', label: 'Fachada', kind: 'gateway', x: 1, y: 1, mx: 0, my: 1, sub: 'proxy / gateway' },
+    { id: 'm', label: 'Monolito', kind: 'server', x: 2.5, y: 2, mx: 1, my: 2, tone: 'muted', sub: 'cada vez más chico' },
+    { id: 'n', label: 'Notificaciones', kind: 'notify', x: 2.5, y: 0, mx: 0, my: 2.2 },
+    { id: 'c', label: 'Catálogo', kind: 'service', x: 3.5, y: 1, mx: 0, my: 3.2 },
+    { id: 'mdb', label: 'BD monolito', kind: 'db', x: 4, y: 2, mx: 1, my: 3.2 },
+  ]}
+  edges={[
+    { from: 'u', to: 'f' },
+    { from: 'f', to: 'm' },
+    { from: 'f', to: 'n' },
+    { from: 'f', to: 'c' },
+    { from: 'm', to: 'mdb' },
+    { from: 'mdb', to: 'c', dashed: true, label: 'CDC' },
+  ]}
+  steps={[
+    { title: 'Día 1', body: 'Todo el tráfico pasa por la fachada y llega al monolito. Nada cambió para los clientes, pero ahora hay un punto de redirección.', active: ['u', 'f', 'm'], flow: ['u-f', 'f-m'] },
+    { title: 'Primer servicio', body: 'Notificaciones se extrae primero: pocas dependencias, buen lugar para aprender a desplegar, monitorear y operar un servicio.', active: ['f', 'n'], flow: ['u-f', 'f-n'] },
+    { title: 'Datos en transición', body: 'Catálogo necesita los datos que hoy viven en la base del monolito. Mientras dura la migración, CDC replica los cambios hacia su base nueva.', active: ['m', 'mdb', 'c'], flow: ['m-mdb', 'mdb-c'] },
+    { title: 'Redirección gradual', body: 'La fachada envía las rutas de catálogo al servicio nuevo, primero un porcentaje y luego todo. El monolito pierde esa responsabilidad.', active: ['f', 'c'], flow: ['u-f', 'f-c'] },
+    { title: 'Apagar lo viejo', body: 'Cuando nada usa el código de catálogo del monolito, se borra. Repetir hasta que el monolito sea pequeño o desaparezca.', active: ['m'] },
+  ]}
+/>
+
+<Takeaways>
+
+- La propiedad que define los microservicios es el despliegue independiente; requiere datos propios y contratos compatibles hacia atrás.
+- Valen la pena por autonomía de equipos a escala, escalado diferenciado, aislamiento o cumplimiento; sin esas razones, son costo puro.
+- Necesitas los prerrequisitos de Fowler (aprovisionamiento rápido, monitoreo, despliegue rápido) antes del primer servicio.
+- Parte por capacidad de negocio o por bounded context; nunca por entidad ni por capa técnica.
+- Las cadenas síncronas multiplican fallas y suman latencia: síncrono para consultas, eventos para propagar cambios, y timeouts, reintentos idempotentes y circuit breakers siempre.
+- Cada servicio es dueño exclusivo de sus datos: JOINs se vuelven composición o modelos de lectura, y transacciones se vuelven sagas.
+- Migra con strangler fig, de a una funcionalidad, y termina borrando el código viejo.
+
+</Takeaways>
+
+## Fuentes y lecturas
+
+- James Lewis y Martin Fowler, [*Microservices*](https://martinfowler.com/articles/microservices.html) (2014).
+- Sam Newman, *Building Microservices*, 2.ª ed. (O'Reilly, 2021) y [*Monolith to Microservices*](https://samnewman.io/books/monolith-to-microservices/) (O'Reilly, 2019).
+- Martin Fowler, [*MicroservicePremium*](https://martinfowler.com/bliki/MicroservicePremium.html), [*MicroservicePrerequisites*](https://martinfowler.com/bliki/MicroservicePrerequisites.html) y [*StranglerFigApplication*](https://martinfowler.com/bliki/StranglerFigApplication.html).
+- Zhamak Dehghani, [*How to break a Monolith into Microservices*](https://martinfowler.com/articles/break-monolith-into-microservices.html).
+- Chris Richardson, microservices.io: [Microservice architecture](https://microservices.io/patterns/microservices.html), [descomposición por capacidad de negocio](https://microservices.io/patterns/decomposition/decompose-by-business-capability.html), [por subdominio](https://microservices.io/patterns/decomposition/decompose-by-subdomain.html), [database per service](https://microservices.io/patterns/data/database-per-service.html) y [API gateway](https://microservices.io/patterns/apigateway.html).
+- Sam Newman, [*Backends For Frontends*](https://samnewman.io/patterns/architectural/bff/).
+- Microsoft Azure Architecture Center, [Backends for Frontends](https://learn.microsoft.com/en-us/azure/architecture/patterns/backends-for-frontends) y [Strangler Fig](https://learn.microsoft.com/en-us/azure/architecture/patterns/strangler-fig).
+- Marcin Kolny, *Scaling up the Prime Video audio/video monitoring service and reducing costs by 90%* (Prime Video Tech, marzo de 2023; el blog original ya no está en línea) y la cobertura de InfoQ: [*Prime Video Switched from Serverless to EC2 and ECS to Save Costs*](https://www.infoq.com/news/2023/05/prime-ec2-ecs-saves-costs/).
+- AWS Builders' Library, [*Making retries safe with idempotent APIs*](https://aws.amazon.com/builders-library/making-retries-safe-with-idempotent-APIs/).

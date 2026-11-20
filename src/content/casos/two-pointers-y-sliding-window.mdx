@@ -1,0 +1,821 @@
+import { ThreeSum } from '../../components/widgets/entrevistas/ThreeSum'
+import { ContainerWater } from '../../components/widgets/entrevistas/ContainerWater'
+import { SlidingWindow } from '../../components/widgets/entrevistas/SlidingWindow'
+
+Muchos problemas de arreglos y cadenas tienen una fuerza bruta que prueba todos los pares `(i, j)`: O(n²). Two pointers y sliding window son la misma observación aplicada de dos formas: si existe una **regla** que te dice, mirando solo `i` y `j`, que un montón de pares ya no puede servir, puedes mover un índice y descartarlos todos de una vez. Cada índice recorre el arreglo como mucho una vez, y O(n²) se vuelve O(n).
+
+La diferencia con el patrón de [hashing](/casos/arrays-y-hashing) es que aquí casi no gastas memoria: dos enteros en vez de un diccionario. A cambio, necesitas estructura en la entrada: que esté **ordenada** (two pointers convergentes) o que la propiedad que buscas sea **monótona** al crecer o achicar un rango (sliding window). Reconocer esa estructura es la mitad del problema, y justificar por qué mover un puntero no pierde la respuesta es lo que separa una solución memorizada de una entendida.
+
+<Sketch
+  width={640}
+  height={340}
+  caption="Los pares (l, r) de un arreglo ordenado forman un triángulo. Cada comparación de dos punteros tacha una fila o una columna entera, así que bastan n − 1 pasos."
+  items={[
+    { type: 'text', x: 24, y: 28, text: 'n = 5 ordenado: diez pares (l, r)', size: 21, tone: 'pencil' },
+    { type: 'text', x: 100, y: 64, text: 'fila = l, columna = r', size: 18, tone: 'muted', with: true },
+    { type: 'cells', x: 100, y: 80, values: ['·', '·', '·', '·'], size: 40, states: [null, null, null, 'line'] },
+    { type: 'cells', x: 140, y: 120, values: ['·', '·', '·'], size: 40 },
+    { type: 'cells', x: 180, y: 160, values: ['·', '·'], size: 40 },
+    { type: 'cells', x: 220, y: 200, values: ['·'], size: 40 },
+    { type: 'text', x: 292, y: 70, text: 'inicio: (0, 4)', size: 18, tone: 'line' },
+    { type: 'line', points: [[92, 100], [268, 100]], tone: 'bad' },
+    { type: 'text', x: 292, y: 106, text: 'suma < target: l++ tacha la fila', size: 19, tone: 'bad' },
+    { type: 'line', points: [[240, 72], [240, 248]], tone: 'bad' },
+    { type: 'text', x: 292, y: 186, text: 'suma > target: r−− tacha la columna', size: 19, tone: 'bad' },
+    { type: 'text', x: 24, y: 298, text: ['cada paso descarta una fila o una columna:', 'n − 1 pasos en vez de n(n − 1)/2 pares'], size: 20, tone: 'line' },
+  ]}
+/>
+
+## Dos punteros: tres formas
+
+Hay tres configuraciones, y conviene nombrarlas en la entrevista:
+
+- **Convergentes**: uno empieza al inicio y otro al final, y se acercan. Sirve cuando la entrada está ordenada o es simétrica (palíndromos, sumas en arreglos ordenados, el contenedor de agua).
+- **En el mismo sentido** (lento y rápido): ambos avanzan hacia la derecha a ritmos distintos. Sirve para compactar en el lugar (Remove Duplicates from Sorted Array, Move Zeroes) y es la base de la ventana deslizante. En listas enlazadas, la versión "liebre y tortuga" detecta ciclos; la ves en [listas enlazadas](/casos/listas-enlazadas).
+- **Sobre dos secuencias**: un puntero en cada arreglo, como en el *merge* de dos arreglos ordenados o en Is Subsequence.
+
+**Señales para reconocer two pointers:**
+
+- Si ves "arreglo **ordenado**" y "par" o "triplete" que cumple algo, piensa en punteros convergentes.
+- Si ves "en el lugar", "sin memoria extra" o "elimina duplicados", piensa en lento y rápido.
+- Si ves "palíndromo" o "simétrico", piensa en dos punteros desde los extremos.
+- Si puedes argumentar "con este `i` fijo, ningún `j` más allá puede servir", tienes una regla para mover punteros.
+
+<Callout type="interview">
+
+En two pointers el entrevistador evalúa sobre todo **la justificación**: por qué mover ese puntero y no el otro no pierde la respuesta. Escribir el código de Container With Most Water de memoria vale poco si, cuando te preguntan "¿por qué mueves el lado más bajo?", no sabes responder. Prepara el argumento, no solo el código.
+
+</Callout>
+
+## Valid Palindrome y Two Sum II
+
+### Valid Palindrome
+
+**Enunciado.** ¿Es `s` un palíndromo si ignoras todo lo que no sea letra o dígito y las mayúsculas? `"A man, a plan, a canal: Panama"` → `true`; `"race a car"` → `false`.
+
+**Qué preguntar.** ¿Qué cuenta como alfanumérico? ¿Hay caracteres no ASCII (tildes, ñ)? ¿Una cadena vacía o solo con signos es palíndromo? (Sí.)
+
+**Fuerza bruta.** Filtrar, pasar a minúsculas, invertir y comparar: O(n) tiempo pero O(n) memoria. Es correcta; la mejora es solo de memoria.
+
+**La idea.** Dos punteros desde los extremos que saltan lo que no es alfanumérico y comparan.
+
+<CodeTabs>
+
+```java title="Java"
+public boolean isPalindrome(String s) {
+    int l = 0, r = s.length() - 1;
+    while (l < r) {
+        while (l < r && !Character.isLetterOrDigit(s.charAt(l))) l++;
+        while (l < r && !Character.isLetterOrDigit(s.charAt(r))) r--;
+        if (Character.toLowerCase(s.charAt(l)) != Character.toLowerCase(s.charAt(r))) return false;
+        l++;
+        r--;
+    }
+    return true;
+}
+```
+
+```python title="Python"
+def is_palindrome(s: str) -> bool:
+    l, r = 0, len(s) - 1
+    while l < r:
+        while l < r and not s[l].isalnum():
+            l += 1
+        while l < r and not s[r].isalnum():
+            r -= 1
+        if s[l].lower() != s[r].lower():
+            return False
+        l += 1
+        r -= 1
+    return True
+```
+
+```ts title="TypeScript"
+const isAlnum = (c: string) => /[a-z0-9]/i.test(c)
+
+function isPalindrome(s: string): boolean {
+  let l = 0
+  let r = s.length - 1
+  while (l < r) {
+    while (l < r && !isAlnum(s[l])) l++
+    while (l < r && !isAlnum(s[r])) r--
+    if (s[l].toLowerCase() !== s[r].toLowerCase()) return false
+    l++
+    r--
+  }
+  return true
+}
+```
+
+</CodeTabs>
+
+O(n) tiempo, O(1) memoria. El error típico es olvidar `l < r` en los `while` internos: con una cadena de puros signos, `l` se sale del arreglo. En Java, `Character.isLetterOrDigit` acepta cualquier letra Unicode (`ñ`, `é`), a diferencia de la expresión regular `[a-z0-9]` de la versión TypeScript: si el enunciado dice "solo ASCII", pregunta cuál de los dos comportamientos quieren.
+
+### Two Sum II: el arreglo ordenado
+
+**Enunciado.** Igual que Two Sum, pero `numbers` está ordenado de forma ascendente, la respuesta va con índices desde 1 y debes usar memoria constante. `[2, 7, 11, 15]`, `target = 9` → `[1, 2]`.
+
+**La idea.** Si `numbers[l] + numbers[r]` es menor que `target`, ningún par que use este `l` con un `r` más chico puede alcanzar `target` (todos suman todavía menos): descarta `l`. Si es mayor, por simetría descarta `r`. Cada paso elimina una fila o una columna entera de la matriz de pares.
+
+<CodeTabs>
+
+```java title="Java"
+public int[] twoSum(int[] numbers, int target) {
+    int l = 0, r = numbers.length - 1;
+    while (l < r) {
+        int s = numbers[l] + numbers[r];
+        if (s == target) return new int[] { l + 1, r + 1 };
+        if (s < target) l++;
+        else r--;
+    }
+    return new int[0];
+}
+```
+
+```python title="Python"
+def two_sum_sorted(numbers: list[int], target: int) -> list[int]:
+    l, r = 0, len(numbers) - 1
+    while l < r:
+        s = numbers[l] + numbers[r]
+        if s == target:
+            return [l + 1, r + 1]
+        if s < target:
+            l += 1
+        else:
+            r -= 1
+    return []
+```
+
+```ts title="TypeScript"
+function twoSumSorted(numbers: number[], target: number): number[] {
+  let l = 0
+  let r = numbers.length - 1
+  while (l < r) {
+    const s = numbers[l] + numbers[r]
+    if (s === target) return [l + 1, r + 1]
+    if (s < target) l++
+    else r--
+  }
+  return []
+}
+```
+
+</CodeTabs>
+
+O(n) tiempo, O(1) memoria. Compáralo con el diccionario de Two Sum: mismo tiempo, sin memoria extra, pero solo porque el orden ya estaba dado. Si tuvieras que ordenar tú, pagarías O(n log n) y perderías los índices originales.
+
+## 3Sum: ordenar, fijar uno y dos punteros
+
+**Enunciado.** Devuelve todos los tripletes **distintos** `[a, b, c]` del arreglo con `a + b + c = 0`. `[-1, 0, 1, 2, -1, -4]` → `[[-1, -1, 2], [-1, 0, 1]]`.
+
+**Qué preguntar.** ¿Tripletes de valores o de índices? ¿El orden de salida importa? "Distintos" se refiere a valores: `[-1, 0, 1]` aparece una vez aunque haya dos `-1` en el arreglo.
+
+**Fuerza bruta.** Tres ciclos anidados y un set de tripletes ordenados para quitar repetidos: O(n³). Con un set para el tercer número (Two Sum por dentro) bajas a O(n²), pero manejar duplicados con sets se vuelve engorroso.
+
+**La idea.** Ordena. Fija `nums[i]` y busca en el resto un par que sume `-nums[i]`: eso es Two Sum II. Los duplicados se resuelven solos gracias al orden: quedan juntos, así que basta con **saltar valores iguales** al anterior para `i` y, después de cada hallazgo, para `l`.
+
+<ThreeSum />
+
+<CodeTabs>
+
+```java title="Java"
+public List<List<Integer>> threeSum(int[] nums) {
+    Arrays.sort(nums); // int[] se ordena numéricamente, sin comparador
+    List<List<Integer>> res = new ArrayList<>();
+    for (int i = 0; i < nums.length - 2; i++) {
+        if (nums[i] > 0) break;
+        if (i > 0 && nums[i] == nums[i - 1]) continue;
+        int l = i + 1, r = nums.length - 1;
+        while (l < r) {
+            int s = nums[i] + nums[l] + nums[r];
+            if (s < 0) l++;
+            else if (s > 0) r--;
+            else {
+                res.add(List.of(nums[i], nums[l], nums[r]));
+                l++;
+                while (l < r && nums[l] == nums[l - 1]) l++;
+            }
+        }
+    }
+    return res;
+}
+```
+
+```python title="Python"
+def three_sum(nums: list[int]) -> list[list[int]]:
+    nums.sort()
+    res = []
+    for i in range(len(nums) - 2):
+        if nums[i] > 0:
+            break  # con todo ordenado, ya no hay forma de sumar 0
+        if i > 0 and nums[i] == nums[i - 1]:
+            continue
+        l, r = i + 1, len(nums) - 1
+        while l < r:
+            s = nums[i] + nums[l] + nums[r]
+            if s < 0:
+                l += 1
+            elif s > 0:
+                r -= 1
+            else:
+                res.append([nums[i], nums[l], nums[r]])
+                l += 1
+                while l < r and nums[l] == nums[l - 1]:
+                    l += 1
+    return res
+```
+
+```ts title="TypeScript"
+function threeSum(nums: number[]): number[][] {
+  nums.sort((a, b) => a - b) // sin comparador, sort ordena como texto
+  const res: number[][] = []
+  for (let i = 0; i < nums.length - 2; i++) {
+    if (nums[i] > 0) break
+    if (i > 0 && nums[i] === nums[i - 1]) continue
+    let l = i + 1
+    let r = nums.length - 1
+    while (l < r) {
+      const s = nums[i] + nums[l] + nums[r]
+      if (s < 0) l++
+      else if (s > 0) r--
+      else {
+        res.push([nums[i], nums[l], nums[r]])
+        l++
+        while (l < r && nums[l] === nums[l - 1]) l++
+      }
+    }
+  }
+  return res
+}
+```
+
+</CodeTabs>
+
+**Complejidad.** O(n²) tiempo (el sort es O(n log n), menor). Memoria O(1) extra además de la salida, o O(n) según el algoritmo de ordenamiento del lenguaje.
+
+**Errores típicos.** En JavaScript, `nums.sort()` sin comparador ordena como cadenas: `[10, 2, -1].sort()` da `[-1, 10, 2]`. Saltar duplicados de `i` comparando con `nums[i + 1]` en vez de `nums[i - 1]`: te saltas el primer `-1` de `[-1, -1, 2]` y pierdes el triplete. Olvidar saltar duplicados de `l` después de un hallazgo: con `[-2, 0, 0, 2, 2]` devolverías `[-2, 0, 2]` dos veces.
+
+<Callout type="tip" title="En Java">
+
+`Arrays.sort` sobre un `int[]` ordena numéricamente y en el lugar (un *quicksort* de dos pivotes), sin comparador. Si tienes un `Integer[]` o necesitas un orden propio, usas `Arrays.sort(arr, comparador)`, que exige objetos: no existe `Arrays.sort(int[], Comparator)`. Para ordenar `int[]` por otro criterio, ordena índices en un `Integer[]` o arma un arreglo de `record`. Y `List.of(...)` crea una lista **inmutable**: perfecta para cada triplete del resultado, pero un `add` sobre ella lanza `UnsupportedOperationException`.
+
+</Callout>
+
+**Variantes.** *3Sum Closest* (misma estructura, guarda la suma más cercana). *4Sum* (dos ciclos fijos + dos punteros, O(n³)). *kSum* en general: recursión que fija uno y baja a (k − 1)Sum hasta llegar a Two Sum II.
+
+## Container With Most Water y el argumento de descarte
+
+**Enunciado.** `height[i]` es la altura de una pared vertical en la posición `i`. Elige dos paredes que, junto con el piso, formen el contenedor con más agua. El área es `min(height[l], height[r]) × (r − l)`. `[1, 8, 6, 2, 5, 4, 8, 3, 7]` → `49` (paredes 1 y 8, altura 7, ancho 7).
+
+**Qué preguntar.** ¿Las paredes tienen grosor? (No.) ¿Puede haber alturas 0? ¿Mínimo dos paredes?
+
+**Fuerza bruta.** Probar los n(n − 1)/2 pares: O(n²).
+
+**La idea.** Empieza con el contenedor más ancho, `l = 0` y `r = n − 1`. En cada paso mide el área y **mueve el lado más bajo** hacia adentro.
+
+**El argumento** (esto es lo que te van a preguntar). Supongamos que `height[l] < height[r]`. Mira todos los contenedores que usan la pared `l` con alguna pared `r'` entre `l` y `r`. Cada uno es **más angosto** que el actual (`r' − l < r − l`) y su altura es `min(height[l], height[r'])`, que **no puede superar** `height[l]`. Ninguno puede tener más área que el que acabamos de medir. Entonces la pared `l` ya dio lo mejor que podía dar, y descartarla no pierde la respuesta. Mover el lado alto, en cambio, sí podría perderla: el lado bajo seguiría limitando la altura y el ancho bajaría, así que nunca mejorarías. Si las alturas son iguales, el mismo argumento descarta a cualquiera de las dos.
+
+Cada paso elimina una pared de forma segura, así que en n − 1 pasos revisaste implícitamente todos los pares que podían ganar.
+
+<ContainerWater />
+
+<CodeTabs>
+
+```java title="Java"
+public int maxArea(int[] height) {
+    int l = 0, r = height.length - 1;
+    int best = 0;
+    while (l < r) {
+        int area = Math.min(height[l], height[r]) * (r - l);
+        best = Math.max(best, area);
+        if (height[l] < height[r]) l++;
+        else r--;
+    }
+    return best;
+}
+```
+
+```python title="Python"
+def max_area(height: list[int]) -> int:
+    l, r = 0, len(height) - 1
+    best = 0
+    while l < r:
+        area = min(height[l], height[r]) * (r - l)
+        best = max(best, area)
+        if height[l] < height[r]:
+            l += 1
+        else:
+            r -= 1
+    return best
+```
+
+```ts title="TypeScript"
+function maxArea(height: number[]): number {
+  let l = 0
+  let r = height.length - 1
+  let best = 0
+  while (l < r) {
+    const area = Math.min(height[l], height[r]) * (r - l)
+    best = Math.max(best, area)
+    if (height[l] < height[r]) l++
+    else r--
+  }
+  return best
+}
+```
+
+</CodeTabs>
+
+O(n) tiempo, O(1) memoria.
+
+<Quiz
+  question="En Container With Most Water, height[l] = 3 y height[r] = 9. ¿Por qué es seguro descartar l?"
+  options={[
+    { text: 'Porque cualquier contenedor que use l con una pared más adentro es más angosto y su altura no supera 3, así que no le gana al actual.', correct: true, why: 'Ese es el argumento completo: el ancho baja y la altura queda acotada por la pared baja. La pared l ya no puede formar un contenedor mejor.' },
+    { text: 'Porque las paredes bajas nunca forman parte de la respuesta óptima.', why: 'Falso: en [1, 1] la respuesta usa dos paredes de altura 1. Lo que se descarta es una pared que ya dio su mejor resultado, no cualquier pared baja.' },
+    { text: 'Porque mover r reduciría el ancho.', why: 'Mover cualquiera reduce el ancho en 1. La razón está en la altura: con l fija, la altura nunca supera 3.' },
+  ]}
+/>
+
+### Variante avanzada: Trapping Rain Water
+
+**Enunciado.** Con el mismo arreglo de alturas (ahora barras con ancho 1), ¿cuánta agua queda atrapada después de llover? `[0, 1, 0, 2, 1, 0, 1, 3, 2, 1, 2, 1]` → `6`.
+
+**La idea.** Sobre cada barra `i` se acumula `min(maxIzq, maxDer) − height[i]`, donde los máximos son la barra más alta a cada lado. Una solución calcula los dos arreglos de máximos (O(n) memoria). La de dos punteros evita esos arreglos: si `height[l] < height[r]`, el lado derecho tiene una barra al menos tan alta como `height[l]`, así que el agua sobre `l` depende **solo** de `left_max`. Procesas ese lado y avanzas.
+
+<CodeTabs>
+
+```java title="Java"
+public int trap(int[] height) {
+    int l = 0, r = height.length - 1;
+    int leftMax = 0, rightMax = 0;
+    int water = 0;
+    while (l < r) {
+        if (height[l] < height[r]) {
+            leftMax = Math.max(leftMax, height[l]);
+            water += leftMax - height[l];
+            l++;
+        } else {
+            rightMax = Math.max(rightMax, height[r]);
+            water += rightMax - height[r];
+            r--;
+        }
+    }
+    return water;
+}
+```
+
+```python title="Python"
+def trap(height: list[int]) -> int:
+    l, r = 0, len(height) - 1
+    left_max = right_max = 0
+    water = 0
+    while l < r:
+        if height[l] < height[r]:
+            left_max = max(left_max, height[l])
+            water += left_max - height[l]
+            l += 1
+        else:
+            right_max = max(right_max, height[r])
+            water += right_max - height[r]
+            r -= 1
+    return water
+```
+
+```ts title="TypeScript"
+function trap(height: number[]): number {
+  let l = 0
+  let r = height.length - 1
+  let leftMax = 0
+  let rightMax = 0
+  let water = 0
+  while (l < r) {
+    if (height[l] < height[r]) {
+      leftMax = Math.max(leftMax, height[l])
+      water += leftMax - height[l]
+      l++
+    } else {
+      rightMax = Math.max(rightMax, height[r])
+      water += rightMax - height[r]
+      r--
+    }
+  }
+  return water
+}
+```
+
+</CodeTabs>
+
+O(n) tiempo, O(1) memoria. Hay una tercera solución con una [pila monótona](/casos/pilas-y-colas) que calcula el agua por capas horizontales; vale la pena conocerla como repregunta.
+
+## Sliding window: ventana fija contra ventana variable
+
+Una ventana es un rango contiguo `[l, r]` que se desliza por el arreglo. En lugar de recalcular todo para cada rango, **actualizas** un estado cuando entra un elemento por la derecha y cuando sale uno por la izquierda.
+
+- **Ventana fija** (tamaño k): entra `nums[r]`, sale `nums[r − k]`. Ejemplos: el promedio máximo de k elementos consecutivos, o Permutation in String (¿alguna ventana de largo `len(t)` es anagrama de `t`?).
+- **Ventana variable**: `r` avanza siempre; `l` avanza solo cuando la ventana deja de cumplir la condición. Ejemplos: la subcadena más larga sin repetidos, el subarreglo más corto con suma al menos `target`.
+
+**Cuándo funciona la ventana variable.** Cuando la validez es **monótona**: si una ventana es inválida, agrandarla no la arregla; y si es válida, achicarla la mantiene válida (o al revés, según el problema). "Sin caracteres repetidos" cumple esto. "Suma exactamente k con negativos" no, y por eso ese problema se resuelve con [prefijos y un mapa](/casos/arrays-y-hashing).
+
+**La plantilla general** para "la ventana válida más larga":
+
+<CodeTabs>
+
+```java title="Java"
+int longestValidWindow(String s) {
+    WindowState state = new WindowState(); // contadores, set o lo que pida la condición
+    int l = 0, best = 0;
+    for (int r = 0; r < s.length(); r++) {
+        state.add(s.charAt(r));               // 1. expandir por la derecha
+        while (!state.isValid()) {            // 2. mientras sea inválida, contraer
+            state.remove(s.charAt(l));
+            l++;
+        }
+        best = Math.max(best, r - l + 1);     // 3. la ventana es válida: actualizar
+    }
+    return best;
+}
+```
+
+```python title="Python"
+def longest_valid_window(s) -> int:
+    state = ...  # contadores, set o lo que pida la condición
+    l = best = 0
+    for r in range(len(s)):
+        add(state, s[r])              # 1. expandir por la derecha
+        while not is_valid(state):    # 2. mientras sea inválida, contraer
+            remove(state, s[l])
+            l += 1
+        best = max(best, r - l + 1)   # 3. la ventana es válida: actualizar
+    return best
+```
+
+```ts title="TypeScript"
+function longestValidWindow(s: string): number {
+  const state = createState() // contadores, set o lo que pida la condición
+  let l = 0
+  let best = 0
+  for (let r = 0; r < s.length; r++) {
+    add(state, s[r]) // 1. expandir por la derecha
+    while (!isValid(state)) {
+      // 2. mientras sea inválida, contraer
+      remove(state, s[l])
+      l++
+    }
+    best = Math.max(best, r - l + 1) // 3. la ventana es válida: actualizar
+  }
+  return best
+}
+```
+
+</CodeTabs>
+
+Para "la ventana válida **más corta**" se invierte el paso 2: *mientras sea válida*, actualiza la respuesta y contrae. Lo verás en Minimum Window Substring.
+
+**Por qué es O(n) aunque haya un while dentro del for.** `r` avanza n veces y `l` avanza como mucho n veces en **toda** la ejecución, porque nunca retrocede. El trabajo total es O(n) más el costo de `add`, `remove` e `is_valid`, que deben ser O(1) para que el patrón valga la pena.
+
+<Sketch
+  width={640}
+  height={290}
+  caption="En la ventana variable, r avanza en cada vuelta y l solo cuando la ventana deja de cumplir la regla. Ninguno retrocede, así que entre los dos dan como mucho 2n pasos."
+  items={[
+    { type: 'text', x: 24, y: 28, text: 'ventana sin repetidos sobre "abcabcbb"', size: 21, tone: 'pencil' },
+    { type: 'cells', x: 60, y: 110, values: ['a', 'b', 'c', 'a', 'b', 'c', 'b', 'b'], size: 50, states: [null, 'line', 'line', 'line', null, null, null, null] },
+    { type: 'text', x: 235, y: 96, text: 'r', size: 22, font: 'code', anchor: 'middle', tone: 'line' },
+    { type: 'arrow', from: [250, 88], to: [290, 88], bend: -18, tone: 'line', label: 'r avanza siempre', labelAt: [330, 62] },
+    { type: 'text', x: 135, y: 188, text: 'l', size: 22, font: 'code', anchor: 'middle', tone: 'line' },
+    { type: 'arrow', from: [150, 182], to: [190, 182], bend: 18, tone: 'line', label: 'l avanza solo si la ventana es inválida', labelAt: [300, 228] },
+    { type: 'text', x: 478, y: 142, text: 'ventana "bca"', size: 19, tone: 'line' },
+    { type: 'text', x: 24, y: 274, text: 'ninguno retrocede: como mucho 2n pasos en total, O(n)', size: 20, tone: 'line' },
+  ]}
+/>
+
+### Best Time to Buy and Sell Stock
+
+**Enunciado.** `prices[i]` es el precio de una acción el día `i`. Compra un día y vende uno posterior; devuelve la ganancia máxima (0 si no conviene operar). `[7, 1, 5, 3, 6, 4]` → `5` (compras a 1, vendes a 6).
+
+**La idea.** Es una ventana donde `l` es el día del precio mínimo visto hasta ahora. Si aparece un precio menor, conviene mover `l` ahí: cualquier venta futura gana más comprando en el nuevo mínimo.
+
+<CodeTabs>
+
+```java title="Java"
+public int maxProfit(int[] prices) {
+    int lowest = Integer.MAX_VALUE;
+    int best = 0;
+    for (int p : prices) {
+        lowest = Math.min(lowest, p);
+        best = Math.max(best, p - lowest);
+    }
+    return best;
+}
+```
+
+```python title="Python"
+def max_profit(prices: list[int]) -> int:
+    lowest = float('inf')
+    best = 0
+    for p in prices:
+        lowest = min(lowest, p)
+        best = max(best, p - lowest)
+    return best
+```
+
+```ts title="TypeScript"
+function maxProfit(prices: number[]): number {
+  let lowest = Infinity
+  let best = 0
+  for (const p of prices) {
+    lowest = Math.min(lowest, p)
+    best = Math.max(best, p - lowest)
+  }
+  return best
+}
+```
+
+</CodeTabs>
+
+O(n) tiempo, O(1) memoria. Con precios que solo bajan, la respuesta es 0: asegúrate de no devolver una ganancia negativa.
+
+## Longest Substring Without Repeating Characters
+
+**Enunciado.** El largo de la subcadena más larga sin caracteres repetidos. `"abcabcbb"` → `3` (`"abc"`); `"bbbbb"` → `1`; `"pwwkew"` → `3` (`"wke"`; `"pwke"` es subsecuencia, no subcadena).
+
+**Qué preguntar.** ¿Qué alfabeto? (ASCII, Unicode.) ¿Cadena vacía? ¿Me piden el largo o la subcadena?
+
+**Fuerza bruta.** Probar cada subcadena y verificar si tiene repetidos: O(n³), u O(n²) si extiendes cada inicio con un set hasta encontrar un repetido.
+
+**La idea.** Ventana variable. Expande con `r`. Si el carácter nuevo ya está en la ventana, la ventana es inválida: contrae desde la izquierda hasta que deje de estarlo. Hay dos implementaciones:
+
+- **Con un set**: saca caracteres por la izquierda uno por uno hasta eliminar el repetido. Es la plantilla tal cual.
+- **Con un mapa de últimos índices**: guarda dónde viste cada carácter por última vez y **salta** `l` directo a la posición siguiente. Cuidado: el índice guardado puede ser de una aparición que ya salió de la ventana, y por eso la condición es `last[c] >= l`.
+
+Prueba `"abba"` en el widget con la versión de mapa: cuando llega la segunda `a`, su índice guardado (0) está fuera de la ventana, y sin la condición `l` retrocedería.
+
+<SlidingWindow />
+
+<CodeTabs>
+
+```java title="Java"
+public int lengthOfLongestSubstring(String s) {
+    Map<Character, Integer> last = new HashMap<>(); // carácter -> último índice
+    int l = 0, best = 0;
+    for (int r = 0; r < s.length(); r++) {
+        char c = s.charAt(r);
+        Integer j = last.get(c);
+        if (j != null && j >= l) l = j + 1;
+        last.put(c, r);
+        best = Math.max(best, r - l + 1);
+    }
+    return best;
+}
+```
+
+```python title="Python"
+def length_of_longest_substring(s: str) -> int:
+    last: dict[str, int] = {}  # carácter -> último índice
+    l = best = 0
+    for r, c in enumerate(s):
+        if c in last and last[c] >= l:
+            l = last[c] + 1
+        last[c] = r
+        best = max(best, r - l + 1)
+    return best
+```
+
+```ts title="TypeScript"
+function lengthOfLongestSubstring(s: string): number {
+  const last = new Map<string, number>() // carácter -> último índice
+  let l = 0
+  let best = 0
+  for (let r = 0; r < s.length; r++) {
+    const c = s[r]
+    const j = last.get(c)
+    if (j !== undefined && j >= l) l = j + 1
+    last.set(c, r)
+    best = Math.max(best, r - l + 1)
+  }
+  return best
+}
+```
+
+</CodeTabs>
+
+**Complejidad.** O(n) tiempo en ambas versiones. Memoria O(min(n, m)) con m el tamaño del alfabeto. En Java, si el alfabeto es ASCII, un `int[128]` con el último índice de cada carácter (inicializado en −1) reemplaza al `HashMap<Character, Integer>` y evita el *boxing*.
+
+**Repreguntas.** "Devuelve la subcadena, no el largo" (guarda `l` y `r` del mejor). "A lo sumo k caracteres distintos" (Longest Substring with At Most K Distinct Characters: mapa de conteos y contraer mientras haya más de k claves).
+
+<Quiz
+  question="En la versión con set, la ventana tiene un while dentro del for. ¿Por qué el total sigue siendo O(n)?"
+  options={[
+    { text: 'Porque el while casi nunca se ejecuta en la práctica.', why: 'Con "abcabc…" el while corre en casi cada paso. El argumento no es estadístico.' },
+    { text: 'Porque l solo avanza y nunca supera n: sumando todas las iteraciones del while, se ejecuta como mucho n veces.', correct: true, why: 'Es un argumento amortizado: cada carácter entra al set una vez (con r) y sale a lo sumo una vez (con l). En total, 2n operaciones.' },
+    { text: 'Porque las operaciones del set son O(1).', why: 'Es necesario pero no suficiente: también hay que acotar cuántas veces se ejecuta el while en total.' },
+  ]}
+/>
+
+## Longest Repeating Character Replacement y Minimum Window Substring
+
+### Longest Repeating Character Replacement
+
+**Enunciado.** Puedes cambiar hasta `k` caracteres de `s` (solo mayúsculas). ¿Cuál es la subcadena más larga con todas sus letras iguales que puedes lograr? `s = "AABABBA"`, `k = 1` → `4`.
+
+**La idea.** Una ventana es válida si `largo − (frecuencia de la letra más común) ≤ k`: lo que no es la letra mayoritaria es lo que tienes que reemplazar. Ventana variable con conteos.
+
+<CodeTabs>
+
+```java title="Java"
+public int characterReplacement(String s, int k) {
+    int[] count = new int[26];
+    int l = 0, best = 0, maxFreq = 0;
+    for (int r = 0; r < s.length(); r++) {
+        maxFreq = Math.max(maxFreq, ++count[s.charAt(r) - 'A']);
+        while ((r - l + 1) - maxFreq > k) {
+            count[s.charAt(l) - 'A']--;
+            l++;
+        }
+        best = Math.max(best, r - l + 1);
+    }
+    return best;
+}
+```
+
+```python title="Python"
+def character_replacement(s: str, k: int) -> int:
+    count: dict[str, int] = {}
+    l = best = max_freq = 0
+    for r, c in enumerate(s):
+        count[c] = count.get(c, 0) + 1
+        max_freq = max(max_freq, count[c])
+        while (r - l + 1) - max_freq > k:
+            count[s[l]] -= 1
+            l += 1
+        best = max(best, r - l + 1)
+    return best
+```
+
+```ts title="TypeScript"
+function characterReplacement(s: string, k: number): number {
+  const count = new Map<string, number>()
+  let l = 0
+  let best = 0
+  let maxFreq = 0
+  for (let r = 0; r < s.length; r++) {
+    const c = s[r]
+    count.set(c, (count.get(c) ?? 0) + 1)
+    maxFreq = Math.max(maxFreq, count.get(c)!)
+    while (r - l + 1 - maxFreq > k) {
+      count.set(s[l], count.get(s[l])! - 1)
+      l++
+    }
+    best = Math.max(best, r - l + 1)
+  }
+  return best
+}
+```
+
+</CodeTabs>
+
+O(n) tiempo, O(1) memoria (26 letras). El detalle fino, y una repregunta clásica: `max_freq` **no se recalcula** cuando sale un carácter, así que puede quedar más alto que la frecuencia real. No rompe la respuesta: `best` solo puede mejorar cuando aparece una ventana con una frecuencia máxima mayor que todas las anteriores, y en ese momento `max_freq` sí es exacto. Si no lo puedes argumentar con calma, recalcula el máximo sobre los 26 contadores: sigue siendo O(26 · n).
+
+### Minimum Window Substring
+
+**Enunciado.** La subcadena más corta de `s` que contiene todos los caracteres de `t`, con sus repeticiones. `s = "ADOBECODEBANC"`, `t = "ABC"` → `"BANC"`. Si no existe, `""`.
+
+**Qué preguntar.** ¿Importan las repeticiones de `t`? (Sí: `t = "AA"` exige dos A.) ¿Mayúsculas y minúsculas son distintas? ¿Qué devuelvo si hay empate?
+
+**La idea.** Ventana variable en su forma "la más corta": expande hasta que la ventana contiene todo `t`; luego, **mientras siga siendo válida**, registra la respuesta y contrae. Para saber si es válida en O(1), lleva un contador `missing` de cuántos caracteres de `t` faltan todavía.
+
+<CodeTabs>
+
+```java title="Java"
+public String minWindow(String s, String t) {
+    int[] need = new int[128]; // cuánto falta de cada carácter ASCII (puede quedar negativo)
+    for (char c : t.toCharArray()) need[c]++;
+    int missing = t.length();
+    int l = 0, bestL = 0, bestLen = Integer.MAX_VALUE;
+    for (int r = 0; r < s.length(); r++) {
+        if (need[s.charAt(r)]-- > 0) missing--;
+        while (missing == 0) {                 // válida: registrar y contraer
+            if (r - l + 1 < bestLen) {
+                bestL = l;
+                bestLen = r - l + 1;
+            }
+            if (++need[s.charAt(l)] > 0) missing++;
+            l++;
+        }
+    }
+    return bestLen == Integer.MAX_VALUE ? "" : s.substring(bestL, bestL + bestLen);
+}
+```
+
+```python title="Python"
+from collections import Counter
+
+def min_window(s: str, t: str) -> str:
+    need = Counter(t)          # cuánto falta de cada carácter (puede quedar negativo)
+    missing = len(t)
+    l = 0
+    best_l, best_len = 0, float('inf')
+    for r, c in enumerate(s):
+        if need[c] > 0:
+            missing -= 1
+        need[c] -= 1
+        while missing == 0:    # válida: registrar y contraer
+            if r - l + 1 < best_len:
+                best_l, best_len = l, r - l + 1
+            need[s[l]] += 1
+            if need[s[l]] > 0:
+                missing += 1
+            l += 1
+    return '' if best_len == float('inf') else s[best_l:best_l + best_len]
+```
+
+```ts title="TypeScript"
+function minWindow(s: string, t: string): string {
+  const need = new Map<string, number>() // cuánto falta de cada carácter
+  for (const c of t) need.set(c, (need.get(c) ?? 0) + 1)
+  let missing = t.length
+  let l = 0
+  let bestL = 0
+  let bestLen = Infinity
+  for (let r = 0; r < s.length; r++) {
+    const c = s[r]
+    if ((need.get(c) ?? 0) > 0) missing--
+    need.set(c, (need.get(c) ?? 0) - 1)
+    while (missing === 0) {
+      // válida: registrar y contraer
+      if (r - l + 1 < bestLen) {
+        bestL = l
+        bestLen = r - l + 1
+      }
+      const out = s[l]
+      need.set(out, need.get(out)! + 1)
+      if (need.get(out)! > 0) missing++
+      l++
+    }
+  }
+  return bestLen === Infinity ? '' : s.slice(bestL, bestL + bestLen)
+}
+```
+
+</CodeTabs>
+
+**Complejidad.** O(|s| + |t|) tiempo, O(m) memoria para el alfabeto.
+
+<Callout type="tip" title="En Java">
+
+Si el problema te pide **construir** la subcadena (por ejemplo, devolver todas las ventanas válidas), no concatenes con `+` dentro del ciclo: `String` es inmutable y cada `+` copia la cadena entera, lo que convierte un O(n) en O(n²). Guarda índices y llama a `substring` una sola vez al final, o usa un `StringBuilder`. `charAt(i)` sí es O(1).
+
+</Callout>
+
+**Errores típicos.** Comparar dos mapas completos en cada paso para saber si la ventana es válida (O(m) por paso: funciona, pero pierdes la elegancia y a veces el tiempo). Contar `missing` por caracteres distintos y no por total cuando `t` tiene repetidos. Olvidar el caso sin solución.
+
+## Cómo reconocer cada patrón
+
+| Si el enunciado dice… | Piensa en… | Ejemplo |
+| --- | --- | --- |
+| arreglo ordenado + par/triplete con una suma | punteros convergentes | Two Sum II, 3Sum |
+| palíndromo, simétrico, invertir en el lugar | punteros desde los extremos | Valid Palindrome |
+| elegir dos extremos que maximizan algo | convergentes + argumento de descarte | Container With Most Water |
+| subarreglo o subcadena **contigua** más larga/corta con una condición monótona | ventana variable | Longest Substring, Minimum Window |
+| algo sobre cada bloque de k consecutivos | ventana fija | Permutation in String |
+| subarreglo con suma exacta y hay negativos | **no** es ventana: prefijos + mapa | Subarray Sum Equals K |
+| el máximo o mínimo de cada ventana | ventana + deque monótona | Sliding Window Maximum |
+
+**Problemas típicos de este patrón:**
+
+| Problema (LeetCode) | Técnica | Tiempo |
+| --- | --- | --- |
+| [Valid Palindrome](https://leetcode.com/problems/valid-palindrome/) | convergentes | O(n) |
+| [Two Sum II - Input Array Is Sorted](https://leetcode.com/problems/two-sum-ii-input-array-is-sorted/) | convergentes | O(n) |
+| [3Sum](https://leetcode.com/problems/3sum/) | ordenar + fijar + convergentes | O(n²) |
+| [Container With Most Water](https://leetcode.com/problems/container-with-most-water/) | convergentes, mover el lado bajo | O(n) |
+| [Trapping Rain Water](https://leetcode.com/problems/trapping-rain-water/) | convergentes con máximos | O(n) |
+| [Best Time to Buy and Sell Stock](https://leetcode.com/problems/best-time-to-buy-and-sell-stock/) | mínimo corriente | O(n) |
+| [Longest Substring Without Repeating Characters](https://leetcode.com/problems/longest-substring-without-repeating-characters/) | ventana variable | O(n) |
+| [Longest Repeating Character Replacement](https://leetcode.com/problems/longest-repeating-character-replacement/) | ventana variable + conteos | O(n) |
+| [Permutation in String](https://leetcode.com/problems/permutation-in-string/) | ventana fija + conteos | O(n) |
+| [Minimum Window Substring](https://leetcode.com/problems/minimum-window-substring/) | ventana variable "más corta" | O(n) |
+| [Sliding Window Maximum](https://leetcode.com/problems/sliding-window-maximum/) | ventana fija + deque monótona | O(n) |
+
+El último lo resolvemos en [pilas, colas y la pila monótona](/casos/pilas-y-colas).
+
+<Takeaways>
+
+- Two pointers y sliding window convierten O(n²) en O(n) cuando una regla permite **descartar muchos pares de una vez** mirando solo dos índices.
+- Punteros convergentes necesitan orden o simetría. En 3Sum, ordenar además agrupa los duplicados para poder saltarlos.
+- Prepara el **argumento** de cada movimiento: en Container With Most Water, el lado bajo ya dio su mejor área posible, por eso se descarta.
+- Ventana variable = expandir con `r`, contraer con `l` mientras la ventana sea inválida y actualizar la respuesta. Para "la más corta", registra y contrae mientras sea válida.
+- El while dentro del for no hace O(n²): `l` nunca retrocede, así que el trabajo total es lineal (análisis amortizado).
+- La ventana solo funciona si la validez es monótona. Con sumas exactas y negativos, usa prefijos y un mapa.
+
+</Takeaways>
+
+## Fuentes y lecturas
+
+- [Tech Interview Handbook: Array](https://www.techinterviewhandbook.org/algorithms/array/) y [String](https://www.techinterviewhandbook.org/algorithms/string/): técnicas de two pointers y sliding window con listas de práctica.
+- [NeetCode: roadmap](https://neetcode.io/roadmap): los bloques "Two Pointers" y "Sliding Window" contienen casi todos los problemas de este tema, con video.
+- Problemas en LeetCode: [Container With Most Water](https://leetcode.com/problems/container-with-most-water/), [3Sum](https://leetcode.com/problems/3sum/), [Longest Substring Without Repeating Characters](https://leetcode.com/problems/longest-substring-without-repeating-characters/), [Minimum Window Substring](https://leetcode.com/problems/minimum-window-substring/). La pestaña *Editorial* de cada uno discute varias soluciones.
+- Steven Skiena, *The Algorithm Design Manual* (Springer): capítulos de ordenamiento y búsqueda, útiles para el razonamiento de "ordenar primero".
+- Gayle Laakmann McDowell, *Cracking the Coding Interview* (CareerCup), capítulos "Arrays and Strings" y "Optimize & Solve Technique".
+

@@ -1,0 +1,121 @@
+.thm-pick,
+.thm-own {
+  display: grid;
+  gap: 4px;
+}
+.thm-pick select,
+.thm-own__input {
+  min-height: 40px;
+  max-width: 100%;
+  padding: 0 10px;
+  border: 1.5px solid var(--rule-strong);
+  border-radius: 8px;
+  background: var(--card);
+  color: var(--ink);
+  font-family: var(--font-code);
+  font-size: 0.86rem;
+}
+.thm-own__row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.thm-own__input {
+  width: 11rem;
+}
+.thm-pick select:focus-visible,
+.thm-own__input:focus-visible {
+  outline: 2px solid var(--line-ink);
+  outline-offset: 1px;
+}
+
+.thm-scale {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 2px minmax(0, 1fr);
+  gap: var(--s-3);
+  align-items: stretch;
+}
+.thm-mid {
+  background: var(--line);
+  border-radius: 2px;
+}
+.thm-heap {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  min-width: 0;
+}
+.thm-heap--lo {
+  justify-items: end;
+}
+.thm-heap__title {
+  font-family: var(--font-code);
+  font-size: 0.8rem;
+  color: var(--ink-3);
+}
+.thm-heap__title span {
+  color: var(--ink-2);
+  font-weight: 700;
+}
+.thm-heap__items {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  min-height: 40px;
+}
+/* lo reads like a number line: its top (the max) sits next to the divider */
+.thm-heap__items--lo {
+  flex-direction: row-reverse;
+}
+.thm-chip {
+  display: grid;
+  place-items: center;
+  min-width: 40px;
+  height: 40px;
+  padding: 0 6px;
+  border: 1.5px solid var(--rule-strong);
+  border-radius: 6px;
+  background: var(--card);
+  font-family: var(--font-code);
+  font-weight: 700;
+  font-size: 0.95rem;
+  color: var(--ink);
+  transition:
+    background-color 220ms var(--ease-out),
+    border-color 220ms var(--ease-out),
+    color 220ms var(--ease-out);
+}
+.thm-chip.is-top {
+  border-color: var(--line);
+  border-width: 2.5px;
+}
+.thm-chip.is-new {
+  background: var(--line);
+  border-color: var(--line);
+  color: var(--line-on);
+}
+.thm-chip.is-moved {
+  background: color-mix(in oklab, var(--warn) 22%, var(--card));
+  border-color: var(--warn);
+}
+.thm-heap__empty {
+  align-self: center;
+  font-family: var(--font-sign);
+  font-style: italic;
+  color: var(--ink-3);
+}
+.thm-stats {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-3) var(--s-5);
+}
+.thm-hint {
+  margin: 0;
+  font-family: var(--font-sign);
+  font-size: 0.85rem;
+  color: var(--ink-3);
+}

@@ -1,0 +1,108 @@
+.hd-grid {
+  display: grid;
+  grid-template-columns: minmax(240px, 380px) minmax(0, 1fr);
+  gap: var(--s-5);
+  align-items: center;
+}
+@media (max-width: 720px) {
+  .hd-grid {
+    grid-template-columns: 1fr;
+  }
+}
+.hd-svg {
+  width: 100%;
+  max-width: 380px;
+  height: auto;
+  margin-inline: auto;
+  display: block;
+}
+.hd-ring {
+  cursor: pointer;
+  outline: none;
+}
+.hd-band {
+  fill: var(--paper-2);
+  stroke: var(--rule-strong);
+  stroke-width: 1.5;
+  transition:
+    fill 200ms var(--ease-out),
+    stroke 200ms var(--ease-out);
+}
+.hd-ring:hover .hd-band {
+  fill: var(--paper-3);
+}
+.hd-ring.is-on .hd-band {
+  fill: var(--line-tint-2);
+  stroke: var(--line);
+  stroke-width: 4;
+}
+.hd-ring:focus-visible .hd-band,
+.hd-ring:focus-visible .hd-core {
+  stroke: var(--line-ink);
+  stroke-width: 4;
+  stroke-dasharray: 6 4;
+}
+.hd-core {
+  fill: var(--paper);
+  stroke: var(--line);
+  stroke-width: 4;
+}
+.hd-ring.is-on .hd-core {
+  fill: var(--line);
+}
+.hd-label {
+  font-size: 14px;
+  font-weight: 700;
+  fill: var(--ink-2);
+  pointer-events: none;
+}
+.hd-label.is-on {
+  fill: var(--ink);
+}
+.hd-label--core {
+  font-size: 15px;
+  fill: var(--line-ink);
+}
+.hd-label--core.is-on {
+  fill: var(--line-on);
+}
+.hd-panel {
+  min-width: 0;
+}
+.hd-title {
+  margin: 0 0 var(--s-2);
+  font-family: var(--font-sign);
+  font-size: var(--step-1);
+  font-weight: 700;
+  color: var(--line-ink);
+}
+.hd-panel p {
+  margin: 0 0 var(--s-3);
+  font-family: var(--font-read);
+  font-size: 0.98rem;
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+.hd-examples {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 var(--s-3);
+  padding: 0;
+  list-style: none;
+}
+.hd-examples code {
+  display: inline-block;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: var(--paper-3);
+  font-family: var(--font-code);
+  font-size: 0.74rem;
+  color: var(--ink);
+}
+.hd-panel .hd-missing {
+  padding: var(--s-2) var(--s-3);
+  border-radius: var(--radius);
+  background: color-mix(in oklab, var(--warn) 9%, var(--card));
+  font-size: 0.92rem;
+}

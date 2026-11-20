@@ -1,0 +1,25 @@
+.abr-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.abr-tick {
+  font-size: 13px;
+  fill: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+}
+.abr-legend {
+  font-size: 13px;
+  font-weight: 700;
+  fill: var(--ink-2);
+}
+.abr-play {
+  display: flex;
+  align-items: center;
+  gap: var(--s-1);
+}
+.abr-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-3) var(--s-5);
+}

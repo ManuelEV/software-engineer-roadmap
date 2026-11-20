@@ -1,0 +1,480 @@
+import { GeoGrid } from '../../components/widgets/casos-b/GeoGrid'
+
+"Diseña Uber" es probablemente la pregunta de system design con más partes móviles, y lo es literalmente: millones de autos cambian de posición cada pocos segundos, y el sistema tiene que responder en tiempo real a una pregunta que suena trivial: *¿quién es el conductor libre más cercano a este pasajero, y cómo me aseguro de que no lo asigne a dos viajes a la vez?*
+
+Es un clásico porque obliga a combinar tres problemas que casi nunca aparecen juntos: un flujo de **escrituras altísimo** (posiciones que llegan sin parar y que caducan en segundos), un problema de **búsqueda geoespacial** (las bases de datos con índices B-tree no saben buscar "cerca de" en dos dimensiones), y un problema de **consistencia fuerte** muy localizado (un conductor, un viaje). Lo que lo hace difícil no es ninguna pieza por separado, sino que cada una pide una herramienta distinta y tienes que justificar por qué.
+
+En este tema lo resolvemos como en una entrevista real de 45–60 minutos: requisitos, números, API, datos, diseño, y luego las profundizaciones donde se separan los candidatos *mid* de los *senior* y *staff*.
+
+<Sketch
+  width={640}
+  height={290}
+  caption="Dos flujos con perfiles opuestos: las ubicaciones (enormes, efímeras, mejor un dato viejo que ninguno) y los viajes (pocos, transaccionales, mejor un 409 que dos conductores)."
+  items={[
+    { type: 'text', x: 24, y: 32, text: 'dos flujos, dos garantías', size: 22, tone: 'pencil' },
+    { type: 'text', x: 70, y: 60, text: 'conductores', size: 18, tone: 'pencil' },
+    { type: 'circle', x: 44, y: 76, r: 13 },
+    { type: 'circle', x: 44, y: 110, r: 13, with: true },
+    { type: 'circle', x: 44, y: 144, r: 13, with: true },
+    { type: 'arrow', from: [60, 76], to: [214, 100] },
+    { type: 'arrow', from: [60, 110], to: [214, 110], with: true },
+    { type: 'arrow', from: [60, 144], to: [214, 120], with: true },
+    { type: 'box', x: 218, y: 78, w: 150, h: 64, label: 'Redis GEO', size: 20, tone: 'line', fill: true },
+    { type: 'text', x: 388, y: 104, text: '375.000/s, efímero', size: 20 },
+    { type: 'text', x: 388, y: 132, text: 'AP: responde siempre', size: 18, tone: 'pencil' },
+    { type: 'line', points: [[24, 178], [616, 178]], dashed: true, tone: 'muted' },
+    { type: 'circle', x: 44, y: 236, r: 16 },
+    { type: 'text', x: 70, y: 224, text: 'pasajero', size: 18, tone: 'pencil' },
+    { type: 'arrow', from: [62, 236], to: [214, 236], tone: 'line' },
+    { type: 'box', x: 218, y: 204, w: 150, h: 64, label: 'Postgres', size: 20 },
+    { type: 'text', x: 388, y: 230, text: '1.500/s, transaccional', size: 20 },
+    { type: 'text', x: 388, y: 258, text: 'CP: mejor 409 que doble', size: 18, tone: 'pencil' },
+  ]}
+/>
+
+## Requisitos
+
+Lo primero es acotar. Uber hace muchísimas cosas (comida, envíos, pagos, viajes compartidos); en 45 minutos diseñas el núcleo: pedir un viaje y emparejarlo con un conductor.
+
+### Funcionales
+
+1. El pasajero indica origen y destino y recibe una **tarifa estimada** (precio y tiempo de llegada).
+2. El pasajero **confirma** y se crea un viaje.
+3. El sistema **empareja** el viaje con un conductor disponible cercano.
+4. El conductor **acepta o rechaza** la oferta; si rechaza o no responde, se ofrece al siguiente.
+5. Ambos ven la **posición del otro** en tiempo real durante la recogida y el viaje.
+
+### No funcionales
+
+- **Latencia de matching baja**: emparejar (o fallar con un mensaje claro) en menos de un minuto; la búsqueda de candidatos en sí, en decenas de milisegundos.
+- **Consistencia fuerte en la asignación**: un conductor nunca tiene dos viajes activos; un viaje nunca tiene dos conductores.
+- **Alto rendimiento de escritura** para las ubicaciones, con picos (un estadio que se vacía, Año Nuevo).
+- **Alta disponibilidad** del flujo de pedir viaje: si se cae, la empresa literalmente no factura.
+- **Frescura** de la ubicación: un conductor que dejó de reportar hace 30 s no debería recibir ofertas.
+
+### Fuera de alcance (dilo explícitamente)
+
+Calificaciones, viajes programados, categorías (XL, Comfort), viajes compartidos (*pool*), pagos (tiene su [propio tema](/casos/pagos)), detección de fraude y el detalle del cálculo de precios dinámicos. Nombrarlos muestra que los viste; dejarlos fuera muestra que sabes priorizar.
+
+<Callout type="interview" title="Pregunta antes de diseñar">
+
+Dos preguntas que cambian el diseño: *¿es global o una sola ciudad?* (cambia el sharding) y *¿el conductor puede tener varias ofertas a la vez?* (cambia el protocolo de matching). La respuesta estándar es: global, y una oferta por conductor a la vez.
+
+</Callout>
+
+## Estimaciones
+
+Ningún número de esta sección es dato oficial de Uber; son supuestos razonables para dimensionar. Lo importante es la aritmética y las conclusiones.
+
+**Supongamos:**
+
+- 1,5 M de conductores conectados en la hora pico a nivel global.
+- Cada conductor envía su ubicación cada **4 segundos**.
+- 25 M de viajes por día.
+- Un *ping* de ubicación pesa unos 100 bytes (ID, lat, lng, rumbo, velocidad, timestamp, estado).
+
+**Escrituras de ubicación:**
+
+```text
+1.500.000 conductores / 4 s = 375.000 escrituras/s   (pico)
+375.000 × 100 B            ≈ 37,5 MB/s de entrada
+```
+
+**Pedidos de viaje:**
+
+```text
+25.000.000 viajes / 86.400 s ≈ 290 viajes/s promedio
+pico ×5                       ≈ 1.500 pedidos de matching/s
+```
+
+**Tamaño del estado "vivo":**
+
+```text
+1.500.000 conductores × ~100 B ≈ 150 MB
+```
+
+**Historial de ubicaciones** (si guardas todo para rutas, auditoría y analítica):
+
+```text
+375.000/s × 100 B × 86.400 s ≈ 3,2 TB/día (sin comprimir)
+```
+
+Las conclusiones valen más que los números:
+
+1. **El estado actual cabe en la memoria de una sola máquina** (150 MB). El problema no es el tamaño, es el *ritmo*: 375 k escrituras/s sobre datos que caducan en segundos. Eso apunta a un almacén en memoria, no a una base relacional.
+2. **La relación escritura/lectura está invertida** respecto a casi todo lo demás: hay ~250 escrituras de ubicación por cada pedido de matching. Optimizas la ruta de escritura primero.
+3. **El historial es otro problema**: datos fríos, de solo anexar, que van a un log (Kafka) y luego a almacenamiento barato. No mezcles el "dónde está ahora" con el "dónde estuvo".
+
+<Quiz
+  question="Tu índice de ubicaciones actuales (Redis) se cae y pierdes todo su contenido. ¿Qué tan grave es?"
+  options={[
+    { text: 'Gravísimo: hay que restaurar desde el último backup antes de volver a emparejar.', why: 'Un backup de hace minutos es peor que nada: tendría posiciones viejas. Restaurarlo te haría ofrecer viajes a conductores que ya se movieron o se desconectaron.' },
+    { text: 'Poco grave: en unos 4 segundos los propios conductores vuelven a reportar y el índice se reconstruye solo.', correct: true, why: 'Exacto. La ubicación actual es estado efímero y autorregenerable: la fuente de verdad son los teléfonos. Por eso puedes priorizar velocidad sobre durabilidad (sin fsync por escritura), y basta con una réplica para failover rápido.' },
+    { text: 'Depende: hay que reprocesar Kafka desde el principio para reconstruir el estado.', why: 'Kafka sirve para el historial y la analítica, pero reprocesarlo para reconstruir posiciones actuales es lento e innecesario cuando el próximo ping llega en segundos.' },
+  ]}
+/>
+
+## Entidades y API
+
+Entidades centrales: **Pasajero**, **Conductor** (con su estado: desconectado, disponible, con oferta, en viaje), **Tarifa** (cotización con vencimiento), **Viaje** (el ciclo de vida completo) y **Ubicación** (la última posición conocida de cada conductor).
+
+```http title="Cotizar"
+POST /v1/fares
+Authorization: Bearer <token-pasajero>
+
+{ "pickup": { "lat": 19.4326, "lng": -99.1332 },
+  "dropoff": { "lat": 19.3600, "lng": -99.1800 } }
+
+201 Created
+{ "fareId": "far_8Kq2", "price": { "amount": 18450, "currency": "MXN" },
+  "etaPickupSec": 240, "expiresAt": "2026-11-19T18:05:00Z" }
+```
+
+```http title="Pedir el viaje"
+POST /v1/rides
+Idempotency-Key: 4f1c9e0a-7b7e-4d1f-9a43-2a0c1f6b9e21
+
+{ "fareId": "far_8Kq2" }
+
+202 Accepted
+{ "rideId": "ride_19Za", "status": "matching" }
+```
+
+```http title="Ping de ubicación del conductor (o un mensaje por WebSocket)"
+POST /v1/drivers/me/location
+
+{ "lat": 19.4301, "lng": -99.1405, "heading": 87, "speedKmh": 31, "ts": 1763575200123 }
+
+204 No Content
+```
+
+```http title="Responder la oferta"
+PATCH /v1/rides/ride_19Za
+{ "action": "accept" }
+
+200 OK     { "rideId": "ride_19Za", "status": "driver_assigned", "pickup": { ... } }
+409 Conflict  (la oferta ya expiró o el viaje lo tomó otro conductor)
+```
+
+Detalles que el entrevistador nota:
+
+- El **ID del conductor y del pasajero salen del token**, nunca del cuerpo. Igual el precio: el cliente manda `fareId`, y el servidor busca el precio guardado. Si aceptas `price` del cliente, alguien pedirá viajes a 1 peso.
+- `POST /rides` es **asíncrono** (202): el matching puede tardar segundos. El cliente recibe actualizaciones por WebSocket o *server-sent events*, no haciendo *polling* cada 500 ms.
+- `POST /rides` lleva **`Idempotency-Key`**: si la red del pasajero falla y la app reintenta, no quieres dos viajes con dos conductores en camino.
+- Las ubicaciones en producción suelen viajar por una **conexión persistente** (WebSocket o un protocolo binario sobre ella) y no como 375 k peticiones HTTP independientes por segundo: el *handshake* TLS y las cabeceras pesarían más que el propio dato.
+
+## Modelo de datos
+
+Aquí está la primera decisión importante: **no todo va al mismo almacén**.
+
+| Dato | Almacén | Por qué |
+| --- | --- | --- |
+| Viajes, tarifas, conductores, pasajeros | Postgres (o MySQL) particionado por región | Transacciones, actualizaciones condicionales, consultas por ID. Volumen moderado (cientos de escrituras/s). |
+| Ubicación actual + estado del conductor | Redis (GEO + hashes con TTL), particionado por ciudad | 375 k escrituras/s, datos efímeros, búsquedas por radio en memoria. |
+| Locks de asignación | Redis (`SET NX PX`) | Exclusión mutua con expiración automática. |
+| Historial de ubicaciones | Kafka → data lake (S3 + formato columnar) o Cassandra | Solo anexar, enorme, se consulta por lotes o por viaje. |
+
+```sql title="Viajes (Postgres)"
+CREATE TABLE rides (
+  ride_id      text PRIMARY KEY,
+  rider_id     text NOT NULL,
+  driver_id    text,                     -- NULL hasta que alguien acepta
+  fare_id      text NOT NULL REFERENCES fares(fare_id),
+  status       text NOT NULL,            -- requested | matching | driver_assigned
+                                         -- | in_progress | completed | cancelled
+  pickup       geography(Point) NOT NULL,
+  dropoff      geography(Point) NOT NULL,
+  city_id      int  NOT NULL,            -- clave de partición
+  version      int  NOT NULL DEFAULT 0,  -- para concurrencia optimista
+  created_at   timestamptz NOT NULL DEFAULT now()
+);
+
+-- Invariante de negocio garantizada por la base: un conductor, un viaje activo.
+CREATE UNIQUE INDEX one_active_ride_per_driver
+  ON rides (driver_id)
+  WHERE status IN ('driver_assigned', 'in_progress');
+```
+
+Ese índice único parcial es oro en una entrevista: convierte la regla de negocio más importante en algo que la base de datos **garantiza**, aunque todo lo demás falle.
+
+```text title="Ubicación actual (Redis)"
+GEOADD drivers:geo:cdmx  -99.1405 19.4301  drv_42        # sorted set con geohash de 52 bits
+HSET   driver:drv_42  status available  ts 1763575200123  city cdmx
+EXPIRE driver:drv_42  30                                  # sin pings en 30 s → desaparece
+```
+
+El estado del viaje es una pequeña máquina de estados. Escríbela en la pizarra; te ahorra muchas preguntas:
+
+```text
+requested → matching → driver_assigned → in_progress → completed
+                │              │
+                └──────────────┴──→ cancelled
+```
+
+## Diseño de alto nivel
+
+Hay dos flujos que conviene separar desde el inicio, porque tienen perfiles opuestos: el **flujo de ubicación** (enorme, efímero, tolerante a pérdidas puntuales) y el **flujo de viaje** (pequeño, transaccional, intolerante a errores). Recórrelos paso a paso:
+
+<FlowDiagram
+  caption="Arquitectura de alto nivel: arriba el flujo transaccional del viaje, abajo el flujo masivo de ubicaciones."
+  nodes={[
+    { id: 'rider', label: 'Pasajero', kind: 'mobile', x: 0, y: 0 },
+    { id: 'gw', label: 'API gateway', kind: 'gateway', x: 1, y: 0, sub: 'auth, rate limit' },
+    { id: 'rides', label: 'Servicio viajes', kind: 'service', x: 2, y: 0, sub: 'tarifas, estados' },
+    { id: 'db', label: 'Postgres', kind: 'db', x: 3, y: 0, sub: 'viajes por región' },
+    { id: 'maps', label: 'Rutas y ETA', kind: 'geo', x: 4, y: 0, sub: 'grafo vial + ML' },
+    { id: 'notif', label: 'Push / WS', kind: 'notify', x: 0, y: 1.5, sub: 'APNs, FCM, socket' },
+    { id: 'match', label: 'Matching', kind: 'service', x: 2, y: 1.5, sub: 'workflow por viaje', tone: 'line' },
+    { id: 'lock', label: 'Redis locks', kind: 'limiter', x: 3, y: 1.5, sub: 'SET NX PX 10 s' },
+    { id: 'driver', label: 'Conductor', kind: 'mobile', x: 0, y: 3 },
+    { id: 'edge', label: 'Gateway WS', kind: 'network', x: 1, y: 3, sub: 'conexiones vivas' },
+    { id: 'loc', label: 'Location svc', kind: 'service', x: 2, y: 3, sub: 'valida y escribe' },
+    { id: 'geo', label: 'Redis GEO', kind: 'cache', x: 3, y: 3, sub: 'shard por ciudad', tone: 'line' },
+    { id: 'kafka', label: 'Kafka', kind: 'stream', x: 2, y: 4.3, sub: 'historial ubicación' },
+    { id: 'lake', label: 'Data lake', kind: 'storage', x: 3, y: 4.3, sub: 'rutas, analítica' },
+  ]}
+  edges={[
+    { from: 'rider', to: 'gw', label: 'POST /rides' },
+    { from: 'gw', to: 'rides' },
+    { from: 'rides', to: 'db' },
+    { from: 'rides', to: 'maps', label: 'ruta' },
+    { from: 'rides', to: 'match' },
+    { from: 'match', to: 'geo', label: 'GEOSEARCH' },
+    { from: 'match', to: 'lock' },
+    { from: 'match', to: 'notif', label: 'oferta' },
+    { from: 'notif', to: 'driver' },
+    { from: 'driver', to: 'edge', bidir: true, label: 'ping 4 s' },
+    { from: 'edge', to: 'gw', label: 'aceptar' },
+    { from: 'edge', to: 'loc' },
+    { from: 'loc', to: 'geo', label: 'GEOADD' },
+    { from: 'loc', to: 'kafka' },
+    { from: 'kafka', to: 'lake', dashed: true },
+  ]}
+  steps={[
+    { title: 'El conductor reporta su posición', body: <>Cada ~4 s el teléfono del conductor manda un ping por su conexión persistente. El Location service valida (¿es plausible ese salto?, ¿el conductor está conectado?), hace <code>GEOADD</code> en el shard de su ciudad, refresca el TTL de su estado y publica el evento en Kafka para el historial.</>, active: ['driver', 'edge', 'loc', 'geo', 'kafka'], flow: ['driver-edge', 'edge-loc', 'loc-geo', 'loc-kafka'] },
+    { title: 'El pasajero cotiza', body: <>La app manda origen y destino. El Servicio de viajes pide la ruta y el tiempo estimado al servicio de rutas, aplica precio (incluido el multiplicador dinámico de la zona) y guarda una <b>Tarifa</b> con vencimiento de unos minutos. Devuelve <code>fareId</code>.</>, active: ['rider', 'gw', 'rides', 'maps', 'db'], flow: ['rider-gw', 'gw-rides', 'rides-maps', 'rides-db'] },
+    { title: 'Confirma el viaje', body: <>Con el <code>fareId</code> y una <code>Idempotency-Key</code>, el Servicio de viajes crea el viaje en estado <code>matching</code> y arranca un workflow de matching para ese viaje. Responde 202 de inmediato.</>, active: ['rider', 'gw', 'rides', 'db', 'match'], flow: ['rider-gw', 'gw-rides', 'rides-db', 'rides-match'] },
+    { title: 'Busca candidatos', body: <>Matching consulta el índice geoespacial: conductores disponibles en un radio alrededor del punto de recogida. Luego los ordena por tiempo estimado de llegada real (no por distancia en línea recta: un río o una autopista lo cambian todo).</>, active: ['match', 'geo'], flow: ['match-geo'] },
+    { title: 'Reserva al conductor y le ofrece el viaje', body: <>Antes de ofrecer, toma un lock por conductor con expiración (<code>SET lock:drv_42 ride_19Za NX PX 10000</code>). Si lo consigue, envía la oferta por el socket del conductor (o push si la app está en segundo plano). Si no, pasa al siguiente candidato.</>, active: ['match', 'lock', 'notif', 'driver'], flow: ['match-lock', 'match-notif', 'notif-driver'] },
+    { title: 'El conductor acepta', body: <>La aceptación llega al Servicio de viajes, que hace una <b>escritura condicional</b>: solo asigna si el viaje sigue en <code>matching</code>. El índice único parcial impide que el conductor quede con dos viajes activos. Si el lock ya expiró y otro se llevó el viaje, responde 409.</>, active: ['driver', 'edge', 'gw', 'rides', 'db'], flow: ['driver-edge', 'edge-gw', 'gw-rides', 'rides-db'] },
+    { title: 'Durante el viaje', body: <>Los pings del conductor siguen llegando. Además de actualizar el índice, se reenvían por el socket al pasajero (y se guardan en Kafka para reconstruir la ruta y calcular la tarifa final).</>, active: ['driver', 'edge', 'loc', 'kafka', 'lake'], flow: ['driver-edge', 'edge-loc', 'loc-kafka', 'kafka-lake'] },
+  ]}
+/>
+
+Observa lo que **no** está en el diagrama: no hay una base relacional recibiendo las 375 k escrituras/s, y el servicio de matching no lee de Postgres para buscar candidatos. Esa separación es la idea central del diseño.
+
+## Profundizaciones
+
+### 1. Ingerir 375.000 ubicaciones por segundo
+
+**La opción ingenua** es una tabla `driver_locations(driver_id, lat, lng, updated_at)` en Postgres con un `UPDATE` por ping. Falla por dos motivos. Primero, el volumen: cada `UPDATE` genera WAL, versiones muertas de filas (MVCC) y trabajo de *vacuum*; 375 k/s sostenidos es varias veces lo que un primario razonable aguanta. Segundo, la consulta: un índice B-tree sobre `(lat, lng)` solo ordena por la primera columna, así que "todos los puntos en este radio" se convierte en un barrido de una franja entera de latitud.
+
+**La opción que sí funciona** tiene cuatro piezas:
+
+1. **Almacén en memoria con índice geoespacial.** Redis guarda las posiciones en un *sorted set* cuyo *score* es un geohash de 52 bits (los bits de latitud y longitud intercalados). `GEOADD` cuesta O(log N) y `GEOSEARCH ... BYRADIUS` resuelve la búsqueda revisando la celda del centro y sus 8 vecinas, y luego filtra por distancia real.<Sidenote>La documentación de Redis lo describe exactamente así: calcula las "1+8 áreas" que cubren la forma, consulta un rango de scores por cada una y descarta lo que queda fuera. Es la estrategia "celda + 8 vecinas" del widget de más abajo.</Sidenote>
+2. **Particionado por ciudad o región.** Un Redis maneja del orden de cien mil operaciones por segundo por núcleo en operaciones simples; con 375 k/s necesitas repartir. Particionar por ciudad es natural porque las búsquedas casi nunca cruzan ciudades. El problema son las ciudades enormes: una ciudad de varios millones de habitantes puede necesitar subdividirse por celdas (por ejemplo, celdas H3 de resolución 5 o 6 como clave de shard).
+3. **Frescura por TTL.** Cada ping refresca un hash `driver:{id}` con `EXPIRE 30`. El matching descarta conductores sin hash vivo. Para el sorted set (que no tiene TTL por miembro), un proceso de limpieza elimina con `ZREM` a los que llevan más de 30 s sin reportar, usando un segundo sorted set indexado por timestamp.
+4. **Durabilidad relajada.** Como vimos en el quiz, este estado se regenera solo. Puedes configurar Redis sin `fsync` por escritura y con una réplica para failover. Lo que sí debe ser durable (el historial) va por Kafka, particionado por `driver_id` para conservar el orden de cada conductor.
+
+**Reducir la carga en origen** es la optimización que más rinde. El teléfono puede adaptar la frecuencia: un auto detenido en un semáforo no necesita reportar cada 4 s; uno que va a 80 km/h por autopista hacia un pasajero, sí. Reportar cada 4 s solo cuando el conductor está disponible o en viaje, y cada 15–30 s cuando está quieto, puede recortar fácilmente a la mitad el tráfico. La contrapartida es complejidad en el cliente y casos raros difíciles de probar.
+
+<Callout type="warn" title="El GPS miente">
+
+Las posiciones crudas saltan decenas de metros en zonas con edificios altos. Antes de indexar o de calcular la tarifa final, se hace *map matching*: proyectar la secuencia de puntos sobre la red vial más probable. En la entrevista basta con mencionarlo y decir que lo filtras en el Location service.
+
+</Callout>
+
+### 2. El índice geoespacial: geohash, quadtree, H3
+
+La pregunta "¿quién está cerca?" necesita convertir dos dimensiones en algo que una estructura unidimensional (un árbol, un hash) pueda indexar. Hay tres familias. Las tres comparten una idea: **dividir el mapa en celdas con un identificador**, buscar en la celda del pasajero y alrededores, y filtrar por distancia real. Para los fundamentos, mira [IDs, búsqueda, geo y blobs](/system-design/piezas-especiales).
+
+**Geohash** intercala los bits de longitud y latitud y los codifica en base32. Cada carácter extra divide la celda en 32. La ventaja estrella: celdas cercanas suelen compartir prefijo, así que "buscar en esta celda" es una consulta por prefijo o por rango, algo que cualquier base de datos sabe hacer. Tamaños aproximados en el ecuador:
+
+| Caracteres | Celda aproximada |
+| --- | --- |
+| 5 | 4,9 × 4,9 km |
+| 6 | 1,2 km × 609 m |
+| 7 | 153 × 152 m |
+
+Su gran trampa son los **bordes**: dos puntos a 10 metros pueden caer en celdas con prefijos totalmente distintos si los separa una línea de la cuadrícula. Por eso nunca buscas solo en la celda del pasajero, sino en ella y sus 8 vecinas.
+
+**Quadtree** divide recursivamente el mapa en 4 cuadrantes hasta que cada hoja tiene como máximo N puntos (digamos 100). Se adapta a la densidad: en el centro de la ciudad las hojas son diminutas; en el campo, enormes. Es ideal para puntos que se mueven poco (restaurantes, el problema de *Yelp*). Para conductores que se mueven cada 4 s es incómodo: cada movimiento puede cambiar de hoja, provocar divisiones y fusiones, y el árbol vive en la memoria de un proceso que hay que replicar.
+
+**H3** es el índice hexagonal que Uber publicó en 2018. Divide el planeta en hexágonos jerárquicos con 16 resoluciones; cada nivel tiene celdas de aproximadamente 1/7 del área del anterior. El hexágono tiene una propiedad que los cuadrados no: **sus 6 vecinos están todos a la misma distancia del centro** (un cuadrado tiene 4 vecinos a distancia 1 y 4 en diagonal a √2). Eso hace que "los anillos alrededor de mí" (`gridDisk(celda, k)`) aproximen mucho mejor un círculo, y que agregados como "oferta y demanda por zona" para el precio dinámico no tengan sesgos por la forma de la celda.
+
+| Resolución H3 | Área media del hexágono | Lado medio |
+| --- | --- | --- |
+| 7 | 5,16 km² | 1,41 km |
+| 8 | 0,74 km² | 531 m |
+| 9 | 0,105 km² | 201 m |
+
+<Compare>
+<Option title="Geohash (Redis GEO)" verdict="El punto de partida">
+
+Trivial de implementar con Redis o con un índice por prefijo. Celdas cuadradas con distorsión según latitud y problema de bordes (se resuelve con vecinas). Perfecto para la entrevista.
+
+</Option>
+<Option title="Quadtree" verdict="Para puntos casi estáticos">
+
+Se adapta a la densidad, pero mantenerlo con 375 k actualizaciones/s es caro y hay que distribuirlo tú. Mejor para lugares fijos (restaurantes, tiendas).
+
+</Option>
+<Option title="H3 / S2" verdict="Lo que usan en producción">
+
+Celdas jerárquicas con ID entero de 64 bits; vecinos uniformes (H3) o cobertura precisa de regiones (S2). Sirven también como clave de sharding y de agregación para precios.
+
+</Option>
+</Compare>
+
+Juega con el tamaño de celda y la estrategia de búsqueda. Fíjate en tres cosas: (1) con "solo su celda", un pasajero cerca del borde no encuentra al conductor que tiene a pocos metros; (2) con celdas grandes lees muchos conductores para quedarte con pocos; (3) con celdas pequeñas y radio grande, 3 × 3 celdas no cubren el círculo.
+
+<GeoGrid />
+
+La estrategia de **anillos expansivos** resuelve el dilema del tamaño de celda: empieza por la celda del pasajero y agrega anillos hasta tener K candidatos, *y* hasta que el siguiente anillo ya no pueda contener a nadie más cerca que el K-ésimo encontrado. En el centro denso para en el primer anillo; en la periferia sigue creciendo. Es exactamente lo que harías con `gridDisk` de H3.
+
+<Quiz
+  question="Usas geohash de 6 caracteres (celdas de ~1,2 × 0,6 km) y buscas conductores en un radio de 3 km consultando la celda del pasajero y sus 8 vecinas. ¿Qué pasa?"
+  options={[
+    { text: 'Funciona bien: 9 celdas siempre cubren cualquier radio razonable.', why: 'Las 9 celdas cubren un bloque de unos 3,6 × 1,8 km. Un círculo de 3 km de radio mide 6 km de diámetro: te quedas corto, sobre todo en el eje corto de la celda.' },
+    { text: 'Pierdes conductores: el bloque de 3 × 3 celdas es más chico que el círculo. Necesitas celdas más grandes (geohash 5) o más anillos.', correct: true, why: 'Correcto. La regla práctica: elige la precisión para que el lado de la celda sea al menos del tamaño del radio, o expande anillos hasta cubrirlo. El widget lo muestra con celdas de 1,25 km y radio de 3 km.' },
+    { text: 'Lees conductores de más, pero el resultado es correcto.', why: 'Leer de más pasa con celdas demasiado grandes. Aquí es al revés: celdas pequeñas para un radio grande dejan zonas del círculo sin revisar.' },
+  ]}
+/>
+
+### 3. Matching sin doble asignación
+
+Esta es la profundización que define el nivel. El requisito: **una oferta por conductor a la vez, un conductor por viaje**. Hay dos carreras posibles:
+
+- Dos pedidos simultáneos encuentran al mismo conductor como el más cercano y le ofrecen ambos viajes.
+- El conductor tarda en aceptar, la oferta se pasa a otro, y luego llegan *las dos* aceptaciones.
+
+**Opción mala: locks en memoria del proceso.** Si tienes 50 instancias de Matching, cada una tiene su propio mapa de "conductores ocupados". No se ven entre sí, y si una instancia muere con un conductor marcado, queda "secuestrado" para siempre.
+
+**Opción mejor: estado en la base de datos con timeout.** Marcas `drivers.status = 'offered'` con un `UPDATE ... WHERE status = 'available'` (que es atómico). Funciona, pero el timeout de 10 s vive en un temporizador del proceso: si el proceso muere, nadie devuelve al conductor a `available`, y necesitas un *cron* de limpieza que agrega latencia.
+
+**Opción recomendada: lock distribuido con TTL + escritura condicional como fuente de verdad.**
+
+<CodeTabs>
+
+```java title="Java"
+// matching/OfferService.java (con Spring Data Redis)
+boolean offerToNextCandidate(Ride ride, List<String> candidates) {
+    for (String driverId : candidates) {
+        String lock = "lock:driver:" + driverId;
+        // 1. Reservar al conductor por 10 s: solo si nadie lo tiene (NX) y con expiración (PX).
+        Boolean ok = redis.opsForValue().setIfAbsent(lock, ride.id(), Duration.ofSeconds(10));
+        if (!Boolean.TRUE.equals(ok)) continue; // otro viaje le está ofreciendo algo ahora mismo
+
+        push.sendOffer(driverId, ride); // por WebSocket o APNs/FCM
+        Answer answer = waitForAnswer(ride.id(), driverId, Duration.ofSeconds(10));
+        if (answer == Answer.ACCEPT) return assign(ride.id(), driverId);
+
+        redis.delete(lock); // rechazo o timeout: liberar ya
+    }
+    markNoDriversFound(ride.id());
+    return false;
+}
+```
+
+```ts title="TypeScript"
+// matching/offer.ts
+async function offerToNextCandidate(ride: Ride, candidates: DriverId[]) {
+  for (const driverId of candidates) {
+    // 1. Reservar al conductor por 10 s. NX: solo si nadie lo tiene. PX: expira solo.
+    const ok = await redis.set(`lock:driver:${driverId}`, ride.id, { NX: true, PX: 10_000 })
+    if (!ok) continue // otro viaje le está ofreciendo algo ahora mismo
+
+    await push.sendOffer(driverId, ride) // por WebSocket o APNs/FCM
+    const answer = await waitForAnswer(ride.id, driverId, { timeoutMs: 10_000 })
+    if (answer === 'accept') return assign(ride.id, driverId)
+
+    await redis.del(`lock:driver:${driverId}`) // rechazo: liberar ya (si sigue siendo nuestro)
+  }
+  return markNoDriversFound(ride.id)
+}
+```
+
+</CodeTabs>
+
+<Callout type="tip" title="En Java">
+
+`setIfAbsent` devuelve un `Boolean` en caja, no un `boolean`: dentro de un pipeline o una transacción de Redis puede ser `null`. Compara con `Boolean.TRUE.equals(ok)`; un `if (ok)` con `null` lanza `NullPointerException`.
+
+</Callout>
+
+```sql title="La asignación real: atómica y condicional"
+BEGIN;
+UPDATE rides
+   SET driver_id = $driver, status = 'driver_assigned', version = version + 1
+ WHERE ride_id = $ride AND status = 'matching';      -- si devuelve 0 filas → 409
+UPDATE drivers
+   SET status = 'on_trip'
+ WHERE driver_id = $driver AND status IN ('available', 'offered');
+COMMIT;  -- además, el índice único parcial impide 2 viajes activos por conductor
+```
+
+El punto fino que distingue a un senior: **el lock de Redis es una optimización, no la garantía**. Un lock con TTL puede expirar mientras el proceso que lo tenía sigue creyendo que es suyo (una pausa de GC, una red lenta). Si tu corrección dependiera solo del lock, tendrías doble asignación en ese caso raro. Por eso la decisión final la toma la base de datos con una escritura condicional (el `WHERE status = 'matching'` funciona como *fencing token*), y el índice único parcial es la última red.<Sidenote>Martin Kleppmann lo explica en "How to do distributed locking": un lock con expiración sin token de *fencing* no es seguro para corrección, solo para eficiencia (evitar trabajo duplicado). Aquí el lock evita ofertas duplicadas; la corrección la da la base.</Sidenote>
+
+**¿Y los timeouts si se cae Matching?** Cada viaje en matching es un proceso largo con esperas (ofrecer, esperar 10 s, siguiente candidato…). Modelarlo como un **workflow durable** (Temporal, o Cadence, que nació en Uber) hace que el estado "voy por el candidato 3 y el timer vence en 4 s" sobreviva a la caída de una instancia. La alternativa más simple es una cola con mensajes diferidos (SQS con *delay*): al ofrecer, programas un mensaje "revisar en 10 s"; si para entonces el viaje sigue sin asignar, pasas al siguiente.
+
+**Codicioso vs. por lotes.** Emparejar cada pedido con su conductor más cercano en cuanto llega es simple, pero globalmente subóptimo: el conductor más cercano a A podría ser el *único* cercano a B. Los sistemas maduros acumulan pedidos durante una ventana corta (unos segundos) y resuelven una asignación conjunta que minimiza el tiempo total de espera, incluso considerando conductores que están a punto de terminar un viaje cerca. Uber describió públicamente que su despacho considera conductores que aún están en viaje si llegarán antes. En la entrevista, menciónalo como mejora, no como diseño base.
+
+<Quiz
+  question="El lock de Redis del conductor expiró a los 10 s, pero su aceptación llega a los 10,5 s; mientras tanto el viaje se ofreció a otro conductor que también aceptó. ¿Qué evita la doble asignación?"
+  options={[
+    { text: 'Nada; por eso hay que subir el TTL del lock a 60 s.', why: 'Subir el TTL reduce la probabilidad pero no elimina la carrera, y deja conductores bloqueados mucho tiempo si la app se cuelga. La corrección no puede depender del reloj.' },
+    { text: 'La escritura condicional en la base de datos: el primero en hacer UPDATE ... WHERE status = matching gana; el segundo recibe 0 filas afectadas y un 409.', correct: true, why: 'Exacto. La base serializa las dos aceptaciones. El lock solo evita mandar ofertas duplicadas en el caso normal; la invariante la garantiza la transacción condicional (y el índice único parcial).' },
+    { text: 'Redlock con 5 nodos de Redis lo hace imposible.', why: 'Redlock mejora la disponibilidad del lock, pero sigue teniendo el mismo problema de expiración con pausas de proceso. Sin fencing, no garantiza exclusión mutua para corrección.' },
+  ]}
+/>
+
+### 4. ETA y precio dinámico (en breve)
+
+Ordenar candidatos por distancia en línea recta es el error típico: un conductor a 400 m al otro lado de una autopista sin retorno puede tardar 12 minutos. El servicio de rutas calcula tiempos sobre un **grafo vial** con pesos por tráfico. Dijkstra puro es lento en un grafo continental; se usan precomputaciones como *contraction hierarchies* para responder en milisegundos. Encima, Uber describió en 2022 su modelo DeepETA: el motor de rutas da un ETA base y una red neuronal predice la **corrección** a partir de datos reales de viajes.
+
+Para el matching basta con un truco de dos fases: filtras con el índice geoespacial (barato, cientos de candidatos), ordenas por distancia, y calculas ETA real solo para los ~10 mejores (caro). El **precio dinámico** se calcula aparte, en *streaming*: cuenta pedidos y conductores disponibles por celda (H3 encaja perfecto aquí) en ventanas de un par de minutos y publica un multiplicador por zona que el Servicio de viajes lee al cotizar.
+
+## Cuellos de botella y trade-offs
+
+- **Celdas calientes.** Un estadio que se vacía genera miles de pedidos en una sola celda en minutos. El shard de esa ciudad recibe el golpe. Mitigaciones: subdividir shards por celdas finas en ciudades grandes, poner los pedidos en una cola particionada por zona para que Matching los consuma a su ritmo, y matching por lotes en zonas calientes.
+- **Búsquedas en el borde de un shard.** Si particionas por ciudad o celda, un pasajero en el límite necesita consultar dos shards. Es raro y aceptable: haces la consulta en paralelo y mezclas resultados.
+- **Frescura vs. carga.** Pings cada 2 s duplican la carga respecto a cada 4 s; cada 10 s hacen que el mapa del pasajero "salte" y que ofrezcas viajes a conductores que ya pasaron de largo. El intervalo adaptativo es el compromiso.
+- **Disponibilidad vs. consistencia.** La ubicación es AP (si un shard tarda, mejor responder con datos de hace 5 s que no responder). La asignación es CP (prefieres un 409 a dos conductores en camino). Decirlo así, con esas palabras, es una señal muy clara de madurez. Repasa [consistencia y CAP](/system-design/consistencia).
+- **Conexiones persistentes.** 1,5 M de sockets abiertos requieren una flota de gateways con estado de conexión; un despliegue que los reinicia todos a la vez provoca una avalancha de reconexiones. Despliegues graduales y reconexión con *jitter* en el cliente.
+- **Redis como dependencia crítica.** Si el shard de una ciudad cae, el matching de esa ciudad se detiene unos segundos hasta el failover. Es aceptable precisamente porque el estado se reconstruye solo.
+
+## Qué espera el entrevistador
+
+<Callout type="interview" title="Por nivel">
+
+**Mid-level.** Requisitos claros, API razonable, separar el almacén de ubicaciones de la base de viajes, usar Redis GEO o geohash con celdas vecinas, y una solución que funcione para la doble asignación (aunque sea con la base de datos y timeouts). Se espera que el entrevistador te guíe en las profundizaciones.
+
+**Senior.** Llegas solo a las profundizaciones. Justificas con números por qué la ubicación no va a Postgres, explicas el problema de bordes y cómo elegir la precisión, y defiendes lock con TTL + escritura condicional explicando por qué el lock por sí solo no basta. Mencionas workflows durables o colas diferidas para los timeouts y el sharding geográfico.
+
+**Staff.** Además de lo anterior, conduces la conversación hacia los trade-offs que importan al negocio: AP para ubicación y CP para asignación, matching por lotes vs. codicioso y su impacto en tiempos de espera, celdas calientes en eventos, H3 como lenguaje común para sharding, precios y analítica, y cómo evolucionarías el sistema (multi-región, despliegues sin tormenta de reconexiones, observabilidad del embudo pedido → oferta → aceptación).
+
+</Callout>
+
+<Takeaways>
+
+- Separa el flujo de **ubicaciones** (enorme, efímero, AP) del flujo de **viajes** (pequeño, transaccional, CP): almacenes y garantías distintos.
+- 1,5 M de conductores caben en 150 MB; el reto es el ritmo de escritura, no el tamaño. Memoria + sharding por ciudad + TTL.
+- Todo índice geoespacial divide el mapa en celdas con ID; busca siempre en la celda y sus vecinas (o en anillos) y filtra por distancia real.
+- Elige el tamaño de celda según el radio: celdas chicas no cubren el círculo; celdas grandes leen de más. Los anillos expansivos se adaptan a la densidad.
+- El lock con TTL evita ofertas duplicadas; la **escritura condicional** y el índice único en la base son los que garantizan un conductor por viaje.
+- Ordena candidatos por ETA real, no por distancia en línea recta, pero calcula ETA solo para los mejores.
+
+</Takeaways>
+
+## Fuentes y lecturas
+
+- [H3: Uber's Hexagonal Hierarchical Spatial Index](https://www.uber.com/us/en/blog/h3/) — Uber Engineering, 2018. Por qué hexágonos y cómo funciona la jerarquía.
+- [Tabla de resoluciones de H3](https://h3geo.org/docs/core-library/restable/) — áreas y lados por resolución.
+- [Uber's Real-time Market Platform (InfoQ, QCon London 2015)](https://www.infoq.com/news/2015/03/uber-realtime-market-platform) — S2, Ringpop y el servicio de despacho (DISCO).
+- [DeepETA: How Uber Predicts Arrival Times Using Deep Learning](https://www.uber.com/en-GB/blog/deepeta-how-uber-predicts-arrival-times/) — Uber Engineering, 2022.
+- [Redis GEOADD](https://redis.io/docs/latest/commands/geoadd/) y [GEOSEARCH](https://redis.io/docs/latest/commands/geosearch/) — cómo Redis usa geohash de 52 bits y las "1+8 áreas".
+- [Geohash grid aggregation (Elasticsearch)](https://www.elastic.co/guide/en/elasticsearch/reference/current/search-aggregations-bucket-geohashgrid-aggregation.html) — tabla de tamaños de celda por precisión.
+- [How to do distributed locking](https://martin.kleppmann.com/2016/02/08/how-to-do-distributed-locking.html) — Martin Kleppmann. Locks con TTL, pausas de proceso y fencing tokens.
+- [Design Uber — Hello Interview](https://www.hellointerview.com/learn/system-design/problem-breakdowns/uber) — desglose de entrevista con locks de conductor, colas y workflows durables.
+- Alex Xu y Sahn Lam, *System Design Interview Vol. 2*, capítulos "Proximity Service" y "Nearby Friends" — geohash, quadtree y S2 comparados.
+- [Cadence](https://cadenceworkflow.io/) — el motor de workflows durables que nació en Uber (antecesor de Temporal).

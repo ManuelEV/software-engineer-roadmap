@@ -1,0 +1,112 @@
+.pw-lanes {
+  display: grid;
+  gap: 8px;
+  padding-bottom: 22px;
+  position: relative;
+}
+.pw-lane {
+  display: grid;
+  grid-template-columns: 11.5rem minmax(0, 1fr);
+  align-items: center;
+  gap: var(--s-3);
+}
+@media (max-width: 600px) {
+  .pw-lane {
+    grid-template-columns: 1fr;
+    gap: 2px;
+  }
+}
+.pw-lane__label {
+  font-family: var(--font-code);
+  font-size: 0.74rem;
+  color: var(--ink-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pw-lane--human .pw-lane__label {
+  font-family: var(--font-sign);
+  font-weight: 700;
+  font-size: 0.85rem;
+  color: var(--ink);
+}
+.pw-lane__bar {
+  display: flex;
+  height: 18px;
+  border-radius: 9px;
+  overflow: hidden;
+  background: var(--paper-3);
+}
+.pw-seg {
+  display: inline-block;
+  height: 100%;
+}
+.pw-seg--work {
+  background: var(--line);
+}
+.pw-seg--wait {
+  background: repeating-linear-gradient(-45deg, var(--warn) 0 4px, color-mix(in oklab, var(--warn) 35%, var(--paper)) 4px 8px);
+}
+.pw-seg--review {
+  background: var(--l4);
+}
+.pw-seg--idle {
+  background: var(--paper-3);
+}
+.pw-axis {
+  position: absolute;
+  left: calc(11.5rem + var(--s-3));
+  right: 0;
+  bottom: 0;
+  height: 18px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--ink-3);
+}
+@media (max-width: 600px) {
+  .pw-axis {
+    left: 0;
+  }
+}
+.pw-axis span {
+  position: absolute;
+  transform: translateX(-50%);
+}
+.pw-axis span:first-child {
+  transform: none;
+}
+.pw-axis span:last-child {
+  transform: translateX(-100%);
+}
+.pw-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px var(--s-4);
+  margin: var(--s-3) 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--ink-2);
+}
+.pw-legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.pw-legend .pw-seg {
+  width: 16px;
+  height: 12px;
+  border-radius: 3px;
+  border: 1px solid var(--rule);
+}
+.pw-readout {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-3) var(--s-5);
+  align-items: flex-start;
+}
+.pw-note {
+  flex: 1 1 16rem;
+  font-family: var(--font-read);
+}

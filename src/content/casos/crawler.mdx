@@ -1,0 +1,436 @@
+import { CrawlerFrontier } from '../../components/widgets/casos-b/CrawlerFrontier'
+
+"Diseña un web crawler" suena a un bucle de diez líneas: saca una URL de una cola, descárgala, extrae los enlaces, mételos en la cola, repite. Y en un sentido lo es. El problema es que ese bucle tiene que correr contra **miles de millones de páginas**, en **millones de servidores ajenos** que no controlas, que son lentos, que se caen, que a veces te tienden trampas sin querer (o queriendo), y a los que tienes la obligación de no saturar.
+
+Es un clásico porque concentra en un solo problema varias ideas de sistemas distribuidos: colas con prioridad, particionado por clave (el host), estructuras probabilísticas (filtros de Bloom, simhash), cachés que ahorran el 80 % del tiempo (DNS), tolerancia a fallos en pipelines largos y, sobre todo, un requisito no funcional poco habitual: la **cortesía** (*politeness*). Hoy además es un problema de actualidad: los grandes modelos de lenguaje se entrenan con texto rastreado de la web, y conjuntos como Common Crawl publican varios rastreos al año de miles de millones de páginas cada uno.
+
+Lo difícil no es descargar una página. Es decidir **cuál** descargar ahora, **de quién**, y **cuándo** puedes volver a tocar ese servidor, sin descargar dos veces lo mismo y sin caer en un laberinto infinito.
+
+<Sketch
+  width={640}
+  height={300}
+  caption="El bucle del crawler y su freno: la frontera decide qué bajar, y una cola por host con pausa evita martillar a un mismo servidor."
+  items={[
+    { type: 'box', x: 40, y: 110, w: 150, h: 60, label: 'frontera', fill: true, tone: 'line' },
+    { type: 'arrow', from: [150, 106], to: [246, 70], bend: -18 },
+    { type: 'box', x: 250, y: 40, w: 150, h: 56, label: 'descargar' },
+    { type: 'arrow', from: [325, 100], to: [325, 186] },
+    { type: 'box', x: 250, y: 190, w: 150, h: 56, label: 'parsear' },
+    { type: 'arrow', from: [246, 222], to: [150, 174], bend: -18, label: 'enlaces nuevos', labelAt: [168, 244] },
+    { type: 'cells', x: 510, y: 44, values: ['/a', '/b', '/c'], size: 36, label: 'wiki' },
+    { type: 'cells', x: 510, y: 104, values: ['/x', '/y'], size: 36, label: 'diario' },
+    { type: 'cells', x: 510, y: 164, values: ['/m'], size: 36, label: 'blog' },
+    { type: 'text', x: 430, y: 238, text: ['una cola por host,', 'con pausa entre pedidos'], size: 18, tone: 'pencil' },
+    { type: 'text', x: 24, y: 284, text: '¿qué bajo ahora, y de quién?', size: 19, tone: 'line' },
+  ]}
+/>
+
+## Requisitos
+
+**Funcionales:**
+
+1. Partir de un conjunto de URLs semilla y descubrir páginas siguiendo enlaces.
+2. Descargar el HTML, guardarlo (crudo y/o el texto extraído) junto con sus metadatos.
+3. Respetar `robots.txt` y no sobrecargar ningún host.
+4. Volver a rastrear las páginas periódicamente para mantenerlas frescas, con más frecuencia las que cambian más.
+
+**No funcionales:**
+
+- **Cortesía**: como máximo una conexión simultánea por host y una pausa entre peticiones.
+- **Escala**: supongamos 5 mil millones de páginas al mes.
+- **Robustez**: HTML malformado, servidores que nunca responden, trampas para crawlers, respuestas gigantes. Nada de eso debe tumbar el sistema.
+- **Tolerancia a fallos**: si una máquina muere a mitad del rastreo, no se pierde el progreso ni se repite todo.
+- **Extensibilidad**: poder agregar nuevos tipos de contenido o nuevos procesamientos sin reescribir el núcleo.
+
+**Fuera de alcance:** renderizar JavaScript con navegadores *headless* (lo mencionamos al final), indexar y rankear (eso es el motor de búsqueda), contenido detrás de login, imágenes y video.
+
+<Callout type="tip" title="Pregunta para qué es el crawler">
+
+"¿Esto alimenta un buscador, un dataset para entrenar modelos, o monitorea precios de unos pocos sitios?" Un buscador quiere frescura y prioriza páginas importantes; un dataset de entrenamiento quiere volumen y texto limpio y deduplicado; un monitor de precios rastrea pocos hosts muy seguido. La respuesta cambia la frontera, la política de recrawl y lo que guardas.
+
+</Callout>
+
+## Estimaciones
+
+**Supuestos:**
+
+- 5 mil millones de páginas al mes (a modo de referencia, el rastreo de Common Crawl de diciembre de 2025 tuvo 2.160 millones de páginas de 46 millones de hosts<Sidenote>Según el anuncio de Common Crawl de ese mes: 2,16 mil millones de páginas y 364 TiB de contenido sin comprimir, rastreadas entre el 4 y el 17 de diciembre de 2025.</Sidenote>).
+- Tamaño medio por página: ~185 KB sin comprimir. Sale de dividir los 364 TiB de ese rastreo entre sus 2.160 millones de páginas.
+- Cada página tiene en promedio 50 enlaces (supuesto).
+- Latencia media de una descarga: 500 ms (supuesto; hay servidores rápidos y muchos lentos).
+
+**Throughput:**
+
+- 5 × 10⁹ / (30 × 86.400 s) ≈ **1.930 páginas/s** promedio. Con pico de 2×, ~**3.900/s**.
+- Ancho de banda: 1.930 × 185 KB ≈ 357 MB/s ≈ **2,9 Gbps** promedio.
+
+**Concurrencia (ley de Little):**
+
+- Conexiones en vuelo = tasa × latencia = 1.930 × 0,5 s ≈ **1.000 conexiones simultáneas** promedio, ~2.000 en pico. Con I/O asíncrona, un puñado de máquinas lo maneja. En 1998, cada crawler del Google original mantenía unas 300 conexiones abiertas<Sidenote>Brin y Page, *The Anatomy of a Large-Scale Hypertextual Web Search Engine* (1998): "cada crawler mantiene aproximadamente 300 conexiones abiertas a la vez", y con cuatro crawlers alcanzaban picos de más de 100 páginas por segundo.</Sidenote>.
+
+**Cortesía:**
+
+- Si cada host acepta como máximo 1 petición por segundo, para sostener 1.930 páginas/s necesitas al menos **~2.000 hosts distintos activos** en todo momento. Con decenas de millones de hosts no es problema en general.
+- Pero mira el caso extremo: un sitio con 10 millones de páginas a 1 petición/s tarda 10⁷ s ≈ **116 días** en rastrearse entero. La cortesía, no el hardware, limita la velocidad en los sitios grandes. Por eso necesitas priorizar qué páginas de ese sitio bajar primero.
+
+**Almacenamiento:**
+
+- 5 × 10⁹ × 185 KB ≈ **925 TB/mes** sin comprimir. El HTML comprime bien (supongamos 4–5× con gzip), así que ~200 TB/mes guardados.
+
+**Deduplicación de URLs:**
+
+- 1.930 páginas/s × 50 enlaces = **~96.500 URLs descubiertas por segundo** que hay que comparar contra "¿ya la vi?". Esa prueba tiene que ser en memoria: un acceso a disco por consulta no escala.
+- Supongamos 20 mil millones de URLs únicas conocidas. Guardar un hash de 8 bytes por URL son 160 GB. Un filtro de Bloom con 1 % de falsos positivos necesita ~9,6 bits por elemento: 20 × 10⁹ × 9,6 bits ≈ **24 GB**, con k ≈ 7 funciones hash. Cabe en la RAM de unas pocas máquinas.
+
+## Entidades y API
+
+Un crawler no tiene una API pública, pero sí interfaces internas claras entre sus componentes. Definirlas en la entrevista demuestra que piensas en piezas reemplazables.
+
+**Entidades:**
+
+- **URL**: dirección normalizada, host, prioridad, profundidad, estado, última descarga, próxima descarga programada.
+- **Host**: reglas de `robots.txt` cacheadas, IP resuelta, instante en que se le puede volver a pedir algo, tasa de errores.
+- **Documento**: contenido descargado, hash exacto, simhash, ubicación en el almacén, cabeceras (`ETag`, `Last-Modified`).
+
+```http title="Frontera: un fetcher pide trabajo (lease con expiración)"
+POST /internal/frontier/lease
+Content-Type: application/json
+
+{ "worker_id": "fetcher-17", "max_urls": 50 }
+
+200 OK
+{
+  "lease_id": "ls_90a1",
+  "expires_in_s": 120,
+  "urls": [
+    { "url": "https://noticias.cl/economia/2026/11/tasa", "host": "noticias.cl", "depth": 2 },
+    { "url": "https://wiki.org/Valparaíso", "host": "wiki.org", "depth": 3 }
+  ]
+}
+```
+
+```http title="Frontera: el fetcher reporta el resultado"
+POST /internal/frontier/complete
+Content-Type: application/json
+
+{
+  "lease_id": "ls_90a1",
+  "url": "https://noticias.cl/economia/2026/11/tasa",
+  "status": 200,
+  "content_hash": "b3f1…",
+  "blob": "s3://crawl/2026-11/part-00412.warc.gz#offset=88123",
+  "fetched_at": "2026-11-19T14:02:11Z"
+}
+
+204 No Content
+```
+
+```http title="Agregar semillas o forzar un recrawl"
+POST /internal/frontier/seeds
+Content-Type: application/json
+
+{ "urls": ["https://wiki.org/", "https://noticias.cl/"], "priority": "alta" }
+
+202 Accepted
+```
+
+El *lease* con expiración es la pieza de tolerancia a fallos: si un fetcher muere con 50 URLs en la mano, a los 120 s el lease vence y esas URLs vuelven a la frontera. Es exactamente lo que hace el *visibility timeout* de una cola como SQS.
+
+## Modelo de datos
+
+**Tabla de URLs** en un almacén clave-valor o de columnas anchas (Cassandra, Bigtable, DynamoDB), **particionada por host**. Esta elección es la decisión de diseño más importante del modelo: si todas las URLs de un host viven en la misma partición, el nodo de frontera dueño de esa partición puede aplicar la cortesía localmente, sin coordinarse con nadie.
+
+```sql title="Esquema lógico"
+-- Clave de partición: host. Clave de orden: url_hash.
+CREATE TABLE urls (
+  host            TEXT,
+  url_hash        BIGINT,        -- huella de 64 bits de la URL normalizada
+  url             TEXT,
+  depth           INT,
+  priority        SMALLINT,
+  status          TEXT,          -- pendiente | en_curso | descargada | error | bloqueada
+  last_fetch_at   TIMESTAMP,
+  next_fetch_at   TIMESTAMP,     -- recrawl programado
+  etag            TEXT,
+  last_modified   TEXT,
+  content_hash    BIGINT,
+  PRIMARY KEY ((host), url_hash)
+);
+
+CREATE TABLE hosts (
+  host             TEXT PRIMARY KEY,
+  ip               TEXT,
+  ip_resolved_at   TIMESTAMP,
+  robots_rules     BLOB,          -- reglas parseadas
+  robots_fetched_at TIMESTAMP,
+  next_allowed_at  TIMESTAMP,     -- no pedir nada antes de esto
+  error_streak     INT
+);
+```
+
+**Contenido**: en un almacén de objetos, empaquetado en archivos grandes de formato **WARC** (el estándar de archivos web que usan Common Crawl y el Internet Archive). Millones de objetos de 185 KB son ineficientes; archivos de ~1 GB con un índice `(url → archivo, offset)` son baratos de escribir y de leer en lote.
+
+**Huellas de contenido**: un conjunto de hashes exactos (para duplicados idénticos) y un índice de simhash (para casi duplicados), ambos particionados.
+
+## Diseño de alto nivel
+
+<FlowDiagram
+  caption="El bucle del crawler: la frontera decide qué y cuándo; el fetcher descarga respetando robots.txt; el parser deduplica, guarda y devuelve enlaces nuevos a la frontera."
+  nodes={[
+    { id: 'robots', label: 'robots.txt', kind: 'shield', x: 1, y: 0, mx: 2, my: 0, sub: 'caché por host', desc: 'Reglas parseadas por host, cacheadas como máximo 24 h según RFC 9309.' },
+    { id: 'dns', label: 'DNS', kind: 'network', x: 2, y: 0, mx: 2, my: 1, sub: 'resolver propio + caché', desc: 'Resolver asíncrono con caché respetando TTL. Sin esto, el DNS domina el tiempo de cada worker.' },
+    { id: 'web', label: 'La web', kind: 'external', x: 3, y: 0, mx: 2, my: 2, sub: 'millones de hosts', desc: 'Servidores ajenos: lentos, caídos, gigantes o con trampas.' },
+    { id: 'seeds', label: 'Semillas', kind: 'file', x: 0, y: 1, mx: 0, my: 0, sub: 'URLs iniciales', desc: 'Listas curadas, sitemaps, o el resultado de un rastreo anterior.' },
+    { id: 'frontier', label: 'Frontera', kind: 'queue', x: 1, y: 1, mx: 1, my: 0, sub: 'prioridad + cortesía', desc: 'Colas de prioridad al frente, una cola por host atrás y un heap con el próximo instante permitido de cada host.' },
+    { id: 'fetcher', label: 'Fetchers', kind: 'worker', x: 2, y: 1, mx: 1, my: 1, sub: 'HTTP asíncrono', desc: 'Miles de conexiones concurrentes con timeouts estrictos y límite de tamaño de respuesta.' },
+    { id: 'filter', label: 'Filtro de URLs', kind: 'decision', x: 1, y: 2, mx: 0, my: 1, sub: 'normaliza + Bloom', desc: 'Normaliza, aplica reglas (dominios, longitud, profundidad) y descarta URLs ya vistas.' },
+    { id: 'parser', label: 'Parser', kind: 'service', x: 2, y: 2, mx: 1, my: 2, sub: 'enlaces y texto', desc: 'Extrae enlaces y texto. Calcula hash exacto y simhash del contenido.' },
+    { id: 'store', label: 'Almacén WARC', kind: 'storage', x: 3, y: 1, mx: 2, my: 3, sub: 'objetos de ~1 GB', desc: 'Contenido empaquetado en archivos WARC en un almacén de objetos.' },
+    { id: 'dedup', label: 'Huellas', kind: 'search', x: 3, y: 2, mx: 0, my: 3, sub: 'hash + simhash', desc: 'Índices de huellas para descartar páginas idénticas o casi idénticas.' },
+    { id: 'db', label: 'URLs y hosts', kind: 'db', x: 1, y: 3, mx: 0, my: 2, sub: 'particionado por host', desc: 'Estado durable de cada URL y de cada host. La frontera se reconstruye desde aquí si se cae.' },
+  ]}
+  edges={[
+    { from: 'seeds', to: 'frontier' },
+    { from: 'frontier', to: 'fetcher', label: 'lease' },
+    { from: 'fetcher', to: 'robots' },
+    { from: 'fetcher', to: 'dns' },
+    { from: 'fetcher', to: 'web', label: 'GET' },
+    { from: 'fetcher', to: 'parser' },
+    { from: 'parser', to: 'dedup' },
+    { from: 'parser', to: 'store' },
+    { from: 'parser', to: 'filter', label: 'enlaces' },
+    { from: 'filter', to: 'frontier', label: 'nuevas' },
+    { from: 'filter', to: 'db' },
+  ]}
+  steps={[
+    { title: 'Las semillas entran a la frontera', body: 'Arrancamos con una lista de URLs conocidas y buenas (portadas de sitios populares, sitemaps). Entran con prioridad alta.', active: ['seeds', 'frontier'], flow: ['seeds-frontier'] },
+    { title: 'La frontera elige qué y cuándo', body: 'Un fetcher pide trabajo. La frontera le entrega URLs de hosts que están listos: con cola no vacía, sin otra descarga en curso y cuyo tiempo de cortesía ya pasó. Entre los listos, prefiere los de mayor prioridad.', active: ['frontier', 'fetcher'], flow: ['frontier-fetcher'] },
+    { title: 'robots.txt y DNS, desde caché', body: 'Antes de pedir la página, el fetcher verifica las reglas de robots.txt del host (cacheadas) y resuelve la IP con su propio resolver con caché. Si robots.txt prohíbe la ruta, la URL se marca como bloqueada y no se descarga.', active: ['fetcher', 'robots', 'dns'], flow: ['fetcher-robots', 'fetcher-dns'] },
+    { title: 'Descarga con límites', body: 'GET con timeout (por ejemplo 30 s), tamaño máximo de respuesta y User-Agent identificable con una URL de contacto. Se envían If-None-Match / If-Modified-Since si ya teníamos la página: un 304 ahorra la descarga.', active: ['fetcher', 'web'], flow: ['fetcher-web'] },
+    { title: 'Parseo, deduplicación y guardado', body: 'El parser calcula el hash exacto y el simhash. Si la página es un duplicado, se registra como alias y no se guarda otra copia. Si es nueva, va al almacén WARC.', active: ['fetcher', 'parser', 'dedup', 'store'], flow: ['fetcher-parser', 'parser-dedup', 'parser-store'] },
+    { title: 'Los enlaces vuelven a la frontera', body: 'Los enlaces extraídos se normalizan, se filtran (dominio, profundidad, longitud) y pasan por el filtro de Bloom de URLs vistas. Solo las nuevas se persisten y entran a la frontera. El bucle se cierra.', active: ['parser', 'filter', 'frontier', 'db'], flow: ['parser-filter', 'filter-frontier', 'filter-db'] },
+  ]}
+/>
+
+Dos ideas para remarcar en voz alta. Primero, el pipeline está **desacoplado por colas y estado durable**: fetchers y parsers escalan por separado (descargar es I/O; parsear es CPU), y si un parser muere, la página ya descargada sigue en el almacén. Segundo, **la frontera es el cerebro**: todo lo demás es relativamente tonto y sin estado.
+
+## Profundizaciones
+
+### 1. La frontera: prioridad y cortesía a la vez
+
+Una sola cola FIFO no sirve por dos razones. No prioriza (la portada de un diario y la página 9.000 de un foro pesan igual) y viola la cortesía: los enlaces de una página suelen apuntar al mismo host, así que la cola se llena de rachas de URLs de un solo servidor que varios workers martillarían en paralelo.
+
+Mercator, el crawler de Compaq de 1999, resolvió la cortesía con **subcolas FIFO por host**: cada URL nueva va a la subcola que corresponde a su host, y cada subcola la atiende un solo worker, así que nunca hay dos workers descargando del mismo servidor<Sidenote>Heydon y Najork, *Mercator: A Scalable, Extensible Web Crawler* (1999). Su frontera vivía mayormente en disco, con búferes en memoria de 600 URLs por subcola, porque en un rastreo real la frontera tiene cientos de millones de URLs.</Sidenote>. El diseño que se enseña hoy (por ejemplo, en el libro *Introduction to Information Retrieval* de Manning, Raghavan y Schütze) combina eso con prioridad en dos niveles:
+
+- **Colas del frente (prioridad)**: F colas FIFO, una por nivel de prioridad. Un *prioritizer* asigna cada URL según PageRank del host, frecuencia de cambio, profundidad o lo que importe al negocio. Al sacar, se elige una cola con sesgo hacia las de mayor prioridad (no estricto, para que las bajas no mueran de hambre).
+- **Colas del fondo (cortesía)**: B colas, cada una con URLs de **un solo host**, y una tabla `host → cola`. Un **heap** guarda, para cada cola, el instante más temprano en que se puede volver a contactar ese host. Un worker saca la raíz del heap, espera si hace falta, descarga, y reinserta la cola con `ahora + pausa`.
+- Cuando una cola del fondo se vacía, se rellena sacando URLs de las colas del frente hasta encontrar una de un host nuevo.
+- Regla práctica de los diseñadores de Mercator: unas **3 colas del fondo por cada hilo** de descarga, para que siempre haya hosts listos.
+
+El corazón de las colas del fondo cabe en pocas líneas: una cola por host y un heap de "turnos" ordenado por el instante en que cada host vuelve a estar disponible.
+
+```java title="Java"
+final class FronteraCortes {
+    private record Turno(String host, long listoEnMs) {}
+
+    private final Map<String, ArrayDeque<String>> colaPorHost = new HashMap<>();
+    private final Map<String, Long> proximoPermitido = new HashMap<>();
+    // min-heap: arriba, el host que antes se puede volver a contactar
+    private final PriorityQueue<Turno> turnos = new PriorityQueue<>(Comparator.comparingLong(Turno::listoEnMs));
+    private final long pausaMs;
+
+    FronteraCortes(long pausaMs) { this.pausaMs = pausaMs; }
+
+    void agregar(String host, String url, long ahoraMs) {
+        ArrayDeque<String> cola = colaPorHost.computeIfAbsent(host, h -> new ArrayDeque<>());
+        if (cola.isEmpty()) { // cada host está en el heap a lo sumo una vez
+            turnos.add(new Turno(host, Math.max(ahoraMs, proximoPermitido.getOrDefault(host, 0L))));
+        }
+        cola.addLast(url);
+    }
+
+    /** Una URL que se puede descargar ya sin violar la cortesía, o null si hay que esperar. */
+    String siguiente(long ahoraMs) {
+        Turno t = turnos.peek();
+        if (t == null || t.listoEnMs() > ahoraMs) return null; // ningún host está listo todavía
+        turnos.poll();
+        ArrayDeque<String> cola = colaPorHost.get(t.host());
+        String url = cola.pollFirst();
+        proximoPermitido.put(t.host(), ahoraMs + pausaMs);
+        if (cola.isEmpty()) colaPorHost.remove(t.host());
+        else turnos.add(new Turno(t.host(), ahoraMs + pausaMs));
+        return url;
+    }
+}
+```
+
+<Callout type="tip" title="En Java">
+
+`PriorityQueue` es un min-heap: con `Comparator.comparingLong(Turno::listoEnMs)` queda arriba el turno más próximo (para un max-heap usarías `Collections.reverseOrder()` o `.reversed()`). `peek` y `poll` cuestan O(1) y O(log n). Esta versión no es segura entre hilos; con varios fetchers en el mismo proceso, protégela con un lock o reparte los hosts entre hilos para que cada frontera tenga un solo dueño.
+
+</Callout>
+
+La pausa entre peticiones a un host puede ser fija (1 s), adaptativa (un múltiplo de cuánto tardó la última respuesta: si el servidor está lento, lo dejas respirar) o la que pida el sitio. Ojo: la directiva `Crawl-delay` **no forma parte** del estándar RFC 9309; algunos crawlers la respetan y otros, como el de Google, la ignoran.
+
+Juega con la simulación: baja los workers a 1, sube la cortesía y mira cómo se acumulan URLs esperando aunque haya trabajo pendiente.
+
+<CrawlerFrontier />
+
+**Distribuir la frontera.** Con varias máquinas, particiona por **hash del host**: cada nodo es dueño de un subconjunto de hosts y de sus colas. Así la cortesía sigue siendo una decisión local. Cuando un parser encuentra un enlace a un host que pertenece a otro nodo, se lo envía a ese nodo (en lote, para no hacer una RPC por enlace). Si un nodo cae, sus hosts se reasignan y su frontera se reconstruye desde la tabla de URLs.
+
+**robots.txt, según RFC 9309.** Desde 2022 el protocolo es un estándar del IETF y vale la pena conocer sus reglas finas:
+
+- Se cachea, pero no más de **24 horas** salvo que el archivo esté inaccesible.
+- Un **4xx** (no existe) significa que puedes rastrear todo. Un **5xx** o error de red significa que debes asumir **prohibición total** (si dura mucho, por ejemplo 30 días, puedes usar la copia cacheada o tratarlo como inexistente).
+- Hay que procesar al menos los primeros **500 KiB** y seguir al menos 5 redirecciones.
+- Entre reglas `Allow` y `Disallow` que coinciden, gana la **más específica** (la de más octetos).
+
+<Quiz
+  question="El robots.txt de tienda.mx responde 503 durante una hora. ¿Qué debe hacer el crawler según RFC 9309?"
+  options={[
+    { text: 'Rastrear normalmente: si no hay robots.txt, todo está permitido.', why: 'Eso aplica a un 4xx (el archivo no existe). Un 5xx significa que no sabemos qué dice, y el estándar pide prudencia.' },
+    { text: 'Asumir prohibición total para ese host hasta que robots.txt vuelva a responder (o hasta un plazo largo, como 30 días).', correct: true, why: 'Correcto. Un servidor que devuelve 5xx probablemente está en problemas; martillarlo sería lo opuesto a la cortesía. El RFC dice MUST assume complete disallow.' },
+    { text: 'Reintentar robots.txt en un bucle cerrado hasta que responda.', why: 'Eso agrega carga a un servidor que ya está fallando. Se reintenta con backoff, no en un bucle.' },
+  ]}
+/>
+
+### 2. DNS: el cuello de botella que nadie espera
+
+Antes de cada descarga hay que resolver el nombre del host. Suena trivial hasta que lo mides. El equipo de Mercator descubrió que la interfaz de DNS de Java y la `gethostbyname` de la mayoría de los Unix eran **sincrónicas**: solo una resolución sin caché podía estar en curso a la vez. Antes de escribir su propio resolver multihilo, las búsquedas DNS consumían el **87 %** del tiempo de cada worker; después, el 25 %<Sidenote>Heydon y Najork, *Mercator* (1999), sección sobre el DNS resolver. Ese tiempo casi no es CPU: es espera por servidores DNS remotos.</Sidenote>. El Google original resolvía lo mismo con una caché DNS por crawler.
+
+Lo que propones en la entrevista:
+
+- **Resolver propio asíncrono** o un servidor DNS local con caché (por ejemplo, Unbound) dedicado al crawler, con muchas consultas en paralelo.
+- **Caché** con el TTL del registro (y un mínimo razonable si el TTL es ridículamente corto).
+- **Prefetch**: resolver el host cuando la URL entra a su cola del fondo, no cuando le toca descargarse.
+- La IP también sirve para la cortesía: varios hosts virtuales pueden vivir en la misma máquina. Algunos crawlers aplican el límite por IP además de por host.
+
+### 3. Deduplicación: URLs vistas y contenido visto
+
+Hay **dos** preguntas distintas y conviene no mezclarlas.
+
+**¿Ya vi esta URL?** Se responde antes de encolar. Primero se **normaliza**: minúsculas en esquema y host, quitar el puerto por defecto, resolver `../`, quitar el fragmento `#…`, ordenar parámetros, eliminar parámetros de seguimiento conocidos (`utm_source`, `sessionid`). Sin normalización, la misma página entra 20 veces con URLs distintas.
+
+Luego se consulta el conjunto de URLs vistas. A 96 mil consultas por segundo necesitas memoria. Dos opciones:
+
+<Compare>
+<Option title="Conjunto exacto de huellas">
+
+Guardas un hash de 64 bits por URL (160 GB para 20 mil millones), particionado entre nodos o en disco con caché. Mercator guardaba las huellas en disco y, entre una caché de URLs populares en memoria y una tabla de URLs recientes, resolvía el 75,7 % de las consultas sin ir a disco: los enlaces se repiten mucho. Sin falsos positivos, más memoria o más I/O.
+
+</Option>
+<Option title="Filtro de Bloom" verdict="Lo más común en entrevista">
+
+Un arreglo de m bits y k funciones hash. Insertar: encender k bits. Consultar: si alguno está apagado, **seguro** que no la viste; si están todos encendidos, **probablemente** sí. Con 1 % de falsos positivos son ~9,6 bits por URL: 24 GB. No admite borrar elementos.
+
+</Option>
+</Compare>
+
+El costo de un falso positivo merece una frase: **una URL nueva que el filtro cree vista no se rastrea nunca**. Con 1 % de FP pierdes ~1 % de la web descubrible. Para un dataset de entrenamiento suele ser aceptable; para un buscador que quiere cobertura, quizá no. Por eso muchos sistemas usan el Bloom como primera barrera y, si dice "visto", confirman contra el conjunto exacto en disco (solo para ese 1 % de casos más los verdaderos duplicados). En el simulador de arriba, el filtro de 32 bits muestra el problema en miniatura: se llena rápido y empieza a descartar URLs que nunca vio.
+
+**¿Ya vi este contenido?** Se responde después de descargar. Muchas URLs distintas devuelven el mismo HTML (mirrors, `http` vs `https`, parámetros que no cambian nada). Para duplicados **exactos** basta un hash del contenido: Mercator usaba una huella de Rabin de 64 bits por documento.
+
+Pero la mayoría de los duplicados en la web son **casi** duplicados: la misma nota con otro bloque de anuncios, otra fecha en el pie o un contador de visitas. Un hash exacto no los detecta. Para eso está **simhash** (Charikar, 2002): una huella de 64 bits con la propiedad de que documentos parecidos tienen huellas que difieren en pocos bits.
+
+<Steps>
+<Step title="Extraer rasgos">
+
+Parte el texto en *shingles* (por ejemplo, secuencias de 3 palabras) y dale un peso a cada uno (frecuencia, TF-IDF).
+
+</Step>
+<Step title="Votar por bit">
+
+Hashea cada rasgo a 64 bits. Para cada posición, suma el peso si el bit es 1 y réstalo si es 0.
+
+</Step>
+<Step title="Quedarte con el signo">
+
+El bit i de la huella es 1 si la suma de la posición i es positiva. Dos textos casi iguales votan casi igual y producen huellas casi iguales.
+
+</Step>
+<Step title="Comparar por distancia de Hamming">
+
+Dos páginas son casi duplicadas si sus huellas difieren en a lo sumo k bits. Google reportó que para 8 mil millones de páginas, huellas de 64 bits con k = 3 funcionan bien, y mostró cómo buscar eficientemente todas las huellas a distancia ≤ 3 usando varias tablas ordenadas por permutaciones de bloques de bits.
+
+</Step>
+</Steps>
+
+<Quiz
+  question="Tu crawler guarda 300 copias de la misma nota de prensa publicada en 300 sitios regionales, cada una con distinto menú y publicidad. ¿Qué técnica las detecta?"
+  options={[
+    { text: 'Un filtro de Bloom sobre las URLs.', why: 'Las URLs son distintas (300 sitios), así que el filtro de URLs las deja pasar a todas. El problema está en el contenido.' },
+    { text: 'Un hash SHA-256 del HTML completo.', why: 'Cualquier diferencia en el menú o en los anuncios produce un hash totalmente distinto. Solo detecta duplicados exactos.' },
+    { text: 'Simhash del texto principal, comparando huellas por distancia de Hamming.', correct: true, why: 'Correcto. Simhash produce huellas cercanas para textos parecidos. Extraer el texto principal (sin plantilla) antes de calcularlo mejora aún más la detección.' },
+  ]}
+/>
+
+### 4. Trampas, robustez y recrawl
+
+**Trampas para crawlers** (*spider traps*): espacios de URLs infinitos, casi siempre sin mala intención.
+
+- Calendarios con enlace a "mes siguiente" para siempre.
+- Identificadores de sesión en la URL: cada visita genera URLs nuevas para las mismas páginas.
+- Rutas relativas mal construidas que crecen sin fin: `/a/b/a/b/a/b/…`.
+- Combinaciones de filtros en tiendas: 10 filtros con 5 valores cada uno ya son millones de URLs para el mismo catálogo.
+
+Defensas, de la más barata a la más fina: longitud máxima de URL; profundidad máxima desde la semilla; **presupuesto por host** (no más de N páginas por host por rastreo, proporcional a su importancia); detectar patrones repetidos en la ruta; y la deduplicación de contenido, que corta el ciclo cuando las páginas "nuevas" resultan ser la misma. Mercator notó que su deduplicación por contenido neutralizaba buena parte del problema de los ids de sesión, aunque no los detectaba explícitamente.
+
+**Robustez del fetcher:** timeouts en cada fase (conexión, primer byte, total), tamaño máximo de respuesta (cortar a 10 MB, por ejemplo), límite de redirecciones, parser tolerante a HTML roto, y aislamiento: un parser que se cuelga con un documento patológico no debe tumbar al resto. Los reintentos van con *backoff* exponencial y, tras varios fallos, a una cola de mensajes muertos; un host con muchos errores seguidos se enfría por horas.
+
+**Recrawl y frescura.** La web cambia: una portada de diario cambia cada minuto y una página de documentación quizá una vez al año. Programar `next_fetch_at` según la tasa de cambio observada (si las últimas 3 visitas no hubo cambios, duplica el intervalo; si cambió, redúcelo) concentra el presupuesto donde importa. Las **peticiones condicionales** (`If-None-Match` con el `ETag`, `If-Modified-Since`) permiten que el servidor responda `304 Not Modified` sin cuerpo. Los **sitemaps** con `lastmod` son una pista gratuita de qué cambió.
+
+<Details summary="Profundizar: ¿y el JavaScript?">
+
+Cada vez más sitios generan el contenido en el navegador. Para verlo necesitas un navegador *headless* (Chromium), que cuesta órdenes de magnitud más CPU y memoria por página que un GET plano. La práctica habitual es un rastreo en dos fases: primero el HTML crudo para todo, y luego renderizar solo las páginas importantes cuyo HTML parece vacío o depende claramente de scripts. Dilo como extensión, no como parte del diseño base.
+
+</Details>
+
+## Cuellos de botella y trade-offs
+
+**La cortesía limita a los sitios grandes.** Un sitio enorme se rastrea a 1 petición/s sin importar cuántas máquinas tengas. Opciones: priorizar mejor dentro del host, respetar el sitemap, y para sitios que lo permiten explícitamente, subir la tasa. No hay atajo honesto.
+
+**Hosts calientes en la frontera.** Particionar por host concentra en un nodo todos los hosts grandes que caigan en su rango. Con hash uniforme y millones de hosts se compensa, pero conviene monitorear el tamaño de la frontera por nodo.
+
+**Frontera en memoria vs. en disco.** Cientos de millones de URLs pendientes no caben en RAM. Mercator mantenía solo búferes en memoria para la cabeza y la cola de cada subcola, y el resto en disco. Alternativa moderna: la frontera durable en una base particionada y en memoria solo una ventana por host.
+
+**Bloom vs. conjunto exacto.** Memoria contra cobertura. El Bloom tampoco se puede borrar ni redimensionar fácilmente: si la web crece más de lo previsto, la tasa de falsos positivos sube. Planea capacidad con margen o usa filtros escalables.
+
+**Frescura vs. cobertura.** Cada descarga dedicada a revisar una página vieja es una página nueva que no descubres. El balance depende del producto: un buscador de noticias prioriza frescura; un dataset histórico, cobertura.
+
+**Cola gestionada vs. frontera propia.** Para un diseño de entrevista, usar SQS o Kafka como frontera simplifica, pero ninguno entiende de cortesía por host: o la implementas encima (diferir mensajes de hosts que aún no están listos, como hace Hello Interview con el visibility timeout de SQS) o construyes una frontera propia con colas por host. A gran escala, la frontera propia gana.
+
+## Qué espera el entrevistador
+
+<Callout type="interview" title="Lo que se evalúa según el nivel">
+
+**Mid-level.** Dibuja el bucle completo (frontera, fetcher, parser, almacén, filtro de URLs vistas) y lo separa en etapas con colas. Menciona robots.txt y la necesidad de no saturar los hosts. Hace estimaciones básicas de páginas por segundo y almacenamiento.
+
+**Senior.** Diseña la frontera con colas de prioridad y colas por host con un heap de tiempos, y la particiona por host para que la cortesía sea local. Distingue la deduplicación de URLs (normalización + Bloom, con su costo en falsos positivos) de la de contenido (hash exacto y simhash). Identifica el DNS como cuello de botella y propone resolver propio con caché. Trata trampas, timeouts y leases para tolerancia a fallos.
+
+**Staff.** Conecta los números con las decisiones: ley de Little para dimensionar conexiones, el límite de 116 días para un sitio de 10 M de páginas, el tamaño del Bloom. Discute la política de recrawl adaptativa, las peticiones condicionales, presupuestos por host, la estrategia para JavaScript y el detalle de RFC 9309 (5xx implica no rastrear). Sabe cuándo una cola gestionada basta y cuándo hace falta una frontera propia, y cómo rebalancear la frontera si un nodo cae.
+
+</Callout>
+
+<Takeaways>
+
+- La **frontera** es el corazón del crawler: colas de prioridad al frente, una cola por host atrás y un heap con el próximo instante permitido para cada host.
+- **Particiona por host**: así la cortesía es una decisión local de un solo nodo, sin coordinación distribuida.
+- La cortesía, no el hardware, limita la velocidad en los sitios grandes: 10 M de páginas a 1 petición/s son 116 días.
+- El **DNS** puede dominar el tiempo de los workers (87 % en Mercator antes de su resolver propio): caché y resolución asíncrona.
+- Deduplica **dos veces**: URLs antes de encolar (normalización + Bloom) y contenido después de descargar (hash exacto + simhash para casi duplicados).
+- Defiéndete de las **trampas** con límites de longitud, profundidad y presupuesto por host, y deja que la deduplicación de contenido corte los ciclos.
+- Respeta **RFC 9309**: caché de robots.txt de hasta 24 h, 4xx permite, 5xx prohíbe.
+
+</Takeaways>
+
+## Fuentes y lecturas
+
+- Heydon y Najork, [Mercator: A Scalable, Extensible Web Crawler](https://www.cs.ucr.edu/~vagelis/classes/CS242/publications/scalable-crawler.pdf) (World Wide Web, 1999): subcolas por host, el resolver DNS propio, las pruebas de URL y contenido vistos.
+- Brin y Page, [The Anatomy of a Large-Scale Hypertextual Web Search Engine](https://research.google/pubs/the-anatomy-of-a-large-scale-hypertextual-web-search-engine/) (1998): el crawler distribuido del Google original.
+- Manning, Raghavan y Schütze, [Introduction to Information Retrieval, sección "The URL frontier"](https://nlp.stanford.edu/IR-book/html/htmledition/the-url-frontier-1.html): colas del frente y del fondo, el heap y la regla de 3 colas por hilo.
+- Manku, Jain y Das Sarma, [Detecting near-duplicates for web crawling](https://research.google/pubs/detecting-near-duplicates-for-web-crawling/) (WWW 2007): simhash de 64 bits con k = 3 a escala de 8 mil millones de páginas.
+- IETF, [RFC 9309: Robots Exclusion Protocol](https://www.rfc-editor.org/rfc/rfc9309.html) (2022).
+- Common Crawl, [December 2025 crawl archive now available](https://commoncrawl.org/blog/december-2025-crawl-archive-now-available): escala de un rastreo real.
+- Alex Xu, [Design a Web Crawler](https://bytebytego.com/courses/system-design-interview/design-a-web-crawler) (System Design Interview, ByteByteGo).
+- Hello Interview, [Design a Web Crawler](https://www.hellointerview.com/learn/system-design/problem-breakdowns/web-crawler): versión orientada a datos de entrenamiento, con SQS, visibility timeouts y Redis para la cortesía.
+- En esta guía: [Colas y streaming](/system-design/colas-y-streaming), [IDs, búsqueda, geo y blobs](/system-design/piezas-especiales) y [Confiabilidad](/system-design/confiabilidad).

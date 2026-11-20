@@ -1,0 +1,708 @@
+import { BinarySearchStepper } from '../../components/widgets/entrevistas/BinarySearchStepper'
+import { AnswerSpaceSearch } from '../../components/widgets/entrevistas/AnswerSpaceSearch'
+
+La búsqueda binaria se explica en una frase: mira el elemento del medio y descarta la mitad donde la respuesta no puede estar. Escribirla bien es otra historia. Jon Bentley cuenta en *Programming Pearls* que, cuando se la pedía a programadores profesionales con dos horas de tiempo, la gran mayoría entregaba código con errores: loops infinitos, índices que se salen del arreglo, el último elemento que nunca se revisa. Y en 2006 Joshua Bloch mostró que la implementación de `Arrays.binarySearch` de Java llevaba unos nueve años con un bug de desbordamiento en `(low + high) / 2`.
+
+Por eso aparece tanto en entrevistas: es corta, todo el mundo cree que la sabe, y los detalles separan a quien la entiende de quien la memorizó. Este tema te da una forma de escribirla que no falla (pensar en **invariantes**), las variantes que más se piden (lower bound, arreglo rotado, matriz) y la idea que más puntos da: la **búsqueda binaria sobre el espacio de respuestas**, donde ni siquiera hay un arreglo.
+
+<Sketch
+  width={640}
+  height={300}
+  caption="La idea de todo el tema: una pregunta cuya respuesta pasa de no a sí una sola vez. Cada pregunta en el medio descarta la mitad, hasta que queda el borde."
+  items={[
+    { type: 'text', x: 24, y: 34, text: 'una pregunta monótona:', size: 22, tone: 'pencil' },
+    { type: 'cells', x: 60, y: 60, values: ['no', 'no', 'no', 'no', 'no', 'sí', 'sí', 'sí', 'sí', 'sí'], size: 52, states: ['bad', 'bad', 'bad', 'bad', 'bad', 'ok', 'ok', 'ok', 'ok', 'ok'] },
+    { type: 'arrow', from: [346, 196], to: [346, 122], tone: 'line' },
+    { type: 'text', x: 346, y: 222, text: '1ª', size: 22, anchor: 'middle', tone: 'line' },
+    { type: 'line', points: [[372, 86], [580, 86]], tone: 'muted' },
+    { type: 'arrow', from: [190, 196], to: [190, 122], tone: 'line' },
+    { type: 'text', x: 190, y: 222, text: '2ª', size: 22, anchor: 'middle', tone: 'line' },
+    { type: 'line', points: [[60, 86], [216, 86]], tone: 'muted' },
+    { type: 'arrow', from: [294, 196], to: [294, 122], tone: 'line' },
+    { type: 'text', x: 294, y: 222, text: '3ª', size: 22, anchor: 'middle', tone: 'line' },
+    { type: 'line', points: [[216, 86], [320, 86]], tone: 'muted' },
+    { type: 'circle', x: 346, y: 86, r: 36, tone: 'line' },
+    { type: 'arrow', from: [430, 150], to: [384, 112], tone: 'line' },
+    { type: 'text', x: 436, y: 166, text: 'el borde', size: 22, tone: 'line' },
+    { type: 'text', x: 24, y: 280, text: '10 → 5 → 2 → 1 candidatos: O(log n)', size: 20, tone: 'pencil' },
+  ]}
+/>
+
+## La idea y por qué es O(log n)
+
+Si el arreglo está ordenado y comparas `x` con el elemento del medio, la comparación te dice en qué mitad puede estar `x`. La otra mitad la descartas entera, sin mirarla. Cada paso divide los candidatos por dos: con un millón de elementos, en 20 pasos quedan cero o uno (2²⁰ ≈ 1.048.576). Eso es O(log n) en tiempo y O(1) en memoria con la versión iterativa.
+
+La condición de fondo no es "el arreglo está ordenado". Es más general: **necesitas una pregunta cuya respuesta sea monótona**. Si para cada índice puedes decir "falso" o "verdadero", y todos los falsos están antes que todos los verdaderos (`F F F F T T T`), la búsqueda binaria encuentra el borde. En un arreglo ordenado la pregunta es "¿`nums[i] ≥ x`?". En Koko, más abajo, la pregunta es "¿termina a tiempo comiendo a velocidad `k`?". Misma plantilla.
+
+<Callout type="idea" title="La señal para reconocer el patrón">
+
+Si ves **"ordenado"**, **"encuentra el mínimo que cumple…"**, **"el máximo valor tal que…"**, **"minimiza el máximo"** o un rango de respuestas enorme (hasta 10⁹) con una condición que, si se cumple para `k`, se cumple para todo lo mayor, piensa en búsqueda binaria. Una restricción como `n ≤ 10⁵` con valores hasta `10⁹` es otra pista: O(n log M) entra holgado.
+
+</Callout>
+
+## Invariantes que no fallan
+
+El error más común es escribir la búsqueda "de memoria" y mezclar convenciones: un `while lo < hi` con un `hi = mid - 1`, o un `hi = len(nums)` con un `while lo <= hi`. Cada línea es razonable por separado; juntas producen un loop infinito o un índice fuera de rango. La salida es elegir **una convención de intervalo** y que todas las líneas la respeten.
+
+<Sketch
+  width={640}
+  height={320}
+  caption="Las dos convenciones. Lo pintado son los candidatos que quedan: en la cerrada, hi es un candidato; en la semiabierta, hi apunta justo después del último."
+  items={[
+    { type: 'text', x: 24, y: 84, text: 'cerrado', size: 22 },
+    { type: 'text', x: 24, y: 112, text: '[lo, hi]', size: 20, font: 'code', tone: 'line' },
+    { type: 'cells', x: 150, y: 60, values: [1, 3, 5, 7, 9, 11, 13], size: 48, states: [null, null, 'line', 'line', 'line', 'line', null] },
+    { type: 'arrow', from: [270, 148], to: [270, 112], tone: 'line' },
+    { type: 'text', x: 270, y: 170, text: 'lo', size: 20, font: 'code', anchor: 'middle', tone: 'line' },
+    { type: 'arrow', from: [414, 148], to: [414, 112], tone: 'line' },
+    { type: 'text', x: 414, y: 170, text: 'hi', size: 20, font: 'code', anchor: 'middle', tone: 'line' },
+    { type: 'text', x: 506, y: 92, text: 'lo ≤ hi', size: 20, font: 'code', tone: 'pencil' },
+    { type: 'text', x: 24, y: 224, text: 'semiabierto', size: 22 },
+    { type: 'text', x: 24, y: 252, text: '[lo, hi)', size: 20, font: 'code', tone: 'line' },
+    { type: 'cells', x: 150, y: 200, values: [1, 3, 5, 7, 9, 11, 13], size: 48, states: [null, null, 'line', 'line', 'line', 'line', null] },
+    { type: 'arrow', from: [270, 288], to: [270, 252], tone: 'line' },
+    { type: 'text', x: 270, y: 310, text: 'lo', size: 20, font: 'code', anchor: 'middle', tone: 'line' },
+    { type: 'arrow', from: [462, 288], to: [462, 252], tone: 'line' },
+    { type: 'text', x: 462, y: 310, text: 'hi', size: 20, font: 'code', anchor: 'middle', tone: 'line' },
+    { type: 'text', x: 506, y: 232, text: 'lo < hi', size: 20, font: 'code', tone: 'pencil' },
+  ]}
+/>
+
+### Intervalo cerrado `[lo, hi]`
+
+- **Qué significa**: los candidatos son `lo`, `lo + 1`, …, `hi`, ambos incluidos. Al empezar, `lo = 0` y `hi = n - 1`.
+- **Cuándo seguir**: mientras haya al menos un candidato, es decir, `lo <= hi`.
+- **Cómo descartar**: si `nums[mid]` no es la respuesta, `mid` ya no es candidato, así que lo sacas: `lo = mid + 1` o `hi = mid - 1`.
+- **Invariante**: "si `x` está en el arreglo, está en `[lo, hi]`". Cuando el intervalo queda vacío (`lo > hi`), `x` no está.
+
+### Intervalo semiabierto `[lo, hi)`
+
+- **Qué significa**: los candidatos son `lo`, …, `hi - 1`. Al empezar, `lo = 0` y `hi = n`. Que `hi` pueda valer `n` es justo lo que necesitas cuando la respuesta puede ser "después del último".
+- **Cuándo seguir**: mientras `lo < hi`.
+- **Cómo descartar**: si `mid` no sirve, `lo = mid + 1`. Si `mid` **podría** ser la respuesta, `hi = mid` (no `mid - 1`, porque perderías un candidato).
+- **Invariante**: "todo lo que está antes de `lo` es `< x`; todo lo que está desde `hi` es `≥ x`". Cuando `lo == hi`, ese punto es el borde.
+
+### `mid = lo + (hi - lo) // 2` y por qué termina
+
+En Java, C++ o Go, `(lo + hi) / 2` puede desbordar un entero de 32 bits cuando los índices pasan de ~1.070 millones: la suma da negativo y `mid` también. `lo + (hi - lo) / 2` calcula lo mismo sin sumar dos números grandes. En Python los enteros no desbordan y en JavaScript los índices de un arreglo están muy por debajo de 2⁵³, pero escribir la forma segura es un hábito que el entrevistador nota.
+
+<Callout type="tip" title="En Java">
+
+`int` tiene 32 bits: `(lo + hi) / 2` desborda cuando la suma pasa de 2³¹ − 1 y `mid` sale negativo. Escribe `lo + (hi - lo) / 2`, o `(lo + hi) >>> 1`: el desplazamiento sin signo es la corrección que propuso Bloch en su artículo. Y cuando acumules sumas grandes, como las horas de Koko más abajo, usa `long`.
+
+</Callout>
+
+El redondeo hacia abajo importa para la terminación. Con `lo < hi`, la división entera garantiza `lo <= mid < hi`. Entonces `lo = mid + 1` siempre sube `lo` y `hi = mid` siempre baja `hi`: el intervalo se achica en cada vuelta y el loop termina. El loop infinito clásico aparece cuando escribes `lo = mid` con `mid` redondeado hacia abajo: con `lo = 4` y `hi = 5`, `mid` vale 4 y `lo = mid` no cambia nada. Si de verdad necesitas `lo = mid` (buscas el **último** que cumple algo), redondea hacia arriba: `mid = lo + (hi - lo + 1) // 2`.
+
+Prueba los dos modos en el widget. En "Buscar x" se usa el intervalo cerrado; en "Lower bound", el semiabierto. Mueve `x` a un valor que no está, a uno repetido (el arreglo con cuatros) y a uno mayor que todos.
+
+<BinarySearchStepper />
+
+### Binary Search, resuelto como en la entrevista
+
+**Enunciado.** Dado un arreglo de enteros ordenado ascendente, sin repetidos, y un `target`, devuelve su índice o `-1`. Debe ser O(log n). Ejemplo: `nums = [-1, 0, 3, 5, 9, 12]`, `target = 9` → `4`; `target = 2` → `-1`.
+
+**Qué preguntar.** ¿Puede estar vacío? ¿Hay repetidos y, si los hay, qué índice devuelvo? ¿Ascendente o descendente? El "sin repetidos" del enunciado no es un detalle: con repetidos, la versión clásica devuelve *algún* índice, no el primero.
+
+**Fuerza bruta.** Recorrer y comparar: O(n). Funciona, pero ignora que el arreglo está ordenado, y esa información es la que te están regalando.
+
+**Idea clave.** Cada comparación con el medio descarta la mitad. Intervalo cerrado, `lo <= hi`, descartes con `± 1`.
+
+<CodeTabs>
+
+```java title="Java"
+public int search(int[] nums, int target) {
+    int lo = 0, hi = nums.length - 1;     // [lo, hi] cerrado
+    while (lo <= hi) {                    // queda al menos un candidato
+        int mid = lo + (hi - lo) / 2;     // sin overflow de int
+        if (nums[mid] == target) return mid;
+        if (nums[mid] < target) lo = mid + 1;   // mid y su izquierda quedan fuera
+        else hi = mid - 1;                      // mid y su derecha quedan fuera
+    }
+    return -1;
+}
+```
+
+```python title="Python"
+def search(nums: list[int], target: int) -> int:
+    lo, hi = 0, len(nums) - 1          # [lo, hi] cerrado
+    while lo <= hi:                    # queda al menos un candidato
+        mid = lo + (hi - lo) // 2
+        if nums[mid] == target:
+            return mid
+        if nums[mid] < target:
+            lo = mid + 1               # mid y su izquierda quedan fuera
+        else:
+            hi = mid - 1               # mid y su derecha quedan fuera
+    return -1
+```
+
+```ts title="TypeScript"
+function search(nums: number[], target: number): number {
+  let lo = 0
+  let hi = nums.length - 1 // [lo, hi] cerrado
+  while (lo <= hi) {
+    const mid = lo + Math.floor((hi - lo) / 2)
+    if (nums[mid] === target) return mid
+    if (nums[mid] < target) lo = mid + 1
+    else hi = mid - 1
+  }
+  return -1
+}
+```
+
+</CodeTabs>
+
+**Complejidad.** O(log n) tiempo, O(1) memoria. La versión recursiva usa O(log n) de pila; no hay motivo para preferirla.
+
+**Casos borde.** Arreglo vacío (`hi = -1`, el loop no entra: bien). Un solo elemento. `target` menor que todos (termina con `hi = -1`) o mayor que todos (termina con `lo = n`). Pruébalos en voz alta con un arreglo de dos elementos: es el caso donde aparecen los loops infinitos.
+
+**Repreguntas.** "¿Y si hay repetidos y quiero el primero?" (lower bound, abajo). "¿Y si no sé el tamaño?" (Search in a Sorted Array of Unknown Size: duplica `hi` hasta pasarte, después binaria). "¿Recursiva o iterativa?"
+
+## Lower bound y upper bound
+
+Casi todos los problemas de búsqueda binaria en arreglos son, en el fondo, una de estas dos funciones:
+
+- **`lower_bound(x)`**: el primer índice con `nums[i] >= x`. Es `bisect_left` en Python y `std::lower_bound` en C++.
+- **`upper_bound(x)`**: el primer índice con `nums[i] > x`. Es `bisect_right` y `std::upper_bound`.
+
+Java no trae estas dos funciones para arreglos (mira la nota de abajo), así que conviene saber escribirlas.
+
+Las dos devuelven un valor entre `0` y `n`, y nunca `-1`: si todos los elementos son menores, la respuesta es `n`. Por eso el intervalo semiabierto les queda natural. La única diferencia entre ambas es un signo: `<` contra `<=`.
+
+<CodeTabs>
+
+```java title="Java"
+public int lowerBound(int[] nums, int x) {
+    int lo = 0, hi = nums.length;         // [lo, hi) semiabierto
+    while (lo < hi) {
+        int mid = lo + (hi - lo) / 2;
+        if (nums[mid] < x) lo = mid + 1;  // mid es < x: no puede ser la respuesta
+        else hi = mid;                    // mid es >= x: podría serlo
+    }
+    return lo;
+}
+
+public int upperBound(int[] nums, int x) {
+    int lo = 0, hi = nums.length;
+    while (lo < hi) {
+        int mid = lo + (hi - lo) / 2;
+        if (nums[mid] <= x) lo = mid + 1; // único cambio: <= en vez de <
+        else hi = mid;
+    }
+    return lo;
+}
+```
+
+```python title="Python"
+def lower_bound(nums: list[int], x: int) -> int:
+    lo, hi = 0, len(nums)              # [lo, hi) semiabierto
+    while lo < hi:
+        mid = lo + (hi - lo) // 2
+        if nums[mid] < x:
+            lo = mid + 1               # mid es < x: no puede ser la respuesta
+        else:
+            hi = mid                   # mid es >= x: podría serlo
+    return lo
+
+
+def upper_bound(nums: list[int], x: int) -> int:
+    lo, hi = 0, len(nums)
+    while lo < hi:
+        mid = lo + (hi - lo) // 2
+        if nums[mid] <= x:             # único cambio: <= en vez de <
+            lo = mid + 1
+        else:
+            hi = mid
+    return lo
+```
+
+```ts title="TypeScript"
+function lowerBound(nums: number[], x: number): number {
+  let lo = 0
+  let hi = nums.length // [lo, hi) semiabierto
+  while (lo < hi) {
+    const mid = lo + Math.floor((hi - lo) / 2)
+    if (nums[mid] < x) lo = mid + 1
+    else hi = mid
+  }
+  return lo
+}
+
+function upperBound(nums: number[], x: number): number {
+  let lo = 0
+  let hi = nums.length
+  while (lo < hi) {
+    const mid = lo + Math.floor((hi - lo) / 2)
+    if (nums[mid] <= x) lo = mid + 1 // único cambio
+    else hi = mid
+  }
+  return lo
+}
+```
+
+</CodeTabs>
+
+<Callout type="tip" title="En Java">
+
+`Arrays.binarySearch` no es un lower bound. Si hay repetidos, no garantiza cuál de los iguales encuentra, y si el valor no está devuelve `-(punto de inserción) - 1`, un número negativo que tienes que decodificar. Para la primera aparición, escribe tu `lowerBound`. Si en lugar de un arreglo tienes un conjunto ordenado que cambia, `TreeSet.ceiling(x)` (el menor ≥ x) y `TreeSet.higher(x)` (el menor > x) hacen lo mismo en O(log n).
+
+</Callout>
+
+Con estas dos piezas, tres problemas clásicos salen en una línea cada uno:
+
+- **Search Insert Position** (dónde insertar `target` para mantener el orden): es exactamente `lower_bound(nums, target)`.
+- **Find First and Last Position of Element in Sorted Array**: el primero es `i = lower_bound(x)`; si `i == n` o `nums[i] != x`, la respuesta es `[-1, -1]`. Si no, el último es `upper_bound(x) - 1`. Dos búsquedas, O(log n).
+- **Contar apariciones de `x`** en un arreglo ordenado: `upper_bound(x) - lower_bound(x)`.
+
+La trampa típica en First and Last es encontrar `x` con la búsqueda clásica y después expandirte hacia los costados con un `while`. Funciona, pero si `x` aparece n veces el costo es O(n), justo lo que el problema pide evitar. Dilo tú antes de que te lo pregunten.
+
+<Quiz
+  question="Escribes while lo < hi con mid = lo + (hi - lo) // 2, y en una rama pones lo = mid. ¿Qué pasa con lo = 4 y hi = 5?"
+  options={[
+    { text: 'Nada raro: mid vale 4 o 5 según los datos.', why: 'La división entera redondea hacia abajo: mid siempre vale 4 cuando lo = 4 y hi = 5.' },
+    { text: 'mid vale 4, lo = mid deja lo en 4 y el loop se repite para siempre.', correct: true, why: 'Con mid redondeado hacia abajo, lo = mid no avanza cuando el intervalo tiene dos elementos. Usa lo = mid + 1 o, si de verdad necesitas lo = mid, redondea hacia arriba: mid = lo + (hi - lo + 1) // 2.' },
+    { text: 'Se sale del arreglo porque hi apunta fuera.', why: 'Con lo < hi y redondeo hacia abajo, mid siempre es menor que hi, así que nunca lee nums[hi] aunque hi valga n.' },
+    { text: 'Termina, pero devuelve un índice corrido en uno.', why: 'No llega a devolver nada: el intervalo deja de achicarse y el loop no termina.' },
+  ]}
+/>
+
+## Arreglos rotados
+
+Un arreglo ordenado "rotado" en un punto desconocido, como `[4, 5, 6, 7, 0, 1, 2]`, ya no está ordenado. Aun así puedes descartar mitades, porque tiene una propiedad que se mantiene: **si cortas por el medio, al menos una de las dos mitades está ordenada**.
+
+### Search in Rotated Sorted Array
+
+**Enunciado.** `nums` es un arreglo ascendente de valores distintos, rotado en un pivote desconocido. Devuelve el índice de `target` o `-1`, en O(log n). Ejemplo: `[4, 5, 6, 7, 0, 1, 2]`, `target = 0` → `4`.
+
+**Qué preguntar.** ¿Hay repetidos? (Cambia la complejidad, ver abajo.) ¿Puede no estar rotado? (Sí: rotar 0 posiciones es válido.)
+
+**Fuerza bruta.** Recorrido lineal, O(n). Otra opción razonable: encontrar el pivote con una binaria y después hacer una binaria normal en la mitad correcta. Son dos pasadas O(log n) y es una respuesta aceptable.
+
+**Idea clave.** En cada paso, mira qué mitad está ordenada comparando `nums[lo]` con `nums[mid]`. En la mitad ordenada puedes preguntar con certeza "¿`target` está en este rango?". Si está, vas ahí; si no, vas a la otra.
+
+<CodeTabs>
+
+```java title="Java"
+public int search(int[] nums, int target) {
+    int lo = 0, hi = nums.length - 1;
+    while (lo <= hi) {
+        int mid = lo + (hi - lo) / 2;
+        if (nums[mid] == target) return mid;
+        if (nums[lo] <= nums[mid]) {                    // la mitad izquierda está ordenada
+            if (nums[lo] <= target && target < nums[mid]) hi = mid - 1;
+            else lo = mid + 1;
+        } else {                                        // la mitad derecha está ordenada
+            if (nums[mid] < target && target <= nums[hi]) lo = mid + 1;
+            else hi = mid - 1;
+        }
+    }
+    return -1;
+}
+```
+
+```python title="Python"
+def search(nums: list[int], target: int) -> int:
+    lo, hi = 0, len(nums) - 1
+    while lo <= hi:
+        mid = lo + (hi - lo) // 2
+        if nums[mid] == target:
+            return mid
+        if nums[lo] <= nums[mid]:                  # la mitad izquierda está ordenada
+            if nums[lo] <= target < nums[mid]:
+                hi = mid - 1
+            else:
+                lo = mid + 1
+        else:                                      # la mitad derecha está ordenada
+            if nums[mid] < target <= nums[hi]:
+                lo = mid + 1
+            else:
+                hi = mid - 1
+    return -1
+```
+
+```ts title="TypeScript"
+function search(nums: number[], target: number): number {
+  let lo = 0
+  let hi = nums.length - 1
+  while (lo <= hi) {
+    const mid = lo + Math.floor((hi - lo) / 2)
+    if (nums[mid] === target) return mid
+    if (nums[lo] <= nums[mid]) {
+      // la mitad izquierda está ordenada
+      if (nums[lo] <= target && target < nums[mid]) hi = mid - 1
+      else lo = mid + 1
+    } else {
+      // la mitad derecha está ordenada
+      if (nums[mid] < target && target <= nums[hi]) lo = mid + 1
+      else hi = mid - 1
+    }
+  }
+  return -1
+}
+```
+
+</CodeTabs>
+
+**Complejidad.** O(log n) tiempo, O(1) memoria.
+
+**Casos borde y errores.** El `<=` en `nums[lo] <= nums[mid]` no es decorativo: cuando quedan dos elementos, `lo == mid` y la "mitad izquierda" es un solo elemento, que está ordenado. Con `<` estricto, el código se va a la rama equivocada con `[3, 1]` y `target = 1`. Los límites del rango también importan: en la mitad izquierda, `target < nums[mid]` es estricto porque `mid` ya se descartó.
+
+**Variante con repetidos** (Search in Rotated Sorted Array II): con `[1, 1, 1, 0, 1]` no puedes saber qué mitad está ordenada cuando `nums[lo] == nums[mid] == nums[hi]`. Lo único seguro es achicar en uno (`lo += 1`), y el peor caso pasa a O(n). Mencionarlo sin que te lo pidan suma mucho.
+
+### Find Minimum in Rotated Sorted Array
+
+El mínimo es el punto de rotación. La pregunta monótona es "¿`nums[i] <= nums[n - 1]`?": es falsa en la parte alta (antes del pivote) y verdadera desde el mínimo hasta el final. El mínimo es el primer verdadero.
+
+<CodeTabs>
+
+```java title="Java"
+public int findMin(int[] nums) {
+    int lo = 0, hi = nums.length - 1;
+    while (lo < hi) {
+        int mid = lo + (hi - lo) / 2;
+        if (nums[mid] > nums[hi]) lo = mid + 1;   // el corte está a la derecha de mid
+        else hi = mid;                            // mid puede ser el mínimo
+    }
+    return nums[lo];
+}
+```
+
+```python title="Python"
+def find_min(nums: list[int]) -> int:
+    lo, hi = 0, len(nums) - 1
+    while lo < hi:
+        mid = lo + (hi - lo) // 2
+        if nums[mid] > nums[hi]:
+            lo = mid + 1        # el corte está a la derecha de mid
+        else:
+            hi = mid            # mid puede ser el mínimo
+    return nums[lo]
+```
+
+```ts title="TypeScript"
+function findMin(nums: number[]): number {
+  let lo = 0
+  let hi = nums.length - 1
+  while (lo < hi) {
+    const mid = lo + Math.floor((hi - lo) / 2)
+    if (nums[mid] > nums[hi]) lo = mid + 1
+    else hi = mid
+  }
+  return nums[lo]
+}
+```
+
+</CodeTabs>
+
+¿Por qué comparar con `nums[hi]` y no con `nums[lo]`? Porque si el arreglo no está rotado (`[1, 2, 3, 4]`), `nums[mid] > nums[lo]` siempre es cierto y la versión con `lo` se iría a la derecha, lejos del mínimo. Con `hi`, el caso sin rotar funciona solo. Es una buena repregunta para tener preparada.
+
+## Search a 2D Matrix
+
+**Enunciado.** Una matriz `m × n` donde cada fila está ordenada y el primer elemento de cada fila es mayor que el último de la anterior. ¿Está `target`?
+
+**Idea clave.** Leída fila por fila, la matriz es **un solo arreglo ordenado** de `m · n` elementos. No hace falta copiarla: el índice virtual `i` corresponde a la celda `(i // n, i % n)`.
+
+<CodeTabs>
+
+```java title="Java"
+public boolean searchMatrix(int[][] matrix, int target) {
+    if (matrix.length == 0 || matrix[0].length == 0) return false;
+    int m = matrix.length, n = matrix[0].length;
+    int lo = 0, hi = m * n - 1;
+    while (lo <= hi) {
+        int mid = lo + (hi - lo) / 2;
+        int val = matrix[mid / n][mid % n];   // índice virtual -> (fila, columna)
+        if (val == target) return true;
+        if (val < target) lo = mid + 1;
+        else hi = mid - 1;
+    }
+    return false;
+}
+```
+
+```python title="Python"
+def search_matrix(matrix: list[list[int]], target: int) -> bool:
+    if not matrix or not matrix[0]:
+        return False
+    m, n = len(matrix), len(matrix[0])
+    lo, hi = 0, m * n - 1
+    while lo <= hi:
+        mid = lo + (hi - lo) // 2
+        val = matrix[mid // n][mid % n]
+        if val == target:
+            return True
+        if val < target:
+            lo = mid + 1
+        else:
+            hi = mid - 1
+    return False
+```
+
+```ts title="TypeScript"
+function searchMatrix(matrix: number[][], target: number): boolean {
+  if (matrix.length === 0 || matrix[0].length === 0) return false
+  const m = matrix.length
+  const n = matrix[0].length
+  let lo = 0
+  let hi = m * n - 1
+  while (lo <= hi) {
+    const mid = lo + Math.floor((hi - lo) / 2)
+    const val = matrix[Math.floor(mid / n)][mid % n]
+    if (val === target) return true
+    if (val < target) lo = mid + 1
+    else hi = mid - 1
+  }
+  return false
+}
+```
+
+</CodeTabs>
+
+O(log(m · n)) tiempo y O(1) memoria. La repregunta clásica es **Search a 2D Matrix II**, donde filas y columnas están ordenadas pero las filas no se "encadenan". Ahí la binaria sobre el arreglo aplanado ya no sirve. La solución es empezar en la esquina superior derecha: si el valor es mayor que `target`, descartas la columna; si es menor, descartas la fila. O(m + n). Reconocer que el problema cambió es lo que se evalúa.
+
+## Búsqueda binaria sobre la respuesta
+
+Aquí está el salto que más impresiona en una entrevista. Hay problemas que piden "el mínimo valor `k` tal que se cumple algo" y donde no hay ningún arreglo ordenado a la vista. Pero si te preguntas "¿alcanza con `k`?", descubres que la respuesta es monótona: si `k` alcanza, `k + 1` también. Los valores posibles de `k` forman una recta `no no no sí sí sí`, y lo que buscas es el primer sí. Es un lower bound sobre un predicado.
+
+La receta tiene tres partes:
+
+1. **El rango**: el `k` más chico que podría funcionar (`lo`) y uno que seguro funciona (`hi`).
+2. **El predicado** `can(k)`: una función, casi siempre O(n) y greedy, que responde sí o no.
+3. **La binaria** de lower bound sobre `[lo, hi]`. Costo total: O(n · log(hi − lo)).
+
+### Koko Eating Bananas
+
+**Enunciado.** Hay `n` pilas de bananas y Koko tiene `h` horas. Cada hora elige una pila y come hasta `k` bananas de ella; si la pila tiene menos, la termina y espera a la hora siguiente. ¿Cuál es el menor `k` entero que le permite terminar todo en `h` horas? Ejemplo: `piles = [3, 6, 7, 11]`, `h = 8` → `4`.
+
+**Qué preguntar.** ¿Se garantiza `h >= len(piles)`? (Sí; si no, no hay respuesta.) ¿Qué tamaño tienen los valores? (Hasta 10⁹: la fuerza bruta sobre `k` no entra.)
+
+**Fuerza bruta.** Probar `k = 1, 2, 3, …` hasta que alcance. Cada prueba cuesta O(n), y puede haber hasta `max(piles)` pruebas: O(n · M), demasiado con M = 10⁹.
+
+**Idea clave.** Con velocidad `k`, una pila de `p` bananas toma `⌈p / k⌉` horas. Más velocidad nunca toma más horas, así que "¿termina a tiempo con `k`?" es monótona. El rango es `[1, max(piles)]`: con `max(piles)` cada pila dura exactamente una hora y, como `h >= n`, alcanza.
+
+En el widget, cada celda de la recta es una velocidad. Fíjate en lo que pasa después de cada evaluación: no se pinta solo `mid`, se pinta **toda una mitad**, porque la monotonía te permite deducir esas respuestas sin calcularlas. Cambia `h` con el deslizador y activa "can(k) para todo k" para ver la función completa que la fuerza bruta tendría que calcular.
+
+<AnswerSpaceSearch />
+
+<CodeTabs>
+
+```java title="Java"
+public int minEatingSpeed(int[] piles, int h) {
+    int lo = 1, hi = 0;
+    for (int p : piles) hi = Math.max(hi, p);
+    while (lo < hi) {
+        int mid = lo + (hi - lo) / 2;
+        if (hours(piles, mid) <= h) hi = mid;   // mid alcanza: la respuesta es mid o menor
+        else lo = mid + 1;                      // mid no alcanza: ninguna menor alcanza
+    }
+    return lo;
+}
+
+private long hours(int[] piles, int k) {
+    long total = 0;                             // long: con k = 1 la suma pasa de 2^31
+    for (int p : piles) total += (p + k - 1L) / k;   // techo sin double
+    return total;
+}
+```
+
+```python title="Python"
+def min_eating_speed(piles: list[int], h: int) -> int:
+    def hours(k: int) -> int:
+        return sum((p + k - 1) // k for p in piles)   # techo sin floats
+
+    lo, hi = 1, max(piles)
+    while lo < hi:
+        mid = lo + (hi - lo) // 2
+        if hours(mid) <= h:
+            hi = mid             # mid alcanza: la respuesta es mid o menor
+        else:
+            lo = mid + 1         # mid no alcanza: ninguna menor alcanza
+    return lo
+```
+
+```ts title="TypeScript"
+function minEatingSpeed(piles: number[], h: number): number {
+  const hours = (k: number) => piles.reduce((sum, p) => sum + Math.ceil(p / k), 0)
+
+  let lo = 1
+  let hi = Math.max(...piles)
+  while (lo < hi) {
+    const mid = lo + Math.floor((hi - lo) / 2)
+    if (hours(mid) <= h) hi = mid
+    else lo = mid + 1
+  }
+  return lo
+}
+```
+
+</CodeTabs>
+
+**Complejidad.** O(n · log M) tiempo, con M = `max(piles)`, y O(1) memoria. Con n = 10⁴ y M = 10⁹ son unas 30 evaluaciones de O(n): nada.
+
+**Casos borde y errores.** `(p + k - 1) // k` evita los flotantes de `ceil(p / k)`. En lenguajes con enteros de 32 bits, la suma de horas puede desbordar con `k = 1` (hasta 10⁴ · 10⁹): usa enteros de 64 bits, como el `long` de la versión en Java. Empezar `lo` en 0 produce una división por cero. Y `Math.max(...piles)` en JavaScript revienta la pila con arreglos de cientos de miles de elementos; en ese caso, un loop.
+
+### Capacity To Ship Packages Within D Days
+
+**Enunciado.** Paquetes con pesos `weights`, que deben enviarse **en orden**, y `days` días. Cada día cargas el barco con paquetes consecutivos sin pasarte de su capacidad. ¿Cuál es la capacidad mínima para enviar todo en `days` días? Ejemplo: `weights = [1..10]`, `days = 5` → `15`.
+
+**Idea clave.** Misma plantilla. El predicado es "¿con capacidad `c`, me alcanzan los días?", que se responde con un recorrido greedy: llena el barco hasta que el próximo paquete no quepa y pasa al día siguiente. El rango tiene un detalle que el entrevistador mira: `lo = max(weights)`, no 1, porque el paquete más pesado tiene que caber; `hi = sum(weights)`, todo en un día.
+
+<CodeTabs>
+
+```java title="Java"
+public int shipWithinDays(int[] weights, int days) {
+    int lo = 0, hi = 0;
+    for (int w : weights) {
+        lo = Math.max(lo, w);       // el paquete más pesado tiene que caber
+        hi += w;                    // todo en un solo día
+    }
+    while (lo < hi) {
+        int mid = lo + (hi - lo) / 2;
+        if (daysNeeded(weights, mid) <= days) hi = mid;
+        else lo = mid + 1;
+    }
+    return lo;
+}
+
+private int daysNeeded(int[] weights, int cap) {
+    int needed = 1, load = 0;
+    for (int w : weights) {
+        if (load + w > cap) {       // no cabe: sale el barco, empieza otro día
+            needed++;
+            load = 0;
+        }
+        load += w;
+    }
+    return needed;
+}
+```
+
+```python title="Python"
+def ship_within_days(weights: list[int], days: int) -> int:
+    def days_needed(cap: int) -> int:
+        needed, load = 1, 0
+        for w in weights:
+            if load + w > cap:      # no cabe: sale el barco, empieza otro día
+                needed += 1
+                load = 0
+            load += w
+        return needed
+
+    lo, hi = max(weights), sum(weights)
+    while lo < hi:
+        mid = lo + (hi - lo) // 2
+        if days_needed(mid) <= days:
+            hi = mid
+        else:
+            lo = mid + 1
+    return lo
+```
+
+```ts title="TypeScript"
+function shipWithinDays(weights: number[], days: number): number {
+  const daysNeeded = (cap: number) => {
+    let needed = 1
+    let load = 0
+    for (const w of weights) {
+      if (load + w > cap) {
+        needed++
+        load = 0
+      }
+      load += w
+    }
+    return needed
+  }
+
+  let lo = Math.max(...weights)
+  let hi = weights.reduce((a, b) => a + b, 0)
+  while (lo < hi) {
+    const mid = lo + Math.floor((hi - lo) / 2)
+    if (daysNeeded(mid) <= days) hi = mid
+    else lo = mid + 1
+  }
+  return lo
+}
+```
+
+</CodeTabs>
+
+O(n · log(sum − max)) tiempo y O(1) memoria. **Variantes** con la misma forma: Split Array Largest Sum (es este mismo problema con otro disfraz: "minimiza la suma máxima de `k` subarreglos"), Minimum Number of Days to Make m Bouquets (el predicado cuenta ramos posibles en el día `d`) y Magnetic Force Between Two Balls, que busca el **máximo** que cumple: ahí la recta es `sí sí sí no no` y buscas el último sí.
+
+<Callout type="interview">
+
+Lo que el entrevistador está evaluando en búsqueda sobre la respuesta: que **digas en voz alta por qué el predicado es monótono** ("si con capacidad 15 alcanza, con 16 también, porque cualquier reparto que servía sigue sirviendo"), que justifiques los extremos del rango y que separes el código en dos piezas: el predicado y la binaria. Esa separación también te deja probar el predicado por su cuenta antes de envolverlo.
+
+</Callout>
+
+<Quiz
+  question="En Capacity To Ship Packages, alguien inicializa lo = 1. ¿Qué problema aparece?"
+  options={[
+    { text: 'Ninguno: la binaria igual converge a la respuesta correcta.', why: 'Con weights = [10] y days = 2, days_needed(1) devuelve 2, el predicado dice que sí alcanza y la binaria responde 1: una capacidad donde el paquete ni siquiera cabe.' },
+    { text: 'El predicado se evalúa en capacidades donde un paquete no cabe nunca, y days_needed devuelve un número que no significa nada.', correct: true, why: 'Con cap menor que w, el código abre un día nuevo y carga igual un paquete que no cabe, así que puede decir que sí alcanza cuando es imposible. El rango correcto empieza en max(weights), que además es el mínimo real posible.' },
+    { text: 'Solo empeora la complejidad en un factor constante.', why: 'Agregar valores al rango cuesta unas pocas iteraciones más, pero el problema real es que el predicado no es válido para esos valores.' },
+  ]}
+/>
+
+## Errores típicos y cómo depurarlos en vivo
+
+Cuando tu búsqueda binaria falla en la pizarra, casi siempre es uno de estos:
+
+| Síntoma | Causa típica | Arreglo |
+|---|---|---|
+| Loop infinito con dos elementos | `lo = mid` con `mid` redondeado hacia abajo | `lo = mid + 1`, o redondear hacia arriba si de verdad buscas el último |
+| Se salta el último candidato | `while lo < hi` con intervalo cerrado | Con `[lo, hi]` el loop es `lo <= hi` |
+| Lee `nums[n]` | `hi = len(nums)` con `while lo <= hi` | Con `[lo, hi)` el loop es `lo < hi` |
+| Pierde la respuesta | `hi = mid - 1` cuando `mid` podía ser la respuesta | En lower bound, `hi = mid` |
+| Resultado corrido en uno | Mezclar "último que cumple" con "primero que no cumple" | Escribir el predicado y decir qué índice devuelves antes de codificar |
+
+El método para no caer en ninguno: **antes de escribir**, di en voz alta qué significa `lo`, qué significa `hi` y qué devuelves cuando el loop termina. Después, prueba mentalmente con un arreglo de **dos elementos** y con `x` en cada extremo y afuera. Es la entrada más chica donde aparecen todos los bugs de esta lista.
+
+<Quiz
+  question="Find Minimum in Rotated Sorted Array: ¿por qué la solución compara nums[mid] con nums[hi] en lugar de con nums[lo]?"
+  options={[
+    { text: 'Porque es más rápido acceder al final del arreglo.', why: 'El acceso es O(1) en ambos casos; la diferencia es de corrección, no de velocidad.' },
+    { text: 'Porque con nums[hi] el caso sin rotar funciona sin tratarlo aparte.', correct: true, why: 'Si el arreglo no está rotado, nums[mid] > nums[lo] siempre, y la versión con lo se iría a la derecha, lejos del mínimo. nums[mid] > nums[hi] solo es cierto si el corte está a la derecha de mid.' },
+    { text: 'Porque nums[lo] puede estar fuera de rango.', why: 'lo siempre es un índice válido dentro del loop.' },
+  ]}
+/>
+
+## Problemas típicos de este patrón
+
+| Problema (LeetCode) | Idea | Dificultad |
+|---|---|---|
+| [Binary Search](https://leetcode.com/problems/binary-search/) | Intervalo cerrado, el caso base | Easy |
+| [Search Insert Position](https://leetcode.com/problems/search-insert-position/) | `lower_bound` | Easy |
+| [Find First and Last Position of Element in Sorted Array](https://leetcode.com/problems/find-first-and-last-position-of-element-in-sorted-array/) | `lower_bound` y `upper_bound - 1` | Medium |
+| [Search in Rotated Sorted Array](https://leetcode.com/problems/search-in-rotated-sorted-array/) | Una mitad siempre está ordenada | Medium |
+| [Find Minimum in Rotated Sorted Array](https://leetcode.com/problems/find-minimum-in-rotated-sorted-array/) | Comparar con `nums[hi]` | Medium |
+| [Search a 2D Matrix](https://leetcode.com/problems/search-a-2d-matrix/) | La matriz es un arreglo aplanado | Medium |
+| [Koko Eating Bananas](https://leetcode.com/problems/koko-eating-bananas/) | Binaria sobre la velocidad | Medium |
+| [Capacity To Ship Packages Within D Days](https://leetcode.com/problems/capacity-to-ship-packages-within-d-days/) | Binaria sobre la capacidad, greedy como predicado | Medium |
+| [Time Based Key-Value Store](https://leetcode.com/problems/time-based-key-value-store/) | `upper_bound - 1` sobre timestamps | Medium |
+| [Split Array Largest Sum](https://leetcode.com/problems/split-array-largest-sum/) | "Minimiza el máximo" | Hard |
+| [Median of Two Sorted Arrays](https://leetcode.com/problems/median-of-two-sorted-arrays/) | Binaria sobre el punto de corte del arreglo menor | Hard |
+
+Si tienes poco tiempo, haz en orden Binary Search, First and Last Position, Search in Rotated Sorted Array y Koko. Cubren las cuatro formas que más se repiten.
+
+<Takeaways>
+
+- La búsqueda binaria no necesita un arreglo: necesita una **pregunta monótona** (`F F F T T T`). Encontrar el primer verdadero es la plantilla que resuelve casi todo.
+- Elige una convención y respétala en cada línea: **cerrado** `[lo, hi]` con `lo <= hi` y `± 1`, o **semiabierto** `[lo, hi)` con `lo < hi` y `hi = mid`.
+- `mid = lo + (hi - lo) // 2` evita el desbordamiento en lenguajes con enteros fijos. Con `lo < hi`, el redondeo hacia abajo garantiza que el intervalo se achica.
+- `lower_bound` y `upper_bound` resuelven Search Insert, First and Last y contar apariciones. Expandirse linealmente desde un hallazgo es O(n) en el peor caso.
+- En un arreglo rotado, una de las dos mitades siempre está ordenada; con repetidos, el peor caso pasa a O(n).
+- **Búsqueda sobre la respuesta**: rango, predicado greedy "¿alcanza con k?" y lower bound. Señales: "mínimo que cumple", "minimiza el máximo", valores hasta 10⁹.
+- Prueba siempre con dos elementos y con `x` fuera del rango: ahí aparecen los loops infinitos y los off-by-one.
+
+</Takeaways>
+
+## Fuentes y lecturas
+
+- Jon Bentley, *Programming Pearls*, 2.ª ed., Addison-Wesley, 1999. Columna 4, "Writing Correct Programs": la búsqueda binaria demostrada con invariantes.
+- Donald Knuth, *The Art of Computer Programming*, vol. 3, sección 6.2.1, "Searching an Ordered Table".
+- Joshua Bloch, [Extra, Extra - Read All About It: Nearly All Binary Searches and Mergesorts are Broken](https://research.google/blog/extra-extra-read-all-about-it-nearly-all-binary-searches-and-mergesorts-are-broken/), Google Research, 2006.
+- Python, [bisect: Array bisection algorithm](https://docs.python.org/3/library/bisect.html) (`bisect_left` y `bisect_right`).
+- cppreference, [std::lower_bound](https://en.cppreference.com/w/cpp/algorithm/lower_bound) y [std::upper_bound](https://en.cppreference.com/w/cpp/algorithm/upper_bound).
+- Tech Interview Handbook, [Sorting and searching cheatsheet](https://www.techinterviewhandbook.org/algorithms/sorting-searching/).
+- Las páginas de LeetCode enlazadas en la tabla de problemas.

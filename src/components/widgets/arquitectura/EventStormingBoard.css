@@ -1,0 +1,185 @@
+/* Sticky colors derived from line tokens (Brandolini notation) */
+.es-k-event {
+  --es-c: color-mix(in oklab, var(--l2) 55%, var(--l1));
+}
+.es-k-command {
+  --es-c: var(--l4);
+}
+.es-k-actor {
+  --es-c: var(--l2);
+}
+.es-k-system {
+  --es-c: color-mix(in oklab, var(--l1) 70%, var(--paper));
+}
+.es-k-policy {
+  --es-c: color-mix(in oklab, var(--l4) 55%, var(--l1));
+}
+.es-k-read {
+  --es-c: var(--l5);
+}
+.es-k-aggregate {
+  --es-c: color-mix(in oklab, var(--l2) 70%, var(--paper));
+}
+.es-k-hotspot {
+  --es-c: var(--bad);
+}
+
+.es-scroll {
+  overflow-x: auto;
+  padding-bottom: var(--s-2);
+  outline: none;
+}
+.es-scroll:focus-visible {
+  outline: 2px solid var(--line-ink);
+  outline-offset: 2px;
+}
+.es-sticky {
+  position: relative;
+  padding: 8px 10px;
+  min-height: 52px;
+  border: 2px solid var(--es-c);
+  border-radius: 3px;
+  background: color-mix(in oklab, var(--es-c) 22%, var(--card));
+  color: var(--ink);
+  font-family: var(--font-sign);
+  font-size: 0.86rem;
+  font-weight: 600;
+  line-height: 1.25;
+}
+.es-sticky.es-k-actor {
+  min-height: 34px;
+  width: 70%;
+  font-size: 0.8rem;
+}
+.es-sticky.es-k-hotspot {
+  font-size: 0.78rem;
+  font-weight: 600;
+  border-style: dashed;
+}
+.es-sticky.es-k-aggregate {
+  min-height: 46px;
+}
+.es-sticky.is-pivotal {
+  border-width: 3px;
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--es-c) 30%, transparent);
+}
+.es-pivot {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--es-c);
+  color: var(--paper);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  vertical-align: 1px;
+}
+.es-chaos {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-4);
+  justify-content: center;
+  padding: var(--s-4) var(--s-2);
+}
+.es-chaos .es-sticky {
+  width: 8.5rem;
+  display: grid;
+  place-items: center;
+  text-align: center;
+  min-height: 70px;
+}
+.es-board {
+  min-width: 720px;
+  display: grid;
+  gap: var(--s-2);
+}
+.es-timeline {
+  position: relative;
+  height: 18px;
+  margin: 0 4px;
+  border-bottom: 4px solid var(--line);
+}
+.es-timeline::after {
+  content: '';
+  position: absolute;
+  right: -4px;
+  bottom: -9px;
+  border: 7px solid transparent;
+  border-left: 10px solid var(--line);
+}
+.es-timeline span {
+  position: absolute;
+  left: 0;
+  top: -2px;
+  font-size: 0.74rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.es-groups {
+  display: flex;
+  gap: var(--s-2);
+  align-items: stretch;
+}
+.es-group {
+  flex: var(--es-span, 1) 1 0;
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  padding: 4px;
+  border: 2px dashed transparent;
+  border-radius: var(--radius-lg);
+  transition: border-color 250ms var(--ease-out);
+}
+.es-group.is-ctx {
+  border-color: var(--line);
+  background: color-mix(in oklab, var(--line) 4%, transparent);
+}
+.es-group__label {
+  font-weight: 700;
+  font-size: 0.8rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--line-ink);
+}
+.es-cols {
+  display: flex;
+  gap: var(--s-2);
+}
+.es-col {
+  flex: 1 1 0;
+  min-width: 130px;
+  display: grid;
+  align-content: start;
+  gap: 6px;
+}
+.es-readout {
+  display: grid;
+  gap: var(--s-2);
+}
+.es-legend {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px var(--s-4);
+  font-size: 0.82rem;
+  color: var(--ink-3);
+}
+.es-legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.es-swatch {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border-radius: 2px;
+  border: 2px solid var(--es-c);
+  background: color-mix(in oklab, var(--es-c) 22%, var(--card));
+}

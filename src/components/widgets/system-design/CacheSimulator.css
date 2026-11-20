@@ -1,0 +1,179 @@
+.csim-btns {
+  display: flex;
+  gap: var(--s-2);
+  flex-wrap: wrap;
+}
+.csim-stream {
+  display: grid;
+  gap: 4px;
+  margin-bottom: var(--s-4);
+}
+.csim-stream__label,
+.csim-legend {
+  font-family: var(--font-sign);
+  font-size: 0.8rem;
+  color: var(--ink-3);
+}
+.csim-stream__label {
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  font-size: 0.74rem;
+}
+.csim-stream__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  gap: 4px;
+  overflow: hidden;
+  min-height: 30px;
+  align-items: center;
+}
+.csim-req {
+  flex: none;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1.5px solid var(--rule-strong);
+  background: var(--paper);
+  font-family: var(--font-code);
+  font-size: 0.8rem;
+  color: var(--ink-2);
+}
+.csim-req.is-now {
+  border-color: var(--line);
+  background: var(--line);
+  color: var(--line-on);
+  font-weight: 700;
+}
+.csim-req.is-scan {
+  border-style: dashed;
+}
+.csim-empty {
+  font-family: var(--font-sign);
+  font-size: 0.85rem;
+  color: var(--ink-3);
+  font-style: italic;
+}
+.csim-rows {
+  display: grid;
+  gap: var(--s-3);
+}
+.csim-row {
+  display: grid;
+  gap: 6px;
+}
+.csim-row__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px var(--s-3);
+  font-family: var(--font-sign);
+}
+.csim-row__head b {
+  font-size: 1rem;
+  color: var(--ink);
+  min-width: 2.6rem;
+}
+.csim-ratio {
+  font-weight: 700;
+  font-size: 1.15rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-2);
+}
+.csim-ratio.is-best {
+  color: var(--ok);
+}
+.csim-flag {
+  font-family: var(--font-code);
+  font-size: 0.78rem;
+  color: var(--ink-3);
+}
+.csim-flag.is-hit {
+  color: var(--ok);
+}
+.csim-flag.is-miss {
+  color: var(--bad);
+}
+.csim-slots {
+  list-style: none;
+  margin: 0;
+  padding: 6px 8px;
+  display: grid;
+  grid-template-columns: repeat(var(--cap), minmax(0, 1fr));
+  gap: 4px;
+  position: relative;
+  border-radius: 999px;
+  background: var(--paper);
+  border: 1px solid var(--rule);
+}
+.csim-slots::before {
+  content: '';
+  position: absolute;
+  left: 14px;
+  right: 14px;
+  top: 50%;
+  height: 4px;
+  margin-top: -2px;
+  background: var(--line);
+  border-radius: 4px;
+}
+.csim-slot {
+  position: relative;
+  display: grid;
+  place-items: center;
+  min-width: 0;
+  height: 36px;
+  border-radius: 999px;
+  border: 3px solid var(--line);
+  background: var(--paper);
+  font-family: var(--font-code);
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--ink);
+  line-height: 1;
+  overflow: hidden;
+}
+.csim-slot small {
+  font-family: var(--font-sign);
+  font-size: 0.66rem;
+  font-weight: 600;
+  color: var(--ink-3);
+}
+.csim-slot.is-empty {
+  border-color: var(--rule);
+  border-style: dashed;
+}
+.csim-slot.is-scan {
+  border-style: dashed;
+  border-color: var(--rule-strong);
+}
+.csim-slot.is-hit {
+  background: var(--ok);
+  border-color: var(--ok);
+  color: var(--paper);
+}
+.csim-slot.is-hit small {
+  color: var(--paper);
+}
+.csim-slot.is-new {
+  background: var(--line-tint-2);
+}
+.csim-legend {
+  margin: var(--s-3) 0 0;
+}
+.csim-n {
+  font-weight: 700;
+  color: var(--ink);
+}
+@media (max-width: 480px) {
+  .csim-slot {
+    height: 32px;
+    font-size: 0.68rem;
+    border-width: 2px;
+  }
+  .csim-slots {
+    padding: 5px 6px;
+    gap: 3px;
+  }
+}

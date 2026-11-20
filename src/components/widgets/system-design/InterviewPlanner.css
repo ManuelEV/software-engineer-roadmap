@@ -1,0 +1,95 @@
+.ip__svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
+.ip__rail {
+  stroke: var(--rule-strong);
+  stroke-width: 5;
+  stroke-linecap: round;
+}
+.ip__seg {
+  stroke: var(--rule-strong);
+  stroke-width: 5;
+  transition: stroke 200ms var(--ease-out), stroke-width 200ms var(--ease-out);
+}
+.ip__seg--req,
+.ip__seg--hld,
+.ip__seg--wrap {
+  stroke: color-mix(in oklab, var(--line) 40%, var(--rule-strong));
+}
+.ip__seg.is-on {
+  stroke: var(--line);
+  stroke-width: 9;
+}
+.ip__progress {
+  stroke: var(--ink-2);
+  stroke-width: 2;
+  stroke-dasharray: 3 4;
+}
+.ip__stop {
+  cursor: pointer;
+  outline: none;
+}
+.ip__hit {
+  fill: transparent;
+}
+.ip__dot {
+  fill: var(--paper);
+  stroke: var(--ink-2);
+  stroke-width: 3;
+  transition: stroke 200ms var(--ease-out), fill 200ms var(--ease-out);
+}
+.ip__stop.is-on .ip__dot {
+  stroke: var(--line);
+  stroke-width: 4;
+}
+.ip__stop.is-now .ip__dot {
+  fill: var(--line);
+}
+.ip__stop:focus-visible .ip__dot {
+  stroke: var(--line-ink);
+  stroke-width: 5;
+}
+.ip__lbl {
+  font-size: 14px;
+  font-weight: 700;
+  fill: var(--ink-2);
+}
+.ip__stop.is-on .ip__lbl {
+  fill: var(--ink);
+}
+.ip__min {
+  font-size: 13px;
+  font-weight: 600;
+  fill: var(--ink-3);
+}
+.ip__tick {
+  font-size: 13px;
+  fill: var(--ink-3);
+}
+.ip__clock {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+}
+.ip__time {
+  font-family: var(--font-code);
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-2);
+}
+.ip__detail {
+  display: grid;
+  gap: var(--s-1);
+}
+.ip__dhead {
+  font-size: 1rem;
+}
+.ip__range {
+  color: var(--ink-3);
+}
+.ip__mistake b {
+  color: var(--bad);
+}

@@ -1,0 +1,807 @@
+import { UmlDiagram } from '../../components/widgets/patrones/UmlDiagram'
+import { StrategySwitcher } from '../../components/widgets/patrones/StrategySwitcher'
+import { ObserverLive } from '../../components/widgets/patrones/ObserverLive'
+import { CommandUndo } from '../../components/widgets/patrones/CommandUndo'
+import { StateMachine } from '../../components/widgets/patrones/StateMachine'
+
+Los patrones de comportamiento responden una pregunta concreta: **¿quién hace qué, y cómo se enteran los demás?** No tratan de cómo se crean los objetos ni de cómo se ensamblan, sino de cómo se reparten las responsabilidades y cómo se comunican sin quedar amarrados entre sí.
+
+Este tema cubre los cuatro que más vas a encontrar en código real y en entrevistas: **Strategy**, **Observer**, **Command** y **State**. Comparten una misma idea, la que el GoF repite en todo el libro: *encapsula lo que varía*. Strategy encapsula un algoritmo, Observer una reacción, Command una acción y State un comportamiento que depende del estado. Si entiendes esa idea, los cuatro dejan de ser cuatro cosas que memorizar y pasan a ser cuatro aplicaciones del mismo movimiento: sacar un `if` o un `switch` que crece y convertirlo en un objeto que puedes reemplazar.
+
+Al final hay una sección dedicada a la pregunta clásica de entrevista, **¿en qué se diferencian Strategy y State?**, porque su diagrama de clases es casi idéntico.
+
+## Strategy: el algoritmo como pieza intercambiable
+
+**Intención.** Definir una familia de algoritmos, encapsular cada uno y hacerlos intercambiables, para que el algoritmo pueda variar sin tocar el código que lo usa.
+
+### El problema
+
+Tienes un checkout que calcula el costo de envío. Empezó con una opción, ahora hay tres, y el equipo comercial ya anunció una cuarta. El código típico se ve así:
+
+```ts title="checkout.ts (antes)"
+function shippingCost(order: Order, method: string): number {
+  switch (method) {
+    case 'standard':
+      return 4.99 + 0.5 * order.weightKg + 0.002 * order.distanceKm
+    case 'express':
+      return 9.99 + 1.2 * order.weightKg + 0.006 * order.distanceKm
+    case 'pickup':
+      if (order.weightKg > 20) throw new Error('Retiro en tienda: máximo 20 kg')
+      return 0
+    // cada transportista nuevo = otro case aquí y otro deploy del checkout
+    default:
+      throw new Error(`Método desconocido: ${method}`)
+  }
+}
+```
+
+El olor no es el `switch` en sí: es que **crece**. Cada opción nueva obliga a abrir y volver a probar una función que ya funcionaba (viola el principio abierto/cerrado que viste en [la introducción](/patrones/introduccion)). Además, el mismo `switch` suele aparecer duplicado en otro lado: el que calcula la fecha estimada de entrega, el que arma la etiqueta, el que valida el destino. Fowler lo cataloga como *Switch Statements* y propone *Replace Conditional with Polymorphism*.
+
+### La solución
+
+Cada rama del `switch` se convierte en una clase que implementa una interfaz común. El contexto (el checkout) guarda una referencia a esa interfaz y le delega el cálculo, sin saber qué clase concreta hay detrás.
+
+<StrategySwitcher />
+
+<UmlDiagram
+  caption="Strategy: el contexto compone una interfaz; las estrategias concretas la implementan."
+  classes={[
+    { id: 'ctx', name: 'Checkout', fields: ['strategy: ShippingStrategy'], methods: ['shippingCost(order)'], x: 0, y: 0, w: 1.35, tone: 'line', desc: 'El contexto. Recibe la estrategia (por constructor o setter) y le delega el cálculo. No contiene ningún if sobre el tipo de envío.' },
+    { id: 'st', name: 'ShippingStrategy', kind: 'interface', methods: ['cost(order): number'], x: 1.45, y: 0, desc: 'El contrato común. En TypeScript o Python puede ser simplemente un tipo de función.' },
+    { id: 'a', name: 'StandardShipping', methods: ['cost(order)'], x: 0.45, y: 1.3, desc: 'Una estrategia concreta. No sabe que existen las demás.' },
+    { id: 'b', name: 'ExpressShipping', methods: ['cost(order)'], x: 1.45, y: 1.3, desc: 'Otra estrategia: misma firma, distinto algoritmo.' },
+    { id: 'c', name: 'StorePickup', methods: ['cost(order)'], x: 2.45, y: 1.3, desc: 'Agregar esta opción fue crear una clase, sin tocar Checkout.' },
+  ]}
+  relations={[
+    { from: 'ctx', to: 'st', kind: 'composes' },
+    { from: 'a', to: 'st', kind: 'implements' },
+    { from: 'b', to: 'st', kind: 'implements' },
+    { from: 'c', to: 'st', kind: 'implements' },
+  ]}
+/>
+
+En TypeScript la versión "de libro" usa clases, pero fíjate en el comentario final: en lenguajes con funciones de primera clase, una estrategia **puede ser solo una función**. En Python es directamente lo idiomático.
+
+<CodeTabs>
+
+```ts title="TypeScript"
+interface Order {
+  weightKg: number
+  distanceKm: number
+}
+
+interface ShippingStrategy {
+  cost(order: Order): number
+}
+
+class StandardShipping implements ShippingStrategy {
+  cost(o: Order) {
+    return 4.99 + 0.5 * o.weightKg + 0.002 * o.distanceKm
+  }
+}
+
+class ExpressShipping implements ShippingStrategy {
+  cost(o: Order) {
+    return 9.99 + 1.2 * o.weightKg + 0.006 * o.distanceKm
+  }
+}
+
+class Checkout {
+  constructor(private strategy: ShippingStrategy) {}
+
+  setStrategy(strategy: ShippingStrategy) {
+    this.strategy = strategy // el usuario cambió la opción en la UI
+  }
+
+  shippingCost(order: Order) {
+    return this.strategy.cost(order)
+  }
+}
+
+const checkout = new Checkout(new StandardShipping())
+checkout.setStrategy(new ExpressShipping())
+
+// Variante funcional, igual de válida:
+// type ShippingStrategy = (order: Order) => number
+```
+
+```python title="Python"
+from collections.abc import Callable
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class Order:
+    weight_kg: float
+    distance_km: float
+
+
+# En Python una estrategia es simplemente un callable.
+ShippingStrategy = Callable[[Order], float]
+
+
+def standard(o: Order) -> float:
+    return 4.99 + 0.5 * o.weight_kg + 0.002 * o.distance_km
+
+
+def express(o: Order) -> float:
+    return 9.99 + 1.2 * o.weight_kg + 0.006 * o.distance_km
+
+
+STRATEGIES: dict[str, ShippingStrategy] = {
+    "standard": standard,
+    "express": express,
+}
+
+
+def shipping_cost(order: Order, strategy: ShippingStrategy) -> float:
+    return strategy(order)
+
+
+shipping_cost(Order(3, 400), STRATEGIES["express"])
+```
+
+</CodeTabs>
+
+<Callout type="idea" title="El patrón no es la clase, es la decisión">
+
+Peter Norvig mostró en 1996 que muchos patrones del GoF se vuelven "invisibles" o mucho más simples en lenguajes dinámicos con funciones de primera clase. Strategy es el ejemplo perfecto: el diccionario `STRATEGIES` de Python **es** el patrón. Lo que importa no es crear una jerarquía, sino que el código que usa el algoritmo no dependa de cuál es.
+
+</Callout>
+
+### Dónde lo ves en la vida real
+
+- **`Array.prototype.sort(compareFn)`** en JavaScript y **`Comparator`** en Java: el algoritmo de ordenamiento es fijo; la comparación es una estrategia que tú pasas.
+- **Passport.js**: cada mecanismo de autenticación (local, OAuth con Google, JWT) es una *strategy* que registras con `passport.use(...)`. El nombre del paquete lo dice todo.
+- Algoritmos de compresión, de reintento (backoff fijo vs exponencial, ver [resiliencia](/patrones/patrones-resiliencia)), de cálculo de impuestos por país, de ruteo de pagos según el proveedor.
+
+### Cuándo NO usarlo
+
+- **Dos variantes que nunca cambian.** Un ternario se lee mejor que tres archivos. Aplica el patrón cuando aparezca la tercera opción, no antes.
+- **Cuando las variantes necesitan datos muy distintos.** Si `ExpressShipping` necesita la ventana horaria y `InternationalShipping` necesita aduana y peso volumétrico, la interfaz común empieza a recibir parámetros que la mitad de las estrategias ignora. Es señal de que no son la misma familia.
+- **Cuando el cliente igual tiene que conocer todas las estrategias** para elegir entre ellas. Eso no está mal (alguien tiene que elegir), pero centraliza esa elección en un solo lugar: una fábrica o la configuración de [inyección de dependencias](/patrones/patrones-aplicacion).
+
+**Relacionados:** State (misma estructura, otra intención; lo vemos al final), Template Method (varía pasos usando herencia en vez de composición, en [Comportamiento II](/patrones/comportamiento-2)), Decorator (agrega comportamiento en vez de reemplazarlo, en [estructurales](/patrones/estructurales)).
+
+## Observer: avisar sin conocer al que escucha
+
+**Intención.** Definir una dependencia uno-a-muchos entre objetos, de modo que cuando uno cambia de estado, todos los que dependen de él se enteren y reaccionen automáticamente.
+
+### El problema
+
+Cuando se paga un pedido pasan muchas cosas: se manda el recibo por correo, un SMS, se registra el evento en analítica, se reserva el inventario. La versión ingenua las llama todas desde el servicio de pedidos:
+
+```ts title="order-service.ts (antes)"
+class OrderService {
+  constructor(
+    private payments: PaymentGateway,
+    private mailer: Mailer,
+    private sms: SmsGateway,
+    private analytics: Analytics,
+    private inventory: InventoryService,
+  ) {}
+
+  pay(order: Order) {
+    this.payments.charge(order)
+    this.mailer.sendReceipt(order)
+    this.sms.send(order.phone, 'Pago confirmado')
+    this.analytics.track('order_paid', order)
+    this.inventory.reserve(order.items)
+    // marketing quiere sumar un cupón de recompra... otra línea, otra dependencia
+  }
+}
+```
+
+`OrderService` conoce a cuatro módulos que no tienen nada que ver con cobrar. Cada reacción nueva lo obliga a cambiar, y para probar el pago tienes que simular el correo, el SMS y la analítica. Es *Divergent Change* de libro: un módulo que cambia por razones ajenas a él.
+
+### La solución
+
+El **sujeto** mantiene una lista de **observadores** que cumplen una interfaz mínima (`update(evento)`). Ofrece `subscribe` y `unsubscribe`, y cuando algo pasa, recorre la lista y avisa. El sujeto ya no sabe quién escucha ni qué hace cada uno.
+
+<ObserverLive />
+
+<UmlDiagram
+  caption="Observer: el sujeto conoce solo la interfaz Observer, nunca las clases concretas."
+  classes={[
+    { id: 'subj', name: 'OrderEvents', fields: ['observers: Observer[]'], methods: ['subscribe(o)', 'unsubscribe(o)', 'notify(event)'], x: 0, y: 0, w: 1.15, tone: 'line', desc: 'El sujeto (publisher). Guarda la lista y la recorre en notify(). No importa ninguna clase concreta de observador.' },
+    { id: 'obs', name: 'Observer', kind: 'interface', methods: ['update(event)'], x: 1.5, y: 0, desc: 'La interfaz mínima. En JavaScript suele ser simplemente una función callback.' },
+    { id: 'e', name: 'EmailNotifier', methods: ['update(event)'], x: 0.5, y: 1.3, desc: 'Un observador concreto: decide qué hacer con el evento.' },
+    { id: 'a', name: 'AnalyticsTracker', methods: ['update(event)'], x: 1.5, y: 1.3, desc: 'Otro observador. Se puede agregar o quitar en tiempo de ejecución.' },
+    { id: 'i', name: 'InventoryService', methods: ['update(event)'], x: 2.5, y: 1.3, desc: 'Ojo: si reservar stock debe ser atómico con el pago, quizá no debería ser un observador.' },
+  ]}
+  relations={[
+    { from: 'subj', to: 'obs', kind: 'aggregates', label: '0..*' },
+    { from: 'e', to: 'obs', kind: 'implements' },
+    { from: 'a', to: 'obs', kind: 'implements' },
+    { from: 'i', to: 'obs', kind: 'implements' },
+  ]}
+/>
+
+En la práctica moderna, `subscribe` **devuelve la función para desuscribirse**. Es un detalle pequeño que evita el error más común del patrón, como viste en el widget con el badge del carrito.
+
+<CodeTabs>
+
+```ts title="TypeScript"
+type OrderEvent =
+  | { type: 'OrderPaid'; orderId: string; total: number }
+  | { type: 'OrderShipped'; orderId: string; trackingCode: string }
+
+type Listener = (event: OrderEvent) => void
+
+class OrderEvents {
+  private listeners = new Set<Listener>()
+
+  subscribe(fn: Listener): () => void {
+    this.listeners.add(fn)
+    return () => this.listeners.delete(fn) // el "unsubscribe" viaja con la suscripción
+  }
+
+  publish(event: OrderEvent) {
+    // copiamos la lista: un observador podría desuscribirse mientras iteramos
+    for (const fn of [...this.listeners]) {
+      try {
+        fn(event)
+      } catch (err) {
+        console.error('Un observador falló; los demás siguen', err)
+      }
+    }
+  }
+}
+
+const events = new OrderEvents()
+const stopEmail = events.subscribe((e) => {
+  if (e.type === 'OrderPaid') mailer.sendReceipt(e.orderId)
+})
+events.subscribe((e) => analytics.track(e.type, e))
+
+events.publish({ type: 'OrderPaid', orderId: 'ord_42', total: 120 })
+stopEmail()
+```
+
+```python title="Python"
+from collections.abc import Callable
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class OrderPaid:
+    order_id: str
+    total: float
+
+
+Listener = Callable[[OrderPaid], None]
+
+
+class OrderEvents:
+    def __init__(self) -> None:
+        self._listeners: list[Listener] = []
+
+    def subscribe(self, fn: Listener) -> Callable[[], None]:
+        self._listeners.append(fn)
+        return lambda: self._listeners.remove(fn)
+
+    def publish(self, event: OrderPaid) -> None:
+        for fn in list(self._listeners):  # copia defensiva
+            fn(event)
+
+
+events = OrderEvents()
+unsubscribe = events.subscribe(lambda e: print(f"Recibo para {e.order_id}"))
+events.publish(OrderPaid("ord_42", 120.0))
+unsubscribe()
+# Si los observadores son métodos de objetos de vida corta,
+# considera weakref.WeakMethod para no mantenerlos vivos.
+```
+
+</CodeTabs>
+
+### Dónde lo ves en la vida real
+
+- **El DOM**: `addEventListener` / `removeEventListener`. Cada botón es un sujeto.
+- **Node.js `EventEmitter`**: `on`, `off`, `emit`. Su documentación aclara que `emit()` llama a los listeners **de forma síncrona y en el orden en que se registraron**, y que si un mismo evento supera 10 listeners imprime un aviso de "possible EventEmitter memory leak". Ese aviso existe justamente por el problema del badge huérfano.
+- **RxJS**: un `Observable` generaliza Observer con operadores (map, filter, debounce) y devuelve una `Subscription` con su `unsubscribe()`.
+- **React**: el `return` de un `useEffect` es el lugar canónico para desuscribirte. Las librerías de estado (Redux, Zustand, MobX, la reactividad de Vue) son Observer por dentro.
+
+### Los problemas que trae
+
+<ProsCons
+  pros={['El sujeto no depende de los observadores: agregas reacciones sin tocarlo', 'Suscripciones dinámicas en tiempo de ejecución', 'Cada observador se prueba por separado']}
+  cons={['Lapsed listener: un observador que nadie desuscribe queda vivo (fuga de memoria y handlers duplicados)', 'El flujo de control se vuelve implícito: leer pay() ya no te dice qué pasa después', 'Síncrono por defecto: un observador lento frena al sujeto, y una excepción puede cortar el recorrido', 'Orden de notificación frágil y riesgo de cascadas (un observador publica otro evento que dispara al primero)']}
+/>
+
+### Observer vs Publish/Subscribe
+
+Se usan como sinónimos, pero en una entrevista conviene distinguirlos:
+
+<Compare>
+<Option title="Observer (GoF)" verdict="Dentro de un proceso">
+
+El sujeto **tiene la lista** de observadores y los llama directamente. Se conocen a través de una interfaz. Normalmente síncrono, en memoria. Si el proceso muere, los eventos en vuelo se pierden.
+
+</Option>
+<Option title="Publish/Subscribe" verdict="Entre procesos o servicios">
+
+Hay un **intermediario** (broker, *topic*, bus) entre ambos. El publicador no sabe ni cuántos suscriptores hay. Suele ser asíncrono y puede persistir mensajes: Kafka, SNS/SQS, Redis Pub/Sub, Google Pub/Sub.
+
+</Option>
+</Compare>
+
+La versión distribuida, con sus problemas de entrega, orden e idempotencia, está en [arquitectura dirigida por eventos](/arquitectura/event-driven).
+
+### Cuándo NO usarlo
+
+- **Cuando la reacción es parte de la misma transacción.** Si el pago no puede quedar confirmado sin reservar stock, reservar stock no es "una reacción": es parte del caso de uso. Llámalo explícitamente.
+- **Cuando hay exactamente un interesado y siempre lo habrá.** Una llamada directa es más fácil de leer y de depurar.
+- **Cuando necesitas garantías de entrega.** Un Observer en memoria no reintenta. Para eso usa una cola o el patrón *outbox* ([sagas y outbox](/arquitectura/sagas-y-outbox)).
+
+**Relacionados:** Mediator (centraliza la comunicación en vez de difundirla), Command (los eventos suelen viajar como objetos), Pub/Sub y event sourcing en la línea de arquitectura.
+
+<Quiz
+  question="Un componente de React se suscribe a un store en un useEffect, pero no devuelve función de limpieza. El usuario entra y sale de esa pantalla cinco veces. ¿Qué pasa al publicar un evento?"
+  options={[
+    { text: 'Nada raro: React desuscribe automáticamente al desmontar.', why: 'React limpia lo que el efecto declara en su return. Si no hay return, la suscripción queda en la lista del store.' },
+    { text: 'El callback corre cinco veces, sobre componentes ya desmontados: fuga de memoria y efectos duplicados.', correct: true, why: 'Es el lapsed listener problem. El sujeto sigue referenciando a los observadores, así que el recolector de basura no los libera y cada uno reacciona. Se corrige devolviendo el unsubscribe desde el efecto.' },
+    { text: 'El store lanza un error porque el componente ya no existe.', why: 'El store no sabe nada del ciclo de vida del componente: solo tiene funciones en una lista y las llama.' },
+  ]}
+/>
+
+## Command: la acción convertida en objeto
+
+**Intención.** Encapsular una petición como un objeto, para poder parametrizar clientes con distintas peticiones, encolarlas, registrarlas y soportar deshacer.
+
+### El problema
+
+Un editor de texto tiene botones, atajos de teclado y un menú que hacen lo mismo. La lógica vive dentro de cada `onClick`. Ahora piden **deshacer**. Con la lógica dispersa en callbacks no hay nada que deshacer: la acción ocurrió y no quedó registro de qué fue ni de cómo revertirla. Tampoco puedes encolarla, reintentarla ni mandarla por la red.
+
+### La solución
+
+Cada acción se vuelve un objeto con `execute()` y, si hace falta, `undo()`. Aparecen cuatro roles:
+
+- **Command**: la interfaz (`execute`, `undo`).
+- **Comando concreto**: guarda los parámetros y lo necesario para deshacer (`InsertText` guarda el texto insertado).
+- **Receiver**: el objeto que realmente hace el trabajo (el documento).
+- **Invoker**: quien dispara los comandos sin saber qué hacen (el historial, el botón, la cola).
+
+<CommandUndo />
+
+<UmlDiagram
+  caption="Command: el invocador maneja comandos abstractos; cada comando concreto sabe operar sobre su receptor."
+  classes={[
+    { id: 'inv', name: 'History', fields: ['done: Command[]', 'undone: Command[]'], methods: ['run(cmd)', 'undo()', 'redo()'], x: 0, y: 0, tone: 'line', desc: 'El invocador. Apila comandos y llama execute/undo. No sabe si el comando inserta texto o cambia mayúsculas.' },
+    { id: 'cmd', name: 'Command', kind: 'interface', methods: ['execute()', 'undo()'], x: 1.4, y: 0, desc: 'La interfaz común. Puede incluir label para mostrar en la UI o serializar.' },
+    { id: 'ins', name: 'InsertText', fields: ['chunk: string'], methods: ['execute()', 'undo()'], x: 0.9, y: 1.35, desc: 'Comando concreto: guarda el texto para poder quitarlo al deshacer.' },
+    { id: 'up', name: 'UpperCase', fields: ['previous: string'], methods: ['execute()', 'undo()'], x: 1.9, y: 1.35, desc: 'Pasar a mayúsculas no es invertible, así que guarda el texto anterior. Cada comando decide cuánto estado necesita.' },
+    { id: 'doc', name: 'TextDocument', fields: ['text: string'], x: 1.4, y: 2.45, desc: 'El receptor: hace el trabajo real. No sabe nada de historial.' },
+  ]}
+  relations={[
+    { from: 'inv', to: 'cmd', kind: 'aggregates' },
+    { from: 'ins', to: 'cmd', kind: 'implements' },
+    { from: 'up', to: 'cmd', kind: 'implements' },
+    { from: 'ins', to: 'doc', kind: 'uses' },
+    { from: 'up', to: 'doc', kind: 'uses' },
+  ]}
+/>
+
+<CodeTabs>
+
+```ts title="TypeScript"
+interface Command {
+  readonly label: string
+  execute(): void
+  undo(): void
+}
+
+class TextDocument {
+  text = ''
+}
+
+class InsertText implements Command {
+  readonly label: string
+  constructor(private doc: TextDocument, private chunk: string) {
+    this.label = `Insertar "${chunk}"`
+  }
+  execute() {
+    this.doc.text += this.chunk
+  }
+  undo() {
+    this.doc.text = this.doc.text.slice(0, this.doc.text.length - this.chunk.length)
+  }
+}
+
+class UpperCase implements Command {
+  readonly label = 'Mayúsculas'
+  private previous = ''
+  constructor(private doc: TextDocument) {}
+  execute() {
+    this.previous = this.doc.text // no es invertible: guardamos lo necesario
+    this.doc.text = this.doc.text.toUpperCase()
+  }
+  undo() {
+    this.doc.text = this.previous
+  }
+}
+
+class History {
+  private done: Command[] = []
+  private undone: Command[] = []
+
+  run(cmd: Command) {
+    cmd.execute()
+    this.done.push(cmd)
+    this.undone = [] // una acción nueva invalida el "rehacer"
+  }
+
+  undo() {
+    const cmd = this.done.pop()
+    if (!cmd) return
+    cmd.undo()
+    this.undone.push(cmd)
+  }
+
+  redo() {
+    const cmd = this.undone.pop()
+    if (!cmd) return
+    cmd.execute()
+    this.done.push(cmd)
+  }
+}
+
+const doc = new TextDocument()
+const history = new History()
+history.run(new InsertText(doc, 'Envío gratis '))
+history.run(new UpperCase(doc))
+history.undo() // "Envío gratis "
+```
+
+```python title="Python"
+from dataclasses import dataclass, field
+from typing import Protocol
+
+
+class Command(Protocol):
+    def execute(self) -> None: ...
+    def undo(self) -> None: ...
+
+
+@dataclass
+class TextDocument:
+    text: str = ""
+
+
+@dataclass
+class InsertText:
+    doc: TextDocument
+    chunk: str
+
+    def execute(self) -> None:
+        self.doc.text += self.chunk
+
+    def undo(self) -> None:
+        self.doc.text = self.doc.text[: len(self.doc.text) - len(self.chunk)]
+
+
+@dataclass
+class UpperCase:
+    doc: TextDocument
+    previous: str = ""
+
+    def execute(self) -> None:
+        self.previous = self.doc.text
+        self.doc.text = self.doc.text.upper()
+
+    def undo(self) -> None:
+        self.doc.text = self.previous
+
+
+@dataclass
+class History:
+    done: list[Command] = field(default_factory=list)
+    undone: list[Command] = field(default_factory=list)
+
+    def run(self, cmd: Command) -> None:
+        cmd.execute()
+        self.done.append(cmd)
+        self.undone.clear()
+
+    def undo(self) -> None:
+        if self.done:
+            cmd = self.done.pop()
+            cmd.undo()
+            self.undone.append(cmd)
+```
+
+</CodeTabs>
+
+Fíjate en las dos formas de deshacer que conviven en el ejemplo. `InsertText` aplica la **operación inversa** (quitar lo que agregó): barato en memoria, pero exige que exista un inverso exacto. `UpperCase` guarda una **foto del estado previo**: siempre funciona, pero cuesta memoria. Cuando la foto es de todo el objeto, estás usando [Memento](/patrones/comportamiento-2), y los dos patrones se combinan seguido.
+
+### Dónde lo ves en la vida real
+
+- **Redux**: una *action* (`{ type: 'cart/itemAdded', payload }`) es un comando serializado; el reducer es el receptor. Como las acciones son datos, las puedes registrar, reproducir y depurar con "viaje en el tiempo".
+- **Colas de trabajos** (BullMQ, Sidekiq, Celery): un *job* es un comando que se serializa, se encola y lo ejecuta otro proceso más tarde, con reintentos.
+- **Editores** (VS Code, Figma, Photoshop): el historial de deshacer es una pila de comandos. Los comandos compuestos (*macro command*) agrupan varios en uno, lo que es [Composite](/patrones/estructurales) aplicado a comandos.
+- **CQRS**: el lado de escritura recibe *commands* explícitos (`PlaceOrder`, `CancelOrder`) en vez de "guardar este objeto".
+
+### Cuándo NO usarlo
+
+- **Si solo necesitas un callback.** En JavaScript o Python, pasar una función ya es parametrizar con una acción. No crees una clase por cada `onClick` si no vas a deshacer, encolar ni registrar nada.
+- **Si el undo no es realista.** Mandar un correo o cobrar una tarjeta no se deshace con `undo()`; se compensa con otra acción de negocio (reembolso, correo de corrección). Fingir un `undo()` ahí es mentirle al resto del código.
+
+**Relacionados:** Memento (deshacer por foto), Composite (macro comandos), Chain of Responsibility (los comandos pueden viajar por una cadena de manejadores), Strategy (ambos encapsulan comportamiento, pero un comando representa *una petición concreta con sus parámetros*, y una estrategia, *una forma de hacer algo*).
+
+## State: cuando el comportamiento depende del estado
+
+**Intención.** Permitir que un objeto altere su comportamiento cuando cambia su estado interno; el objeto parecerá haber cambiado de clase.
+
+### El problema
+
+Un pedido pasa por *pendiente → pagado → enviado → entregado*, y puede cancelarse o devolverse. La implementación típica guarda un `status` y llena cada método de condiciones:
+
+```ts title="order.ts (antes)"
+class Order {
+  status: 'pending' | 'paid' | 'shipped' | 'delivered' | 'cancelled' = 'pending'
+
+  ship() {
+    if (this.status === 'pending') throw new Error('Primero hay que pagar')
+    if (this.status === 'shipped' || this.status === 'delivered') throw new Error('Ya fue enviado')
+    if (this.status === 'cancelled') throw new Error('Pedido cancelado')
+    this.status = 'shipped'
+  }
+
+  cancel() {
+    if (this.status === 'shipped' || this.status === 'delivered') throw new Error('Demasiado tarde')
+    if (this.status === 'paid') this.refund() // ¿y si alguien olvida esta línea en otro método?
+    this.status = 'cancelled'
+  }
+  // pay(), deliver(), returnItems()... cada uno con su propia cascada de ifs
+}
+```
+
+Las reglas de transición están **repartidas en todos los métodos**. Para saber qué se puede hacer con un pedido pagado tienes que leer la clase entera. Agregar un estado (por ejemplo, *en preparación*) te obliga a revisar cada `if`. Y las transiciones ilegales se cuelan cuando a alguien se le olvida una condición.
+
+### La solución
+
+Cada estado se vuelve una clase que implementa los mismos métodos. El pedido (el contexto) delega en su estado actual, y **cada estado decide** si la acción es válida y cuál es el siguiente estado.
+
+<StateMachine />
+
+<UmlDiagram
+  caption="State: el contexto delega en el estado actual, y los estados conocen a sus sucesores."
+  classes={[
+    { id: 'o', name: 'Order', fields: ['state: OrderState'], methods: ['pay()', 'ship()', 'cancel()'], x: 0, y: 0, tone: 'line', desc: 'El contexto. Cada método es una línea: this.state.ship(this). No hay ningún if sobre el estado.' },
+    { id: 's', name: 'OrderState', kind: 'interface', methods: ['pay(order)', 'ship(order)', 'cancel(order)'], x: 1.45, y: 0, desc: 'Todos los estados responden a todas las acciones; las inválidas lanzan InvalidTransition (una clase base puede dar ese comportamiento por defecto).' },
+    { id: 'p', name: 'Pending', methods: ['pay(order)', 'cancel(order)'], x: 0.3, y: 1.4, desc: 'Sabe que pagar lleva a Paid y cancelar lleva a Cancelled.' },
+    { id: 'pd', name: 'Paid', methods: ['ship(order)', 'cancel(order)'], x: 1.45, y: 1.4, desc: 'Cancelar desde aquí implica reembolsar: la regla vive en un solo lugar.' },
+    { id: 'sh', name: 'Shipped', methods: ['deliver(order)'], x: 2.6, y: 1.4, desc: 'Ya no acepta cancel(): esa transición simplemente no existe en esta clase.' },
+  ]}
+  relations={[
+    { from: 'o', to: 's', kind: 'composes' },
+    { from: 'p', to: 's', kind: 'implements' },
+    { from: 'pd', to: 's', kind: 'implements' },
+    { from: 'sh', to: 's', kind: 'implements' },
+    { from: 'p', to: 'pd', kind: 'depends', label: 'pay' },
+    { from: 'pd', to: 'sh', kind: 'depends', label: 'ship' },
+  ]}
+/>
+
+En Java, las interfaces *sealed* con *records* (Java 17+) hacen que el compilador conozca la lista cerrada de estados. En esta variante cada estado **devuelve** el siguiente en vez de llamar a `setState`, lo que deja la asignación en manos del contexto.
+
+<CodeTabs>
+
+```ts title="TypeScript"
+class InvalidTransition extends Error {}
+
+interface OrderState {
+  readonly name: string
+  pay(order: Order): void
+  ship(order: Order): void
+  cancel(order: Order): void
+}
+
+// Por defecto, todo es inválido; cada estado sobrescribe lo que permite.
+abstract class BaseState implements OrderState {
+  abstract readonly name: string
+  pay(_o: Order): void {
+    throw new InvalidTransition(`No se puede pagar un pedido ${this.name}`)
+  }
+  ship(_o: Order): void {
+    throw new InvalidTransition(`No se puede enviar un pedido ${this.name}`)
+  }
+  cancel(_o: Order): void {
+    throw new InvalidTransition(`No se puede cancelar un pedido ${this.name}`)
+  }
+}
+
+class Pending extends BaseState {
+  readonly name = 'pendiente'
+  pay(o: Order) { o.setState(new Paid()) }
+  cancel(o: Order) { o.setState(new Cancelled()) }
+}
+
+class Paid extends BaseState {
+  readonly name = 'pagado'
+  ship(o: Order) { o.setState(new Shipped()) }
+  cancel(o: Order) {
+    o.refund() // la regla "cancelar pagado = reembolsar" vive solo aquí
+    o.setState(new Refunded())
+  }
+}
+
+class Shipped extends BaseState { readonly name = 'enviado' } // deliver() omitido
+class Cancelled extends BaseState { readonly name = 'cancelado' }
+class Refunded extends BaseState { readonly name = 'reembolsado' }
+
+class Order {
+  private state: OrderState = new Pending()
+  setState(s: OrderState) { this.state = s }
+  refund() { /* llama al proveedor de pagos */ }
+
+  pay() { this.state.pay(this) }
+  ship() { this.state.ship(this) }
+  cancel() { this.state.cancel(this) }
+  get status() { return this.state.name }
+}
+```
+
+```java title="Java"
+class InvalidTransition extends RuntimeException {
+    InvalidTransition(String action, OrderState state) {
+        super("No se puede " + action + " en estado " + state);
+    }
+}
+
+sealed interface OrderState permits Pending, Paid, Shipped, Cancelled, Refunded {
+    default OrderState pay(Order o)    { throw new InvalidTransition("pagar", this); }
+    default OrderState ship(Order o)   { throw new InvalidTransition("enviar", this); }
+    default OrderState cancel(Order o) { throw new InvalidTransition("cancelar", this); }
+}
+
+record Pending() implements OrderState {
+    public OrderState pay(Order o)    { return new Paid(); }
+    public OrderState cancel(Order o) { return new Cancelled(); }
+}
+
+record Paid() implements OrderState {
+    public OrderState ship(Order o)   { return new Shipped(); }
+    public OrderState cancel(Order o) { o.refund(); return new Refunded(); }
+}
+
+record Shipped() implements OrderState {}
+record Cancelled() implements OrderState {}
+record Refunded() implements OrderState {}
+
+final class Order {
+    private OrderState state = new Pending();
+
+    public void pay()    { state = state.pay(this); }
+    public void ship()   { state = state.ship(this); }
+    public void cancel() { state = state.cancel(this); }
+
+    void refund() { /* proveedor de pagos */ }
+}
+```
+
+</CodeTabs>
+
+### La alternativa ligera: una tabla de transiciones
+
+No toda máquina de estados merece una clase por estado. Si los estados **no tienen comportamiento propio** más allá de decidir a dónde se puede ir, una tabla es más corta, se puede validar en un solo lugar y hasta se puede dibujar automáticamente:
+
+```ts title="order-transitions.ts"
+const transitions = {
+  pending: { pay: 'paid', cancel: 'cancelled' },
+  paid: { ship: 'shipped', cancel: 'refunded' },
+  shipped: { deliver: 'delivered' },
+  delivered: { refund: 'refunded' },
+  cancelled: {},
+  refunded: {},
+} as const
+
+type Status = keyof typeof transitions
+
+function next(status: Status, action: string): Status {
+  const to = (transitions[status] as Record<string, Status>)[action]
+  if (!to) throw new Error(`Transición inválida: ${action} desde ${status}`)
+  return to
+}
+```
+
+La regla práctica: **tabla** cuando el estado decide solo *a dónde ir*; **patrón State** cuando el estado decide *cómo se comporta* el objeto (calcular, validar, mostrar cosas distintas). Para flujos con estados anidados, paralelos o temporizados, usa *statecharts* (David Harel, 1987) con una librería como **XState**, que además visualiza la máquina.
+
+### Dónde lo ves en la vida real
+
+- El ejemplo original del GoF es una **conexión TCP**: `TCPEstablished`, `TCPListen`, `TCPClosed` responden distinto a `open()`, `close()` y `acknowledge()`.
+- Flujos de pedidos, pagos (autorizado, capturado, reembolsado), suscripciones (prueba, activa, morosa, cancelada), tickets de soporte.
+- En UI: un formulario *idle → enviando → éxito / error*, un reproductor *detenido → reproduciendo → pausado*. XState nació justamente para esto.
+- En [DDD táctico](/arquitectura/ddd-tactico), los agregados con ciclo de vida protegen sus invariantes exactamente así.
+
+### Cuándo NO usarlo
+
+- **Dos o tres estados con poco comportamiento distinto.** Un enum y un par de guardas son más legibles que cinco clases.
+- **Muchos estados y pocas diferencias**: terminas con veinte clases casi vacías. Ahí gana la tabla o un statechart.
+- **Cuando el estado se persiste y se consulta desde fuera** (reportes, SQL): igual necesitas una columna `status`. El patrón organiza el comportamiento en memoria; no reemplaza el dato.
+
+**Relacionados:** Strategy (ver abajo), Flyweight (los estados sin datos pueden ser instancias compartidas, como los `record` vacíos de Java), Memento (para guardar y restaurar el estado completo).
+
+## Strategy vs State: la pregunta de entrevista
+
+Si dibujas los dos diagramas de clases, son casi iguales: un contexto que compone una interfaz con varias implementaciones. La diferencia está en la **intención** y en **quién decide el cambio**.
+
+<Compare>
+<Option title="Strategy" verdict="El cliente elige cómo">
+
+- **Quién la cambia:** el cliente, desde afuera (el usuario elige "express").
+- **Se conocen entre sí:** no. Cada estrategia es independiente y no sabe que existen las demás.
+- **Frecuencia:** suele fijarse una vez por operación.
+- **Pregunta que responde:** *¿cómo* hago esta tarea?
+
+</Option>
+<Option title="State" verdict="El objeto cambia solo">
+
+- **Quién lo cambia:** el propio estado, desde adentro, como consecuencia de una acción (pagar lleva a *pagado*).
+- **Se conocen entre sí:** sí. Cada estado sabe cuáles son sus sucesores.
+- **Frecuencia:** cambia a lo largo de la vida del objeto.
+- **Pregunta que responde:** *¿qué puedo hacer ahora* y qué pasa después?
+
+</Option>
+</Compare>
+
+<Callout type="interview" title="Una respuesta en 20 segundos">
+
+"Tienen la misma estructura, pero distinta intención. En Strategy, el cliente elige un algoritmo intercambiable y las estrategias no se conocen entre sí. En State, el objeto cambia su comportamiento según su estado interno, y son los propios estados los que provocan las transiciones. Si quien cambia la implementación es el código de afuera, es Strategy; si es el objeto como consecuencia de sus propias acciones, es State."
+
+</Callout>
+
+<Quiz
+  question="Un reproductor de música tiene modos de orden de reproducción: secuencial, aleatorio y repetir una. El usuario los elige con un botón y no cambian solos. ¿Qué patrón describe mejor esto?"
+  options={[
+    { text: 'State, porque el reproductor cambia de comportamiento según el modo.', why: 'Casi: el comportamiento cambia, pero no por una transición interna. Nadie pasa de aleatorio a secuencial como consecuencia de reproducir una canción.' },
+    { text: 'Strategy, porque el usuario elige desde afuera cómo se calcula la siguiente canción, y los modos no se conocen entre sí.', correct: true, why: 'Es una familia de algoritmos intercambiables (elegir la siguiente pista) seleccionada por el cliente. En cambio, reproduciendo / pausado / detenido sí sería State: play() y pause() provocan las transiciones.' },
+    { text: 'Command, porque cada modo se activa con un botón.', why: 'El botón puede disparar un comando, pero lo que el comando instala es una estrategia. El patrón que modela los modos es Strategy.' },
+  ]}
+/>
+
+## Elegir entre los cuatro
+
+Los cuatro sacan lógica de un `if` y la meten en un objeto reemplazable. Lo que cambia es qué tipo de lógica:
+
+| Si lo que varía es… | Síntoma en el código | Patrón |
+| --- | --- | --- |
+| El **algoritmo** para hacer una tarea | `switch (method)` que crece con cada opción | Strategy |
+| **Quién se entera** cuando algo pasa | Un servicio que llama a cinco módulos ajenos | Observer |
+| La **acción** misma, que hay que guardar, encolar o deshacer | Lógica dentro de callbacks; piden "deshacer" o "reintentar" | Command |
+| El **comportamiento según la etapa** del ciclo de vida | `if (status === ...)` repetido en cada método | State |
+
+Y una advertencia que vale para todos: estos patrones **cambian legibilidad local por flexibilidad**. Antes, todo estaba en una función que leías de arriba abajo; después, está repartido en varias clases conectadas por una interfaz. Ese trade-off conviene cuando la variación es real y frecuente. Si no, es *speculative generality*, uno de los [antipatrones](/patrones/antipatrones) más caros.
+
+<Quiz
+  question="En el editor del widget, ¿por qué el comando UpperCase guarda el texto completo anterior, mientras que InsertText no lo necesita?"
+  options={[
+    { text: 'Porque UpperCase es más importante y conviene tener respaldo.', why: 'La importancia no tiene que ver. La diferencia está en si la operación tiene un inverso exacto.' },
+    { text: 'Porque pasar a mayúsculas no es invertible: de "ENVÍO" no puedes saber si era "Envío" o "envío". Insertar sí tiene inverso exacto: quitar los mismos caracteres.', correct: true, why: 'Cada comando guarda lo mínimo para revertirse. Si existe un inverso exacto, alcanza con los parámetros; si no, hay que guardar una foto del estado previo, que es la idea de Memento.' },
+    { text: 'Porque el historial (invocador) no puede deshacer comandos sin estado.', why: 'El invocador no sabe cómo se deshace cada comando: solo llama undo(). Es el comando quien decide qué guardar.' },
+  ]}
+/>
+
+<Takeaways>
+
+- Los cuatro patrones aplican la misma idea: **encapsular lo que varía** en un objeto reemplazable, en vez de un `if` que crece.
+- **Strategy**: algoritmos intercambiables elegidos por el cliente. En TypeScript y Python, muchas veces basta con pasar una función.
+- **Observer**: el sujeto avisa a una lista sin conocer a nadie. Devuelve siempre el `unsubscribe` y cuidado con los listeners huérfanos, el flujo implícito y las excepciones.
+- **Observer no es Pub/Sub**: Observer vive en un proceso y el sujeto tiene la lista; Pub/Sub pone un broker en medio y cruza procesos.
+- **Command**: una petición como objeto para deshacer, encolar, registrar o reintentar. Redux y las colas de jobs son Command con otro nombre.
+- **State**: cada estado es una clase que decide qué acciones son válidas y a dónde se va. Si los estados no tienen comportamiento propio, una tabla de transiciones es más simple.
+- **Strategy vs State**: misma estructura, distinta intención. Afuera elige (Strategy) o el objeto transiciona solo (State).
+
+</Takeaways>
+
+## Fuentes y lecturas
+
+- Gamma, Helm, Johnson y Vlissides, [*Design Patterns: Elements of Reusable Object-Oriented Software*](https://www.oreilly.com/library/view/design-patterns-elements/0201633612/) (Addison-Wesley, 1994). Capítulo 5: Strategy, Observer, Command y State (con el ejemplo de la conexión TCP).
+- Eric Freeman y Elisabeth Robson, [*Head First Design Patterns*, 2.ª edición](https://www.oreilly.com/library/view/head-first-design/9781492077992/) (O'Reilly, 2020). Capítulos 1 (Strategy), 2 (Observer), 6 (Command) y 10 (State).
+- Refactoring.Guru: [Strategy](https://refactoring.guru/design-patterns/strategy), [Observer](https://refactoring.guru/design-patterns/observer), [Command](https://refactoring.guru/design-patterns/command), [State](https://refactoring.guru/design-patterns/state).
+- Martin Fowler, [Replace Conditional with Polymorphism](https://refactoring.com/catalog/replaceConditionalWithPolymorphism.html), del catálogo de *Refactoring* (2.ª ed.).
+- Peter Norvig, [Design Patterns in Dynamic Languages](https://norvig.com/design-patterns/) (1996): por qué varios patrones se simplifican con funciones de primera clase.
+- Node.js, [documentación de `events`](https://nodejs.org/api/events.html): orden síncrono de los listeners y aviso de `MaxListenersExceededWarning`.
+- [RxJS: Overview](https://rxjs.dev/guide/overview) y MDN, [EventTarget.addEventListener()](https://developer.mozilla.org/en-US/docs/Web/API/EventTarget/addEventListener).
+- Passport.js, [Strategies](https://www.passportjs.org/concepts/authentication/strategies/).
+- [Documentación de XState / Stately](https://stately.ai/docs) y David Harel, [Statecharts: A visual formalism for complex systems](https://www.sciencedirect.com/science/article/pii/0167642387900359) (1987).

@@ -1,0 +1,290 @@
+import { InterviewPlanner } from '../../components/widgets/system-design/InterviewPlanner'
+import { RequirementSorter } from '../../components/widgets/system-design/RequirementSorter'
+
+Una entrevista de system design no es un examen con una respuesta correcta. Es una conversación de 45 minutos en la que el entrevistador intenta adivinar cómo trabajarías tú frente a un problema ambiguo y grande: si haces las preguntas correctas, si llegas a algo que funciona, si sabes dónde se va a romper y si puedes defender tus decisiones con números y trade-offs.
+
+El error más común no es técnico. Es de **gestión del tiempo**: candidatos que saben qué es Kafka y cómo funciona un *consistent hashing* pero gastan 20 minutos en requisitos, se pierden en un detalle y terminan sin un diseño completo. Por eso conviene llegar con un marco ensayado. No para recitarlo, sino para que tu cabeza quede libre para el problema.
+
+Este tema te da ese marco, te muestra cómo cambia según el nivel al que postulas y lo aplica a un ejemplo pequeño de punta a punta. El resto de la unidad (estimaciones, caché, bases de datos, colas, consistencia) son las piezas que vas a usar dentro del marco.
+
+## Qué evalúa realmente el entrevistador
+
+Las empresas usan rúbricas con nombres distintos, pero casi todas miden cuatro cosas<Sidenote>Hello Interview las agrupa como *problem navigation*, *solution design*, *technical excellence* y *communication and collaboration*. Las rúbricas internas de las grandes tecnológicas usan otras palabras para lo mismo.</Sidenote>:
+
+1. **Navegar el problema.** ¿Conviertes un enunciado vago («diseña Instagram») en un problema acotado? ¿Identificas qué es lo difícil y lo atacas primero?
+2. **Diseñar la solución.** ¿Llegas a una arquitectura que cumple los requisitos, con componentes que tienen sentido y sin piezas de adorno?
+3. **Excelencia técnica.** ¿Conoces de verdad las piezas que usas? ¿Sabes cuándo una base relacional basta, qué cuesta una réplica, por qué un caché puede servir datos viejos?
+4. **Comunicación y colaboración.** ¿Piensas en voz alta, escuchas las pistas, incorporas lo que te dicen, explicas trade-offs sin ponerte a la defensiva?
+
+Lo que cambia con el nivel no es la lista, sino **cuánto lideras tú y qué tan profundo vas**:
+
+| | Mid | Senior | Staff+ |
+| --- | --- | --- | --- |
+| Amplitud | Conoce las piezas básicas y para qué sirven | Lo básico se da por hecho; nadie te pregunta qué hace un load balancer | Lo básico se da por hecho; se espera que lo apliques para anticipar consecuencias |
+| Profundidad | Entiende los conceptos «de libro» | Va a fondo en unas 2 áreas, con detalle de experiencia real | Profundidad en varias áreas; puede enseñarle algo al entrevistador |
+| Quién lidera | Tú en requisitos y diseño; el entrevistador guía las profundizaciones | Tú casi siempre; detectas tus propios puntos débiles | Tú lideras toda la conversación, como un par |
+| Señal clave | Entregar un diseño que funcione completo | Ver los problemas antes de que te los señalen | Identificar el núcleo del problema y recortar complejidad sin miedo |
+
+<Callout type="idea" title="Lo que hunde a cada nivel">
+
+En mid, el fracaso típico es **no llegar a un diseño que funcione**: más un problema de foco que de velocidad. En senior, es esperar a que el entrevistador te diga dónde están los problemas. En staff, es sobrediseñar: agregar Kafka, CQRS y tres regiones a un problema que no lo pide. Hello Interview lo resume en una frase que vale la pena memorizar: *toma la decisión, no te limites a listar opciones*.
+
+</Callout>
+
+## El marco de 45 minutos
+
+Dos marcos son los más usados para prepararse. El de Alex Xu tiene cuatro pasos: entender el problema y acotar el alcance (3–10 min), proponer un diseño de alto nivel y obtener acuerdo (10–15 min), profundizar (10–25 min) y cerrar (3–5 min). El de Hello Interview es más granular y es el que seguimos aquí, porque te obliga a producir entregables concretos en cada fase:
+
+<Steps>
+<Step title="Requisitos (~5 min)">
+
+Funcionales («los usuarios pueden…»), no funcionales cuantificados («el sistema debe…») y lo que queda fuera.
+
+</Step>
+<Step title="Entidades centrales (~2 min)">
+
+Los sustantivos del dominio: Usuario, Publicación, Seguimiento. Un borrador, no un esquema.
+
+</Step>
+<Step title="API (~5 min)">
+
+Un endpoint por requisito funcional. Es el contrato que tu diseño tiene que cumplir.
+
+</Step>
+<Step title="Flujo de datos (opcional, ~5 min)">
+
+Solo en sistemas de procesamiento por etapas (un *crawler*, un *pipeline* de video): la secuencia de pasos de la entrada a la salida.
+
+</Step>
+<Step title="Diseño de alto nivel (~10–15 min)">
+
+Cajas y flechas que satisfacen la API, endpoint por endpoint, explicando qué estado cambia en cada petición.
+
+</Step>
+<Step title="Profundizaciones (~10 min o más)">
+
+Endurecer el diseño contra los no funcionales: cuellos de botella, fallas, casos borde, preguntas del entrevistador.
+
+</Step>
+</Steps>
+
+En la práctica la ronda de 45 minutos pierde unos minutos al principio (presentaciones) y al final (tus preguntas). Juega con el reparto según el nivel:
+
+<InterviewPlanner />
+
+Fíjate en el patrón: a mayor nivel, **menos tiempo en lo mecánico y más en las profundizaciones**. Un candidato staff no se salta los requisitos ni la API; los recorre rápido porque sabe cuáles importan.
+
+### Requisitos: acotar es la mitad del trabajo
+
+Los **requisitos funcionales** son lo que el usuario puede hacer. Pregunta, propone y prioriza hasta quedarte con unos tres. «Diseña Twitter» tiene cien features posibles; tú vas a diseñar publicar un tuit, seguir a alguien y ver tu *timeline*. Todo lo demás se dice en voz alta como fuera de alcance.
+
+Los **no funcionales** son cualidades del sistema y es donde se gana o se pierde la entrevista, porque son los que justifican las decisiones difíciles después. Repasa esta lista mental y quédate con los 3–5 relevantes:
+
+- **Consistencia vs disponibilidad.** ¿Puede un usuario ver un dato viejo unos segundos? (Un *like*, sí. Un saldo o un asiento de avión, no.)
+- **Latencia.** Con percentil: «el feed carga en menos de 500 ms en p99», no «que sea rápido».
+- **Escala y forma del tráfico.** Usuarios activos, proporción lectura/escritura, picos (un concierto que sale a la venta, el final de un partido).
+- **Durabilidad.** ¿Qué pasa si perdemos un dato confirmado? En pagos, inaceptable. En métricas de vistas, tolerable.
+- **Disponibilidad**, seguridad, cumplimiento normativo, restricciones del entorno (móvil con mala conexión, dispositivos con poca batería).
+
+Practica con este ejercicio. El enunciado es el que usaremos como ejemplo al final de la página.
+
+<RequirementSorter />
+
+<Quiz
+  question="El entrevistador dice: «Diseña un sistema de reservas de entradas para conciertos». ¿Cuál es el requisito no funcional mejor formulado?"
+  options={[
+    { text: 'El sistema debe ser escalable y rápido.', why: 'Es vago: no dice cuánta escala ni qué tan rápido, así que no justifica ninguna decisión de diseño.' },
+    { text: 'Un asiento nunca puede venderse dos veces, aunque eso implique rechazar compras durante una falla; la búsqueda de eventos puede mostrar disponibilidad con unos segundos de atraso.', correct: true, why: 'Elige consistencia fuerte donde importa (la reserva) y acepta consistencia eventual donde no (la búsqueda). Eso ya define dos caminos distintos en el diseño.' },
+    { text: 'Los usuarios pueden buscar conciertos por ciudad.', why: 'Eso es un requisito funcional: describe algo que hace el usuario, no una cualidad del sistema.' },
+    { text: 'Usaremos Kafka para manejar los picos de tráfico.', why: 'Es una solución, no un requisito. Primero se dice el problema (picos de 10× al abrir la venta) y después se elige la herramienta.' },
+  ]}
+/>
+
+### Entidades y API: el contrato antes que las cajas
+
+Las **entidades** son un paso corto pero útil: te obligan a nombrar las cosas y te dan vocabulario compartido con el entrevistador. No pongas todos los campos todavía; los vas a descubrir al diseñar.
+
+La **API** traduce cada requisito funcional en una operación. REST es la opción por defecto; cambia a gRPC (comunicación interna de baja latencia), GraphQL (clientes con necesidades de datos muy variadas) o WebSockets/SSE (tiempo real) solo cuando el problema lo pida, y dilo. Dos detalles que distinguen a un candidato cuidadoso:
+
+- El usuario actual **sale del token de autenticación**, no de un `userId` en el body. Si no, cualquiera publica en nombre de otro.
+- Las listas se **paginan** (con cursor, normalmente) y las escrituras importantes aceptan una **clave de idempotencia**. Ambos temas los vemos en el tema *APIs y tiempo real*.
+
+### Diseño de alto nivel: algo que funcione, de punta a punta
+
+Aquí dibujas. La regla: **recorre la API endpoint por endpoint** y, para cada uno, muestra el camino de la petición por las cajas y qué se lee o escribe. Empieza simple: un servicio, una base de datos. Cuando veas un punto donde más adelante necesitarás un caché, una cola o un *shard*, márcalo con una frase («aquí el feed va a ser caro; vuelvo a esto en las profundizaciones») y sigue. Si optimizas ahora, te quedas sin tiempo para cubrir todos los requisitos.
+
+Anota solo los campos de la base de datos que importan para el diseño (claves, índices, lo que define el particionado), no el esquema completo.
+
+### Profundizaciones: donde se decide el nivel
+
+Con un diseño que funciona en la pizarra, vuelves a los no funcionales y preguntas: ¿esto aguanta? Los temas típicos:
+
+- **El camino caliente**: el endpoint con más tráfico o más caro. ¿Caché? ¿Precomputar? ¿*Fan-out* al escribir o al leer?
+- **Datos que no caben en una máquina**: particionado, clave de partición, *hot keys*.
+- **Fallas**: ¿qué pasa si se cae este componente? ¿Reintentos? ¿Idempotencia? ¿Qué ve el usuario?
+- **Consistencia**: ¿dónde aceptamos datos viejos y dónde no? ¿Cómo evitamos la doble venta?
+
+Para senior en adelante se espera que **tú propongas** dónde profundizar. Para mid, está bien que el entrevistador te lleve, pero tienes que razonar con solidez cuando lo haga.
+
+## ¿Y las estimaciones?
+
+Aquí los marcos difieren. El libro de Alex Xu dedica un capítulo a los cálculos de servilleta y muchos candidatos abren la entrevista calculando QPS y terabytes. Hello Interview recomienda lo contrario: **no estimes al inicio por reflejo; estima cuando el resultado cambie una decisión**.
+
+El segundo enfoque es el más maduro. Calcular que tienes «11.574 escrituras por segundo» y no usar ese número nunca más es tiempo perdido y además da una mala señal: estás siguiendo un guion. En cambio, estimar cuántos elementos distintos tendrá tu ranking para decidir si cabe en la memoria de una sola máquina, o cuántos GB por día genera tu sistema para decidir si necesitas *sharding* desde el día uno, es exactamente lo que hace un ingeniero senior.
+
+<Callout type="interview" title="Qué decir">
+
+«Voy a dejar las estimaciones para cuando afecten una decisión. Por ahora asumo unos 50 millones de usuarios activos diarios y mucho más tráfico de lectura que de escritura; si en el diseño necesito saber si algo cabe en memoria o cuántos nodos hacen falta, hago el cálculo en ese momento.» Esto muestra criterio y te ahorra cinco minutos. Si el entrevistador insiste en ver números al inicio, hazlos rápido: la técnica está en el tema *Estimaciones rápidas*.
+
+</Callout>
+
+## Ejemplo resuelto: el ranking global de un juego
+
+Apliquemos el marco a un problema pequeño. Enunciado: *diseña el ranking global de un juego móvil*.
+
+**Requisitos funcionales** (priorizados): enviar un puntaje al terminar una partida; ver el top 10 global; ver tu posición exacta. **Fuera de alcance**: chat, rankings por amigos, antitrampas.
+
+**No funcionales**: 50 M de jugadores activos al día con picos al cerrar torneos; leer el top 10 en menos de 200 ms (p99); un puntaje puede tardar unos segundos en reflejarse (consistencia eventual aceptable); un puntaje confirmado no se pierde (durabilidad).
+
+**Entidades**: Jugador, Puntaje (jugador, valor, fecha), Ranking (la vista ordenada).
+
+**API**:
+
+```http
+POST /v1/scores              { "gameId": "g1", "score": 9120 }   ← el jugador sale del token
+GET  /v1/leaderboard?limit=10
+GET  /v1/leaderboard/me      → { "rank": 18342, "score": 9120 }
+```
+
+El requisito que vuelve interesante el problema es el tercero. El top 10 es fácil: un índice por puntaje y un `ORDER BY score DESC LIMIT 10`. Pero el **rango exacto** de un jugador entre 50 millones exige contar cuántos tienen más puntos que él. En una base relacional eso es un `COUNT(*)` que recorre buena parte del índice en cada consulta: inviable con tráfico alto. La estructura natural es un **sorted set** de Redis (implementado con una *skip list*), donde insertar y obtener el rango cuestan O(log N).
+
+<FlowDiagram
+  caption="Ranking global: diseño de alto nivel y tres profundizaciones."
+  nodes={[
+    { id: 'c', label: 'App del juego', kind: 'mobile', x: 0, y: 1 },
+    { id: 'gw', label: 'API gateway', kind: 'gateway', x: 1, y: 1, sub: 'auth + rate limit' },
+    { id: 'ss', label: 'Score service', kind: 'service', x: 2, y: 0, sub: 'escrituras' },
+    { id: 'rs', label: 'Ranking service', kind: 'service', x: 2, y: 2, sub: 'lecturas' },
+    { id: 'db', label: 'Postgres', kind: 'db', x: 3, y: 0, sub: 'fuente de verdad' },
+    { id: 'z', label: 'Redis ZSET', kind: 'cache', x: 3, y: 2, sub: 'ranking en memoria' },
+    { id: 'q', label: 'Stream (CDC)', kind: 'stream', x: 4, y: 1, sub: 'cambios de puntajes', tone: 'muted' },
+  ]}
+  edges={[
+    { from: 'c', to: 'gw' },
+    { from: 'gw', to: 'ss', label: 'POST' },
+    { from: 'gw', to: 'rs', label: 'GET' },
+    { from: 'ss', to: 'db' },
+    { from: 'ss', to: 'z', label: 'ZADD' },
+    { from: 'rs', to: 'z' },
+    { from: 'db', to: 'q', dashed: true },
+    { from: 'q', to: 'z', dashed: true },
+  ]}
+  steps={[
+    {
+      title: 'Enviar un puntaje',
+      body: <>El gateway valida el token y aplica rate limit. El Score service guarda el puntaje en Postgres (durable) y luego actualiza el ranking con <code>ZADD leaderboard GT 9120 jugador:42</code>; <code>GT</code> solo reemplaza si el nuevo puntaje es mayor.</>,
+      active: ['c', 'gw', 'ss', 'db', 'z'],
+      flow: ['c-gw', 'gw-ss', 'ss-db', 'ss-z'],
+    },
+    {
+      title: 'Leer el top 10',
+      body: <>El Ranking service pide <code>ZRANGE leaderboard 0 9 REV WITHSCORES</code>: O(log N + 10). Responde en microsegundos desde memoria.</>,
+      active: ['c', 'gw', 'rs', 'z'],
+      flow: ['c-gw', 'gw-rs', 'rs-z'],
+    },
+    {
+      title: 'Mi posición exacta',
+      body: <><code>ZREVRANK leaderboard jugador:42</code> devuelve el rango en O(log N). Esto es justo lo que una base relacional no puede responder barato.</>,
+      active: ['rs', 'z'],
+      flow: ['gw-rs', 'rs-z'],
+    },
+    {
+      title: 'Profundización 1: durabilidad',
+      body: 'Redis no es la fuente de verdad: Postgres sí. Si el Score service escribe en ambos y falla entre medio, quedan desincronizados. Alternativa: escribir solo en Postgres y que un stream de cambios (CDC) actualice Redis. Si Redis se pierde, se reconstruye desde la base.',
+      active: ['db', 'q', 'z'],
+      flow: ['db-q', 'q-z'],
+    },
+    {
+      title: 'Profundización 2: ¿cabe y aguanta?',
+      body: 'Estimación justo a tiempo: 50 M entradas × ~100 B (id, puntaje y overhead, supuesto generoso) ≈ 5 GB. Cabe en una instancia. Las lecturas del top 10 se sirven desde réplicas o se cachean un segundo en el Ranking service, porque es una sola clave muy caliente.',
+      active: ['rs', 'z'],
+    },
+    {
+      title: 'Profundización 3: empates y sharding',
+      body: 'Empates: codifica el puntaje como puntaje × 10^k + (tope − timestamp) para que gane quien llegó primero. Si algún día no cabe en un nodo, particiona por rangos de puntaje: tu rango = suma de miembros de los shards superiores + tu rango local.',
+      active: ['z'],
+    },
+  ]}
+/>
+
+Fíjate en lo que **no** hicimos: no partimos con Kafka, ni con sharding, ni con múltiples regiones. La estimación de memoria aparece justo cuando hay que decidir si el ranking cabe en una máquina. La cola (CDC) entra como respuesta a un problema concreto (la escritura doble), no como decoración.
+
+<Callout type="interview" title="Cómo narrar una profundización">
+
+Usa la estructura **problema → opciones → decisión → costo**: «El riesgo es que el puntaje quede en Postgres pero no en Redis si el servicio se cae entre las dos escrituras. Podría usar una transacción distribuida, pero es cara y frágil; prefiero escribir solo en la base y propagar con CDC. El costo es un par de segundos de atraso en el ranking, que acordamos que era aceptable». Cuatro frases, y el entrevistador escuchó trade-offs reales atados a un requisito.
+
+</Callout>
+
+## Errores comunes (y cómo evitarlos)
+
+Estos aparecen una y otra vez en entrevistas reales y en los consejos de quienes las conducen:
+
+- **Saltar a la solución.** Dibujar cajas en el minuto dos. Sin requisitos, no tienes con qué justificar nada.
+- **Requisitos sin números.** «Alta disponibilidad» no ayuda a decidir. «99,9 % y tolera perder un nodo por zona», sí.
+- **Profundizar demasiado temprano.** Media hora en el esquema de la base de datos y cero minutos en cómo se lee el feed.
+- **Tecnologías como palabras mágicas.** «Pongo Cassandra porque escala.» ¿Por qué Cassandra y no Postgres particionado? ¿Qué patrón de acceso tienes? Cada pieza necesita una razón.
+- **Menús en vez de decisiones.** «Podríamos usar A, B o C.» Bien como apertura; mal si no terminas eligiendo una y diciendo por qué.
+- **Sobrediseño.** Microservicios, colas y caché en todas partes para un problema que cabe en un Postgres con réplicas. Ser capaz de decir «esto no lo necesitamos todavía» es una señal de seniority.
+- **Ignorar las pistas.** Si el entrevistador pregunta «¿y qué pasa si se cae Redis?», no es curiosidad: te está diciendo dónde mirar.
+- **Trabajar en silencio.** El entrevistador evalúa tu razonamiento; si no lo dices, no existe.
+
+<Quiz
+  question="Vas en el minuto 22, tu diseño de alto nivel cubre dos de los tres requisitos funcionales y se te ocurre una optimización elegante del caché. ¿Qué haces?"
+  options={[
+    { text: 'Implementar la optimización ahora, mientras la tienes fresca.', why: 'Es la trampa clásica: optimizas una parte y te quedas sin tiempo para el requisito que falta. Un diseño incompleto pesa más que uno sin optimizar.' },
+    { text: 'Anotar la idea con una frase («aquí caché con TTL corto; vuelvo luego»), completar el tercer requisito y retomarla en las profundizaciones.', correct: true, why: 'Primero un sistema que funciona de punta a punta, después optimizaciones. Dejar la marca muestra que viste el problema sin desviarte.' },
+    { text: 'Preguntarle al entrevistador si quiere que optimice o que siga.', why: 'No es terrible, pero delega una decisión que deberías tomar tú. A nivel senior se espera que gestiones tu propio tiempo.' },
+    { text: 'Saltarte el tercer requisito, porque la optimización demuestra más nivel.', why: 'Los requisitos acordados son el contrato. Saltarse uno es la causa más común de una evaluación negativa en mid y senior.' },
+  ]}
+/>
+
+## Comunicar mientras diseñas
+
+El diseño es la mitad de la señal; la otra mitad es cómo llegas a él.
+
+- **Piensa en voz alta, pero con estructura.** Anuncia en qué fase estás («ya tengo los requisitos; paso a la API»). El entrevistador necesita saber dónde estás para evaluarte.
+- **Haz check-ins cortos**, no constantes. «¿Te parece bien este alcance antes de seguir?» después de requisitos y después del diseño de alto nivel. No pidas permiso en cada caja.
+- **Decide y justifica.** «Uso Postgres porque los datos son relacionales y el volumen cabe; si el volumen creciera 100×, particionaría por `userId`.» Una decisión con su condición de cambio vale más que tres opciones sin elegir.
+- **No interrumpas al entrevistador.** A veces está intentando llevarte hacia una señal concreta. Escucha completa la pregunta.
+- **Mantén la pizarra legible.** Requisitos arriba a la izquierda, API debajo, diseño al centro. Cuando digas «volvamos al requisito de latencia», que esté a la vista.
+- **Admite lo que no sabes.** «No recuerdo el límite exacto de conexiones de Redis; asumo unas decenas de miles y lo verificaría.» Inventar es peor que suponer en voz alta.
+
+<Quiz
+  question="El entrevistador pregunta: «¿Qué pasa si se cae el nodo de Redis del ranking?». ¿Cuál es la mejor respuesta?"
+  options={[
+    { text: '«Redis es muy confiable, eso casi no pasa.»', why: 'Esquiva la pregunta. Todo se cae; la pregunta es qué ve el usuario y cómo te recuperas.' },
+    { text: '«Agrego un clúster de Redis con sharding.»', why: 'Sharding no resuelve disponibilidad por sí solo: si un shard se cae, esa parte del ranking desaparece igual. Falta replicación y un plan de reconstrucción.' },
+    { text: '«Tengo una réplica con failover automático; mientras tanto el top 10 se sirve desde el caché local de unos segundos. Si perdemos ambos, reconstruimos el sorted set desde Postgres, que es la fuente de verdad: con 50 M de filas son minutos, y durante ese tiempo devolvemos el ranking como no disponible pero seguimos aceptando puntajes.»', correct: true, why: 'Cubre detección y failover, degradación elegante (qué ve el usuario), recuperación desde la fuente de verdad y qué funcionalidad se mantiene. Eso es pensar en fallas como senior.' },
+    { text: '«Cambio Redis por una base de datos relacional para no tener ese problema.»', why: 'Resuelve un problema creando otro peor: el rango exacto vuelve a ser un COUNT costoso. Cambiar de pieza sin evaluar el trade-off es una mala señal.' },
+  ]}
+/>
+
+<Takeaways>
+
+- El marco es **requisitos → entidades → API → diseño de alto nivel → profundizaciones**, con unos 5/2/5/15/10+ minutos. Ensáyalo hasta que sea automático.
+- Los no funcionales **cuantificados** (p99, DAU, consistencia, durabilidad) son lo que después justifica cada decisión difícil.
+- Primero un diseño que **funciona de punta a punta**; marca las optimizaciones y vuelve a ellas en las profundizaciones.
+- Estima **cuando el número cambie una decisión**, no por ritual al inicio.
+- A mayor nivel, más lideras tú, más rápido pasas por lo obvio y más profundo vas. En staff se valora **recortar complejidad** y decidir sin rodeos.
+- Narra cada profundización como **problema → opciones → decisión → costo**.
+
+</Takeaways>
+
+## Fuentes y lecturas
+
+- Hello Interview, [*Delivery framework*](https://www.hellointerview.com/learn/system-design/in-a-hurry/delivery): los pasos y tiempos que seguimos aquí.
+- Hello Interview, [*The system design interview: what is expected at each level*](https://www.hellointerview.com/blog/the-system-design-interview-what-is-expected-at-each-level): amplitud, profundidad y proactividad por nivel.
+- Hello Interview, [*5 keys to staff-level system design interviews*](https://www.hellointerview.com/blog/staff-level-system-design): encontrar el núcleo del problema, recortar complejidad, decidir.
+- Alex Xu, *System Design Interview – An Insider's Guide*, cap. 3: [*A framework for system design interviews*](https://bytebytego.com/courses/system-design-interview/a-framework-for-system-design-interviews).
+- Donne Martin, [*The System Design Primer*](https://github.com/donnemartin/system-design-primer): guía de estudio y problemas resueltos.
+- Redis, [*Sorted sets*](https://redis.io/docs/latest/develop/data-types/sorted-sets/): la estructura detrás del ejemplo del ranking.

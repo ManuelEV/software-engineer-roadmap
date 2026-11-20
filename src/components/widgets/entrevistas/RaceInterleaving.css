@@ -1,0 +1,222 @@
+.ri {
+  display: grid;
+  gap: var(--s-3);
+}
+.ri-mem {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s-2) var(--s-4);
+}
+.ri-cell {
+  display: grid;
+  justify-items: center;
+  min-width: 128px;
+  padding: 8px 18px;
+  border: 2px solid var(--rule-strong);
+  border-radius: 10px;
+  background: var(--card);
+  transition:
+    background-color 300ms var(--ease-out),
+    border-color 300ms var(--ease-out);
+}
+.ri-cell__k {
+  font-family: var(--font-code);
+  font-size: 0.78rem;
+  color: var(--ink-3);
+}
+.ri-cell__v {
+  font-family: var(--font-code);
+  font-size: 1.9rem;
+  font-weight: 700;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+.ri-cell.is-written {
+  border-color: var(--line);
+  background: var(--line-tint);
+}
+.ri-cell.is-lost {
+  border-color: var(--bad);
+  background: color-mix(in oklab, var(--bad) 16%, var(--card));
+}
+.ri-expect {
+  font-size: 0.86rem;
+  color: var(--ink-2);
+}
+.ri-expect b {
+  font-family: var(--font-code);
+  color: var(--ink);
+}
+.ri-lock {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border: 1.5px solid var(--rule-strong);
+  border-radius: 999px;
+  font-size: 0.84rem;
+  font-weight: 600;
+  color: var(--ink-2);
+  transition:
+    background-color 250ms var(--ease-out),
+    border-color 250ms var(--ease-out);
+}
+.ri-lock.is-held {
+  border-color: var(--warn);
+  background: color-mix(in oklab, var(--warn) 16%, var(--card));
+  color: var(--ink);
+}
+.ri-threads {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--s-2);
+}
+.ri-thread {
+  --ri-c: var(--l4);
+  display: grid;
+  gap: 6px;
+  align-content: start;
+  padding: 8px;
+  border: 1.5px solid var(--rule);
+  border-radius: 10px;
+  background: var(--card);
+  min-width: 0;
+  transition: border-color 250ms var(--ease-out);
+}
+.ri-thread--B {
+  --ri-c: var(--l3);
+}
+.ri-thread.is-acting {
+  border-color: var(--ri-c);
+}
+.ri-thread__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+}
+.ri-badge {
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--ri-c) 22%, var(--card));
+  border: 1.5px solid var(--ri-c);
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--ink);
+}
+.ri-status {
+  font-size: 0.74rem;
+  font-weight: 600;
+  color: var(--ink-3);
+}
+.ri-status.is-wait {
+  color: var(--warn);
+}
+.ri-status.is-done {
+  color: var(--ok);
+}
+.ri-code {
+  list-style: none;
+  margin: 0;
+  padding: 4px 0;
+  border-radius: 6px;
+  background: var(--code-bg);
+  font-family: var(--font-code);
+  font-size: 0.74rem;
+  line-height: 1.6;
+  color: var(--code-ink);
+  overflow-x: auto;
+}
+.ri-code li {
+  padding: 0 6px;
+  border-left: 3px solid transparent;
+  white-space: nowrap;
+  transition:
+    background-color 220ms var(--ease-out),
+    opacity 220ms var(--ease-out);
+}
+.ri-code li code {
+  font: inherit;
+  background: none;
+  padding: 0;
+  border: 0;
+  color: inherit;
+}
+.ri-code li.is-past {
+  opacity: 0.45;
+}
+.ri-code li.is-next {
+  border-left-color: var(--rule-strong);
+}
+.ri-code li.is-now {
+  opacity: 1;
+  background: var(--hl-soft);
+  border-left-color: var(--ri-c);
+}
+.ri-tmp {
+  font-family: var(--font-code);
+  font-size: 0.8rem;
+  color: var(--ink-3);
+}
+.ri-tmp b {
+  color: var(--ink);
+  font-size: 1rem;
+}
+.ri-run {
+  min-height: 40px;
+  justify-content: center;
+  font-size: 0.82rem;
+  white-space: normal;
+  text-align: center;
+}
+.ri-trail {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-height: 28px;
+}
+.ri-trail__empty {
+  font-size: 0.82rem;
+  color: var(--ink-3);
+}
+.ri-step {
+  --ri-c: var(--l4);
+  padding: 2px 7px;
+  border-radius: 5px;
+  border: 1px solid var(--ri-c);
+  background: color-mix(in oklab, var(--ri-c) 12%, var(--card));
+  font-family: var(--font-code);
+  font-size: 0.74rem;
+  color: var(--ink);
+}
+.ri-step--B {
+  --ri-c: var(--l3);
+}
+.ri-step.is-blocked {
+  border-style: dashed;
+  background: var(--card);
+  color: var(--ink-3);
+}
+.ri-manual {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: var(--s-3);
+}
+@media (max-width: 420px) {
+  .ri-thread {
+    padding: 6px;
+  }
+  .ri-code {
+    font-size: 0.68rem;
+  }
+  .ri-code li {
+    padding: 0 3px;
+  }
+}

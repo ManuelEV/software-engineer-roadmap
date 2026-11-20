@@ -1,0 +1,528 @@
+import { TrieAutocomplete } from '../../components/widgets/casos-b/TrieAutocomplete'
+
+Escribes "cl" en un buscador y, antes de que tu dedo llegue a la siguiente tecla, aparece una lista: *clima hoy*, *clima mañana*, *club américa*. Eso es el **autocompletado** (o *typeahead*): dado un prefijo, devolver las k consultas más populares que empiezan con él. En el libro de Alex Xu aparece con otro nombre que revela su esencia: "diseña el top-k de consultas más buscadas".
+
+Es un clásico porque parece una pregunta de estructuras de datos ("usa un *trie*") y en realidad es una pregunta de **separar el camino de lectura del camino de escritura**. La lectura tiene que ser absurdamente rápida: cada tecla es una petición, y la respuesta debe llegar antes de la siguiente. Facebook lo dijo sin rodeos cuando describió su typeahead: si recuperar un resultado toma más de 100 ms, la experiencia "tartamudea"<Sidenote>"The Life of a Typeahead Query", Facebook Engineering, 2010. Ver Fuentes.</Sidenote>. La escritura, en cambio, consiste en contar miles de millones de búsquedas y decidir cuáles son populares, y eso puede (y debe) hacerse lejos del camino crítico.
+
+Lo difícil no es el trie. Lo difícil es: cuánta memoria cuesta guardar el top-k precalculado, cada cuánto reconstruirlo sin cortar el servicio, cómo partirlo entre servidores sin que la letra "c" derrita un shard, y cómo lograr que la mitad de las teclas ni siquiera lleguen a tu backend.
+
+<Sketch
+  width={640}
+  height={300}
+  caption="La idea central: cada nodo del trie ya guarda su top-k. Responder es bajar letra por letra y devolver la lista que está ahí."
+  items={[
+    { type: 'text', x: 24, y: 34, text: 'cada nodo guarda su top-k', size: 20, tone: 'pencil' },
+    { type: 'circle', x: 60, y: 150, r: 24, label: '·' },
+    { type: 'arrow', from: [86, 150], to: [142, 150] },
+    { type: 'circle', x: 170, y: 150, r: 26, label: 'c', font: 'code' },
+    { type: 'arrow', from: [198, 150], to: [252, 150] },
+    { type: 'circle', x: 280, y: 150, r: 26, label: 'cl', font: 'code' },
+    { type: 'arrow', from: [308, 150], to: [362, 150] },
+    { type: 'circle', x: 390, y: 150, r: 28, label: 'cli', font: 'code', tone: 'line', fill: true },
+    { type: 'text', x: 444, y: 64, text: '"cli"', size: 22, font: 'code', tone: 'line' },
+    { type: 'arrow', from: [460, 76], to: [410, 120], tone: 'line' },
+    { type: 'arrow', from: [408, 176], to: [440, 196], head: 'none', dashed: true, tone: 'pencil' },
+    { type: 'box', x: 440, y: 180, w: 190, h: 96, fill: true, tone: 'line' },
+    { type: 'text', x: 454, y: 208, text: ['clima hoy', 'clima mañana', 'clima en lima'], size: 19 },
+    { type: 'text', x: 24, y: 244, text: ['leer: bajar p letras', 'y devolver la lista'], size: 19, tone: 'ok' },
+    { type: 'highlight', x: 226, y: 248, w: 66, h: 28, tone: 'ok' },
+    { type: 'text', x: 230, y: 270, text: 'O(p)', size: 22, font: 'code', tone: 'ok', with: true },
+  ]}
+/>
+
+## Requisitos
+
+Antes de dibujar nada, acota. Este problema tiene muchas variantes (buscador web, contactos de LinkedIn, productos de una tienda) y cada una cambia el diseño.
+
+**Funcionales**
+
+- Dado un prefijo, devolver las **5 consultas más populares** que empiezan con él (k configurable, típicamente 5–10).
+- Coincidencia **por prefijo** desde el inicio de la consulta ("cl" sugiere "clima hoy", no "ciclismo").
+- Ranking por **popularidad histórica** (frecuencia de búsqueda, con más peso a lo reciente).
+- Texto normalizado: minúsculas, sin distinguir tildes ("como" y "cómo" son el mismo prefijo), pero mostrando la forma correcta.
+- Las sugerencias reflejan cambios de popularidad en **horas**, no en segundos.
+- Filtrar sugerencias ofensivas, ilegales o que expongan datos personales.
+
+**No funcionales**
+
+- **Latencia**: p99 por debajo de ~100 ms de punta a punta; el servidor debería responder en pocos milisegundos para dejar margen a la red.
+- **Disponibilidad alta**, pero con degradación elegante: si el autocompletado cae, la caja de búsqueda sigue funcionando sin sugerencias. Nunca debe tumbar la búsqueda.
+- **Escalabilidad** para picos de tráfico de lectura.
+- **Consistencia eventual** es aceptable: si dos usuarios ven sugerencias ligeramente distintas durante un minuto, no pasa nada.
+
+**Fuera de alcance (dilo en voz alta)**
+
+- Personalización por usuario (historial propio, contactos).
+- Corrección ortográfica y búsqueda difusa (*fuzzy*: "climna" → "clima").
+- Tendencias en tiempo real al segundo (la retomaremos como extensión).
+- Coincidencia fuera de orden ("hoy clima" → "clima hoy"), típica de buscadores de personas como el de LinkedIn.
+
+<Callout type="interview" title="La pregunta que cambia todo">
+
+Pregunta temprano: **¿qué tan frescas tienen que ser las sugerencias?** Si la respuesta es "minutos u horas", puedes construir el índice offline y servirlo en solo lectura, que es el diseño simple y rápido. Si es "segundos" (noticias de último momento), necesitas una capa de streaming adicional. Y pregunta si hay **personalización**: un índice global se cachea en CDN; uno por usuario, no.
+
+</Callout>
+
+## Estimaciones
+
+Usemos los supuestos del libro de Alex Xu, que son razonables para un buscador grande pero no gigante.
+
+- **Supongamos 10 millones de usuarios activos diarios** (DAU), con **10 búsquedas por día** cada uno.
+- Cada consulta mide en promedio **20 caracteres** (unas 4 palabras de 5 letras), y cada carácter cuesta ~1 byte en la mayoría de los casos.
+- **Cada tecla dispara una petición.** Este es el dato que la gente olvida.
+
+**Tráfico de lectura**:
+
+```text
+10 M usuarios × 10 búsquedas × 20 teclas = 2.000 M peticiones/día
+2.000 M / 86.400 s ≈ 23.000 peticiones/s en promedio
+Pico (×2)          ≈ 46.000 peticiones/s
+```
+
+Fíjate en la multiplicación: hay 100 M de búsquedas al día (~1.160/s), pero 20 veces más peticiones de autocompletado. Por eso el lado cliente (debounce, caché) es tan importante como el servidor: si el *debounce* elimina la mitad de las peticiones, te ahorras la mitad de la flota.
+
+**Ancho de banda**: una respuesta con 5 sugerencias de ~25 caracteres más JSON ronda 0,3–0,5 KB. A 46.000 peticiones/s son ~15–25 MB/s de salida. Nada preocupante.
+
+**Datos nuevos**: si el 20 % de las 100 M de búsquedas diarias son consultas nunca vistas, entran `100 M × 20 B × 20 % = 0,4 GB/día` de consultas nuevas al almacén. Los logs crudos completos son unos 2 GB/día (100 M × 20 B) más metadatos.
+
+**Tamaño del índice**: aquí conviene razonar con supuestos explícitos. Supongamos que tras descartar las consultas raras (menos de N búsquedas) quedan **50 M de consultas únicas**.
+
+- Cota superior de nodos del trie: 50 M × 20 caracteres = 1.000 M, pero los prefijos se comparten. Supongamos que eso deja **~300 M de nodos**.
+- Si cada nodo guardara una lista top-10 completa (10 × 8 bytes de referencia + 4 bytes de puntaje), serían ~120 B por nodo → ~36 GB. Pero la mayoría de los nodos profundos tiene una sola consulta debajo (son cadenas lineales: "cien años de soled…"), así que su lista mide 1, no 10. En la práctica la cifra baja bastante, y comprimir las cadenas (un *radix tree*) baja aún más el número de nodos.
+
+Conclusión de orden de magnitud: **unas decenas de GB**. Cabe en la memoria de un servidor grande, o en pocos shards. Ese número decide si replicas el índice completo o lo particionas, y lo usaremos más abajo.
+
+<Quiz
+  question="Tu buscador recibe 100 M de búsquedas al día. ¿Por qué el servicio de autocompletado necesita dimensionarse para unas 20 veces ese tráfico?"
+  options={[
+    { text: 'Porque cada búsqueda genera una petición por cada tecla que el usuario escribe antes de enviarla.', correct: true, why: 'Exacto. Con consultas de ~20 caracteres, cada búsqueda produce ~20 peticiones de sugerencias. Por eso el debounce y la caché del navegador son parte del diseño, no un detalle.' },
+    { text: 'Porque cada sugerencia se replica en 20 servidores.', why: 'La replicación multiplica la capacidad, no las peticiones que llegan. El factor 20 viene del comportamiento del usuario.' },
+    { text: 'Porque hay que recalcular el ranking en cada petición.', why: 'Justamente queremos lo contrario: el ranking se precalcula offline y la lectura no recalcula nada.' },
+    { text: 'Porque el 20 % de las consultas son nuevas.', why: 'Ese 20 % afecta el volumen de datos nuevos que entran al almacén, no el tráfico de lectura.' },
+  ]}
+/>
+
+## Entidades y API
+
+Las entidades son pocas:
+
+- **Consulta** (*query*): el texto normalizado, más la forma "bonita" para mostrar.
+- **Puntaje**: popularidad de la consulta en una ventana de tiempo, por idioma/región.
+- **Índice de prefijos**: la estructura que, dado un prefijo, devuelve el top-k. Es un artefacto **derivado** y versionado: se reconstruye, no se edita.
+
+El camino de lectura es un único endpoint público:
+
+```http
+GET /v1/suggestions?q=cli&limit=5&locale=es-CL HTTP/1.1
+Host: suggest.example.com
+
+HTTP/1.1 200 OK
+Content-Type: application/json
+Cache-Control: public, max-age=3600
+
+{
+  "q": "cli",
+  "index_version": "2026-11-19T06:00Z",
+  "suggestions": [
+    { "text": "clima hoy", "score": 9400 },
+    { "text": "clima mañana", "score": 4100 },
+    { "text": "clima en lima", "score": 2300 }
+  ]
+}
+```
+
+Tres decisiones en ese ejemplo. **Es un GET cacheable**: como las sugerencias no son personalizadas, la misma respuesta sirve para todos los que escriben "cli", así que el navegador y la CDN pueden guardarla. **Devuelve la versión del índice**, útil para depurar ("¿por qué ves esto?") y para que el cliente descarte respuestas de una versión vieja. **No devuelve el puntaje real** necesariamente; puedes exponer solo el orden si el volumen de búsqueda es un dato sensible.
+
+No hay API pública de escritura. Las consultas entran al sistema como **eventos** que emite el servicio de búsqueda cuando el usuario presiona Enter:
+
+```json title="topic: query-log"
+{
+  "query": "clima hoy",
+  "normalized": "clima hoy",
+  "locale": "es-CL",
+  "ts": "2026-11-19T14:03:22Z",
+  "user_hash": "a91f…",
+  "source": "enter"
+}
+```
+
+¿Por qué registrar solo las búsquedas enviadas y no cada tecla? Porque "cli" no es algo que la gente busque: es un estado intermedio. Contar prefijos tecleados inflaría basura. (Sí conviene registrar **qué sugerencia se eligió**, que es una señal de calidad para el ranking).
+
+## Modelo de datos
+
+Hay tres representaciones de los mismos datos, cada una con su almacenamiento:
+
+**1. Logs crudos** (solo agregar, sin índices). Van a un *topic* de Kafka y de ahí a almacenamiento de objetos (S3, GCS) particionado por hora. Son baratos y se reprocesan si cambias la fórmula de ranking.
+
+**2. Conteos agregados** (data warehouse o tabla en un almacén columnar):
+
+```sql
+CREATE TABLE query_counts (
+  normalized  TEXT,
+  locale      TEXT,
+  day         DATE,
+  searches    BIGINT,      -- búsquedas ese día
+  users       BIGINT,      -- usuarios distintos (aprox., HyperLogLog)
+  display     TEXT,        -- forma más frecuente para mostrar
+  PRIMARY KEY (locale, day, normalized)
+);
+```
+
+La columna `users` importa para la privacidad: una consulta que buscaron 5.000 veces **tres personas** no debería sugerirse a todo el mundo. Un umbral de usuarios distintos es una regla sencilla para no filtrar datos personales (un nombre con un teléfono, por ejemplo).
+
+**3. Índice servible**. Aquí tienes dos formas equivalentes:
+
+- **Trie con top-k por nodo**, serializado como un archivo binario y cargado completo en memoria por cada servidor de sugerencias.
+- **Tabla prefijo → top-k** en un almacén clave-valor (Redis, DynamoDB, Cassandra):
+
+| prefijo | top-k (consulta, puntaje) |
+|---|---|
+| `c` | chatgpt 12000, clima hoy 9400, cuánto es un dólar 8100, … |
+| `cl` | clima hoy 9400, clima mañana 4100, clima en lima 2300 |
+| `cli` | clima hoy 9400, clima mañana 4100, clima en lima 2300 |
+
+Ambas son el mismo dato: el trie es la versión compacta (los prefijos se comparten), la tabla es la versión plana (cada prefijo repite sus caracteres, pero se reparte trivialmente entre máquinas y cualquier KV la sirve). Para decenas de GB, un trie en memoria en cada réplica es lo más rápido: cero saltos de red. Si el índice crece a cientos de GB, una tabla de prefijos en un KV distribuido es más fácil de operar.
+
+El índice siempre se guarda también como **snapshot inmutable** en almacenamiento de objetos (`s3://suggest-index/es-CL/2026-11-19T06:00Z/`). Así los servidores nuevos arrancan descargando la última versión y el rollback es apuntar a la anterior.
+
+## Diseño de alto nivel
+
+El diseño son dos caminos que solo se tocan a través del snapshot: uno de lectura, síncrono y en memoria, y uno de escritura, asíncrono y por lotes.
+
+<FlowDiagram
+  caption="Camino de lectura (arriba) y pipeline de construcción del índice (abajo). Recorre los pasos."
+  nodes={[
+    { id: 'u', label: 'Navegador', kind: 'client', x: 0, y: 0, sub: 'debounce + caché' },
+    { id: 'cdn', label: 'CDN', kind: 'cdn', x: 1, y: 0, sub: 'prefijos cortos' },
+    { id: 'sg', label: 'Suggest', kind: 'service', x: 2, y: 0, sub: 'trie en memoria' },
+    { id: 'map', label: 'Mapa de shards', kind: 'layers', x: 3, y: 0, tone: 'muted' },
+    { id: 'srch', label: 'Búsqueda', kind: 'search', x: 0, y: 2, sub: 'al presionar Enter' },
+    { id: 'k', label: 'Kafka', kind: 'stream', x: 1, y: 2, sub: 'query-log' },
+    { id: 'agg', label: 'Agregador', kind: 'worker', x: 2, y: 2, sub: 'Spark, cada hora' },
+    { id: 'bld', label: 'Builder', kind: 'workflow', x: 3, y: 2, sub: 'trie + top-k' },
+    { id: 'blk', label: 'Lista de bloqueo', kind: 'shield', x: 4, y: 2 },
+    { id: 's3', label: 'Snapshots', kind: 'storage', x: 3, y: 1, sub: 'versionados' },
+  ]}
+  edges={[
+    { from: 'u', to: 'cdn', label: 'GET ?q=cli' },
+    { from: 'cdn', to: 'sg' },
+    { from: 'sg', to: 'map', dashed: true },
+    { from: 'u', to: 'srch', label: 'Enter', dashed: true },
+    { from: 'srch', to: 'k' },
+    { from: 'k', to: 'agg' },
+    { from: 'agg', to: 'bld' },
+    { from: 'blk', to: 'bld' },
+    { from: 'bld', to: 's3' },
+    { from: 's3', to: 'sg', label: 'carga' },
+  ]}
+  steps={[
+    { title: 'Cada tecla, con freno', body: <>El cliente espera una pausa corta (<em>debounce</em>) y revisa su caché local por prefijo. Solo si no tiene la respuesta, envía <code>GET /v1/suggestions?q=cli</code>.</>, active: ['u'], flow: [] },
+    { title: 'La CDN absorbe lo repetido', body: <>Las respuestas no personalizadas son idénticas para todos. Los prefijos de 1–2 letras, los más pedidos, se sirven desde el borde con <code>max-age</code> de minutos u horas.</>, active: ['u', 'cdn'], flow: ['u-cdn'] },
+    { title: 'Lookup en memoria', body: <>El servicio camina el trie carácter por carácter hasta el nodo del prefijo y devuelve su lista top-k ya calculada. Costo proporcional al largo del prefijo: microsegundos.</>, active: ['cdn', 'sg'], flow: ['cdn-sg'] },
+    { title: 'Registrar la búsqueda real', body: <>Cuando el usuario presiona Enter, el servicio de búsqueda publica un evento en Kafka. Es asíncrono: si Kafka está lento, la búsqueda no espera.</>, active: ['u', 'srch', 'k'], flow: ['u-srch', 'srch-k'] },
+    { title: 'Agregar por ventana', body: <>Un job por lotes cuenta búsquedas y usuarios distintos por consulta y calcula un puntaje con decaimiento temporal.</>, active: ['k', 'agg'], flow: ['k-agg'] },
+    { title: 'Construir y filtrar', body: <>El builder arma el trie, calcula el top-k de cada nodo de abajo hacia arriba y descarta lo que está en la lista de bloqueo o no supera el umbral de usuarios.</>, active: ['agg', 'bld', 'blk'], flow: ['agg-bld', 'blk-bld'] },
+    { title: 'Publicar y cambiar en caliente', body: <>El snapshot se sube con su versión. Cada servidor lo descarga, lo carga en memoria junto al viejo y cambia el puntero de forma atómica. Sin downtime, y el rollback es volver al snapshot anterior.</>, active: ['bld', 's3', 'sg'], flow: ['bld-s3', 's3-sg'] },
+  ]}
+/>
+
+El punto clave para la entrevista: **el servicio de sugerencias no escribe nada en el camino de lectura**. No incrementa contadores ni toca una base de datos. Es una función pura sobre un índice inmutable en memoria, y por eso escala agregando réplicas idénticas detrás de un balanceador.
+
+## Profundizaciones
+
+### 1. El trie con top-k en cada nodo
+
+Un *trie* es un árbol donde cada arista es un carácter y cada camino desde la raíz deletrea un prefijo. Encontrar el nodo de "cli" cuesta O(p), donde p es el largo del prefijo, sin importar cuántas consultas haya.
+
+El problema es lo que viene después. Con un trie desnudo, para responder "top-5 bajo `c`" tienes que:
+
+1. Bajar al nodo de `c`: O(p).
+2. Recorrer **todo su subárbol** para encontrar las consultas completas: O(c), con c = nodos debajo.
+3. Ordenarlas por puntaje: O(c log c), o mantener un heap de tamaño k: O(c log k).
+
+Para `c` en un índice real, c son millones de nodos. Inaceptable en cada tecla.
+
+Las dos optimizaciones que propone Xu resuelven esto:
+
+- **Limitar el largo del prefijo**: casi nadie escribe 50 caracteres en un buscador. Si topas p en un valor pequeño, el paso 1 es O(1) en la práctica.
+- **Guardar el top-k precalculado en cada nodo**: el paso 2 y 3 desaparecen. La respuesta es la lista que ya está en el nodo.
+
+Pruébalo. Escribe "c" en modo *recorrer subárbol* y mira cuántos nodos visita; luego cambia a *top-k precalculado*. Con 27 consultas de ejemplo la diferencia ya es notoria; con 50 M es la diferencia entre microsegundos y segundos.
+
+<TrieAutocomplete />
+
+El precio es memoria y costo de construcción. Calcular las listas es un recorrido postorden: el top-k de un nodo es la **mezcla** de los top-k de sus hijos (más la consulta que termina en él, si existe). Como cada lista hija ya viene ordenada y tiene a lo sumo k elementos, la mezcla es barata.
+
+<CodeTabs>
+
+```java title="Java"
+record Suggestion(String text, long score) {}
+
+class TrieNode {
+    final Map<Character, TrieNode> children = new HashMap<>();
+    Suggestion terminal;               // la consulta que termina exactamente aquí
+    List<Suggestion> top = List.of();  // top-k precalculado
+}
+
+final class SuggestIndex {
+    private SuggestIndex() {}
+
+    static List<Suggestion> computeTopK(TrieNode node, int k) {
+        List<Suggestion> pool = new ArrayList<>();
+        if (node.terminal != null) pool.add(node.terminal);
+        for (TrieNode child : node.children.values()) {
+            pool.addAll(computeTopK(child, k)); // cada hijo aporta como máximo k
+        }
+        // pool tiene a lo sumo k × (hijos + 1) elementos: ordenar es barato
+        pool.sort(Comparator.comparingLong(Suggestion::score).reversed());
+        node.top = List.copyOf(pool.subList(0, Math.min(k, pool.size())));
+        return node.top;
+    }
+
+    static List<Suggestion> suggest(TrieNode root, String prefix) {
+        TrieNode node = root;
+        for (char ch : prefix.toCharArray()) {
+            node = node.children.get(ch);
+            if (node == null) return List.of();
+        }
+        return node.top;
+    }
+}
+```
+
+```ts title="TypeScript"
+type Suggestion = { text: string; score: number }
+
+interface TrieNode {
+  children: Map<string, TrieNode>
+  terminal?: Suggestion   // la consulta que termina exactamente aquí
+  top: Suggestion[]       // top-k precalculado
+}
+
+export function computeTopK(node: TrieNode, k: number): Suggestion[] {
+  const pool: Suggestion[] = node.terminal ? [node.terminal] : []
+  for (const child of node.children.values()) {
+    pool.push(...computeTopK(child, k)) // cada hijo aporta como máximo k
+  }
+  // pool tiene a lo sumo k × (hijos + 1) elementos: ordenar es barato
+  node.top = pool.sort((a, b) => b.score - a.score).slice(0, k)
+  return node.top
+}
+
+export function suggest(root: TrieNode, prefix: string): Suggestion[] {
+  let node: TrieNode | undefined = root
+  for (const ch of prefix) {
+    node = node.children.get(ch)
+    if (!node) return []
+  }
+  return node.top
+}
+```
+
+</CodeTabs>
+
+Fíjate en una consecuencia del precálculo: **actualizar el puntaje de una consulta obliga a tocar a todos sus ancestros**. Si "clima hoy" sube, hay que revisar las listas de `c`, `cl`, `cli`… hasta la hoja. Por eso no se actualiza en línea: se reconstruye en lote. Es exactamente el trade-off de cualquier vista materializada.
+
+<Callout type="tip" title="En Java">
+
+`Map<Character, TrieNode>` es cómodo, pero cada `char` se convierte en un `Character` (autoboxing) y cada `HashMap` pesa decenas de bytes aunque tenga un hijo. Con un alfabeto chico y conocido, un arreglo `TrieNode[] children = new TrieNode[27]` indexado por `c - 'a'` (un `char` también es un número) es más rápido y más compacto. Y `pool.sort(...)` con `Comparator.comparingLong(Suggestion::score).reversed()` evita restar puntajes en el comparador, que con `long` grandes puede desbordar.
+
+</Callout>
+
+<Compare>
+<Option title="Trie propio en memoria" verdict="Máxima velocidad">
+
+Lookup en microsegundos, sin red. Control total del formato. Ideal si el índice cabe en RAM y las sugerencias son globales. Tienes que escribir el builder, la serialización y la carga en caliente.
+
+</Option>
+<Option title="Elasticsearch completion suggester" verdict="Si ya lo tienes">
+
+Usa una estructura en memoria optimizada para velocidad (los suggesters de Lucene se basan en FST, *finite state transducers*). Soporta contextos (categoría, geo) y búsqueda difusa. Pero todo el índice vive en el heap de la JVM y las consultas multi-shard hacen dos fases. Bueno para catálogos de productos, más caro para tráfico de buscador web.
+
+</Option>
+<Option title="Redis: un sorted set por prefijo" verdict="Simple y online">
+
+La receta clásica de antirez: por cada búsqueda, `ZINCRBY` en el set de cada prefijo; leer es `ZREVRANGE prefijo 0 4`. Se actualiza en tiempo real, pero cada búsqueda escribe p claves y la memoria crece con los prefijos; hay que podar cada set a unos cientos de miembros.
+
+</Option>
+</Compare>
+
+<Quiz
+  question="Guardas el top-5 precalculado en cada nodo del trie. La consulta 'clima hoy' acaba de duplicar su popularidad. ¿Qué tienes que actualizar para que el cambio se refleje en todas las sugerencias?"
+  options={[
+    { text: 'Solo el nodo hoja donde termina clima hoy.', why: 'La hoja no es la que se consulta al escribir cl: las listas de los ancestros siguen con el puntaje viejo y el orden puede estar mal.' },
+    { text: 'Las listas top-k de todos los nodos en el camino desde la raíz hasta esa hoja.', correct: true, why: 'Cada ancestro (c, cl, cli, …) guarda una copia del top-k de su subárbol, así que todos pueden cambiar. Por eso estas estructuras se reconstruyen en lote en vez de actualizarse en cada búsqueda.' },
+    { text: 'Nada: el top-k se calcula al vuelo en cada petición.', why: 'Eso sería el modo recorrer subárbol, precisamente lo que el precálculo evita.' },
+    { text: 'Solo la raíz, que contiene el top-k global.', why: 'La raíz cambia, pero también todos los nodos intermedios del camino.' },
+  ]}
+/>
+
+### 2. El pipeline de datos: de logs a ranking
+
+El camino de escritura es un pipeline por lotes con cuatro etapas: **registrar, agregar, construir, publicar**.
+
+**Registrar.** El servicio de búsqueda emite un evento por búsqueda enviada. A gran escala puedes **muestrear** (registrar 1 de cada N): para estimar popularidad no necesitas cada evento, y reduces el volumen N veces. El costo es perder las consultas de la cola larga, que de todos modos no van a llegar al top-k.
+
+**Agregar.** Un job en Spark (o un warehouse con SQL) agrupa por consulta normalizada y locale. La fórmula de puntaje es una decisión de producto, no técnica. Una opción común es el **decaimiento exponencial**: cada día de antigüedad pesa la mitad que el anterior si eliges una vida media de un día.
+
+```text
+puntaje(q) = Σ  búsquedas(q, día d) × 0,5^(antigüedad_d / vida_media)
+
+Ejemplo, vida media = 7 días:
+  "copa américa": 70.000 hace 30 días, 2.000 hoy  → ~3.600 + 2.000 ≈ 5.600
+  "real madrid":  7.000 cada día, estable          → ~ 7.000 × 10,6 ≈ 74.000
+```
+
+Sin decaimiento, "copa américa" quedaría arriba meses después del torneo. Con una vida media demasiado corta, el índice se vuelve nervioso y sugiere ruido.
+
+**Construir.** El builder toma los conteos, aplica filtros (lista de bloqueo, umbral de usuarios distintos, consultas con datos personales) y arma el trie con su top-k. Filtrar **al construir** es mejor que filtrar al servir: el camino de lectura se mantiene trivial y una consulta bloqueada desaparece de todos los prefijos a la vez. Aun así, conviene una lista de bloqueo de emergencia en el servicio, aplicable sin esperar al próximo build.
+
+**Publicar.** El snapshot se sube versionado y los servidores hacen *blue/green* en memoria: cargan el nuevo índice al lado del viejo y cambian un puntero atómico. Esto duplica momentáneamente la memoria, así que dimensiona las máquinas para el doble del índice.
+
+¿Cada cuánto? El libro de Xu propone semanal; en la práctica, horario o diario es fácil si el build tarda minutos. La cadencia la fija cuánto tarda el pipeline completo, no un deseo.
+
+<Details summary="Profundizar: tendencias en tiempo casi real">
+
+Si te piden que "mundial final" aparezca minutos después del partido, agrega una **capa rápida** al lado del batch (estilo arquitectura Lambda):
+
+- Un job de streaming (Flink, Kafka Streams) cuenta búsquedas en ventanas deslizantes de 5–15 minutos.
+- Para no guardar un contador por cada consulta posible, usa estructuras aproximadas: **Count-Min Sketch** para estimar frecuencias y un heap de *heavy hitters* para quedarte solo con las top-N que están creciendo.
+- Publica un índice pequeño de "tendencias" (miles de consultas, no millones) que el servicio mezcla con el índice batch al responder, con un peso que decae.
+
+Cuida el abuso: una capa en tiempo real es exactamente lo que un atacante quiere manipular con bots. Exige un mínimo de usuarios distintos y señales anti-spam antes de promover algo.
+
+</Details>
+
+### 3. Escalar el servicio: réplicas antes que shards
+
+Con nuestras estimaciones (decenas de GB), la respuesta simple es **replicar el índice completo en cada servidor**. Cada réplica responde cualquier prefijo, el balanceador reparte al azar y escalar es agregar máquinas. No hay coordinación, ni *scatter-gather*, ni shards calientes. Si una réplica muere, las demás siguen.
+
+Solo cuando el índice no cabe en una máquina (muchos idiomas, catálogos enormes) necesitas particionar. Y aquí está la trampa: **una consulta por prefijo debe resolverse en un solo shard**, o pagarás un *fan-out* a todos los shards en cada tecla. Eso descarta particionar por hash de la consulta completa.
+
+Las opciones, de peor a mejor:
+
+- **Por primera letra.** Simple pero muy desbalanceado: en español, palabras que empiezan con `c`, `p`, `s` o `a` son muchísimo más frecuentes que con `ñ`, `x` o `w`. Un shard se calienta y otros quedan ociosos.
+- **Por rangos de prefijo con un mapa de shards** (la propuesta de Xu). Analizas la distribución histórica y defines rangos de carga parecida: `a–ab`, `ac–az`, `b`, `c–ch`, `ci–cz`… Un servicio de configuración guarda el mapa y el servidor de entrada enruta cada prefijo al shard correcto. Puedes rebalancear moviendo cortes.
+- **Hash de los primeros m caracteres** (por ejemplo, m = 2). Reparte bien, y todas las consultas que comparten esos m caracteres viven juntas. El problema son los prefijos más cortos que m: "c" necesitaría a todos los shards.
+
+La solución al último punto es elegante: **los prefijos de 1–2 caracteres son pocos** (con ~30 símbolos, unos 30 + 30² ≈ 930 combinaciones). Precalcula su top-k globalmente en el builder y sírvelos desde una tabla pequeña replicada en todos los nodos, o directo desde la CDN. Son a la vez los más pedidos y los más cacheables.
+
+<Callout type="tip" title="Prefijos calientes">
+
+La distribución de peticiones por prefijo es muy sesgada: los prefijos cortos concentran el tráfico porque todo el mundo los escribe antes de llegar a uno largo. Una caché en el borde para prefijos de largo 1–3 absorbe una fracción enorme de la carga con muy poca memoria. Mira [Caché y CDN](/system-design/caching) para el detalle de TTL e invalidación, y [Replicación y sharding](/system-design/replicacion-y-sharding) para los esquemas de partición.
+
+</Callout>
+
+### 4. El cliente es la mitad del sistema
+
+Si dejas que el navegador dispare una petición por tecla sin control, le pegas a tu backend 20 veces por búsqueda y además muestras resultados desordenados. Cuatro técnicas, todas visibles en el widget de arriba:
+
+1. **Debounce**: esperar una pausa corta (100–200 ms) antes de enviar. Quien escribe rápido manda una petición al final en vez de una por letra. El trade-off es latencia percibida: un debounce largo se siente lento. Algunos equipos mandan la primera tecla de inmediato y aplican debounce a las siguientes.
+2. **Caché local por prefijo**: si el usuario borra una letra, "cli" ya está en memoria. Con `Cache-Control` el navegador lo hace solo.
+3. **Cancelar y ordenar**: con red variable, la respuesta de "cl" puede llegar **después** que la de "cli" y pisarla. Cancela la petición anterior con `AbortController` y, por si acaso, descarta toda respuesta que no corresponda al texto actual.
+4. **Precarga**: el typeahead de Facebook descargaba al enfocar la caja una lista de amigos, páginas y grupos del usuario para responder muchas consultas sin ir al servidor. Para sugerencias globales puedes precargar el top de prefijos de 1 letra.
+
+```ts title="useSuggestions.ts"
+export function createSuggester(onResults: (q: string, items: string[]) => void) {
+  const cache = new Map<string, string[]>()
+  let timer: ReturnType<typeof setTimeout> | undefined
+  let inflight: AbortController | undefined
+  let latest = ''
+
+  return function onInput(raw: string) {
+    const q = raw.trim().toLowerCase()
+    latest = q
+    clearTimeout(timer)
+    if (!q) return onResults(q, [])
+
+    const hit = cache.get(q)
+    if (hit) return onResults(q, hit) // sin red
+
+    timer = setTimeout(async () => {
+      inflight?.abort() // la anterior ya no sirve
+      inflight = new AbortController()
+      try {
+        const res = await fetch(`/v1/suggestions?q=${encodeURIComponent(q)}`, {
+          signal: inflight.signal,
+        })
+        const { suggestions } = await res.json()
+        const items = suggestions.map((s: { text: string }) => s.text)
+        cache.set(q, items)
+        if (q === latest) onResults(q, items) // descarta respuestas viejas
+      } catch {
+        /* abortada o error de red: no mostramos nada nuevo */
+      }
+    }, 150)
+  }
+}
+```
+
+<Callout type="warn" title="El filtrado local engaña">
+
+Es tentador pedir el top-50 de "cl" y filtrar en el cliente para "cli", "clim"… Funciona solo si el top-5 de "cli" está dentro del top-50 de "cl", y eso no está garantizado: una consulta popular en "cli" puede no estar entre las 50 primeras de "cl". Úsalo como respuesta provisional mientras llega la real, no como reemplazo.
+
+</Callout>
+
+<Quiz
+  question="Un usuario escribe 'cli' rápido. Ves que a veces la lista muestra las sugerencias de 'cl' aunque el texto ya dice 'cli'. ¿Cuál es la causa más probable y la solución?"
+  options={[
+    { text: 'La respuesta de cl llegó después que la de cli; hay que cancelar la petición anterior y descartar respuestas que no correspondan al texto actual.', correct: true, why: 'Las peticiones HTTP no garantizan orden de llegada. AbortController más una comparación con el último texto resuelven la condición de carrera.' },
+    { text: 'El trie tiene mal calculado el top-k de cli.', why: 'Si así fuera, el error sería consistente, no intermitente. El síntoma de a veces apunta a una carrera entre respuestas.' },
+    { text: 'La CDN cacheó cli con la respuesta de cl.', why: 'La clave de caché incluye el parámetro q completo; cl y cli son entradas distintas.' },
+    { text: 'Falta aumentar el debounce a 1 segundo.', why: 'Reduce la probabilidad, pero no elimina la carrera, y degrada mucho la experiencia.' },
+  ]}
+/>
+
+## Cuellos de botella y trade-offs
+
+| Decisión | Ganas | Pagas |
+|---|---|---|
+| Top-k precalculado por nodo | Lookup O(p), latencia mínima | Memoria extra; actualizar exige reconstruir |
+| Índice reconstruido en lote | Lectura trivial y sin locks; rollback fácil | Frescura de horas; sin tendencias inmediatas |
+| Réplica completa en cada servidor | Cero coordinación; escala lineal | Cada máquina necesita RAM para 2× el índice (swap en caliente) |
+| Sharding por rango de prefijo | Índices que no caben en una máquina | Mapa de shards que mantener y rebalancear; prefijos cortos especiales |
+| Cache en CDN y navegador | Elimina gran parte del tráfico | Sugerencias hasta `max-age` desactualizadas; incompatible con personalización |
+| Debounce en cliente | Menos peticiones | Latencia percibida si se exagera |
+| Muestreo de logs | Pipeline más barato | Se pierde la cola larga (irrelevante para el top-k) |
+
+Otros puntos que vale la pena mencionar:
+
+- **Fallar en silencio.** Ponle un timeout corto a la llamada del cliente (por ejemplo 300 ms) y, si falla, oculta la lista. Un autocompletado lento es peor que ninguno.
+- **Versiones mezcladas.** Durante un despliegue, réplicas distintas pueden servir versiones distintas del índice. Para sugerencias es aceptable; si molesta, fija la versión por sesión con el `index_version` de la primera respuesta.
+- **Personalización** rompe la caché compartida. Si te la piden, la forma habitual es mezclar en el servidor un top-k global (cacheable) con un top-k pequeño del usuario (historial reciente), no construir un trie por persona.
+- **Idiomas y normalización.** Tildes, mayúsculas, la ñ, Unicode compuesto vs descompuesto. Normaliza igual en el builder y en el servicio, o "cómo" y "como" vivirán en ramas distintas.
+
+## Qué espera el entrevistador
+
+<Callout type="interview" title="Según el nivel">
+
+**Mid.** Requisitos claros, la estimación con el factor "una petición por tecla", un trie con lookup por prefijo y la idea de guardar el top-k en cada nodo. Separa lectura (servicio en memoria) de escritura (logs + agregación). Menciona caché en el navegador.
+
+**Senior.** Todo lo anterior, más: pipeline de datos completo con decaimiento temporal y filtros, reconstrucción por lotes con snapshots versionados y swap en caliente, la decisión replicar vs particionar justificada con el tamaño del índice, el problema del sharding por primera letra y cómo resolverlo, y el trabajo del cliente (debounce, cancelación, respuestas desordenadas). Discute Elasticsearch o Redis como alternativas con sus costos.
+
+**Staff.** Conduce la conversación hacia los trade-offs de producto: frescura vs costo (capa de tendencias con sketches y anti-abuso), privacidad (umbral de usuarios distintos, datos personales en sugerencias), moderación como requisito de primera clase, personalización sin romper la caché, métricas de calidad (tasa de selección de sugerencias, teclas ahorradas) y cómo experimentar con rankings (A/B por versión de índice). Sabe qué *no* construir: si el tráfico es de un catálogo interno, un completion suggester administrado alcanza.
+
+</Callout>
+
+<Takeaways>
+
+- El autocompletado es un problema de **top-k por prefijo** con una lectura ultra frecuente (una petición por tecla) y una escritura que tolera horas de retraso.
+- Guarda el **top-k precalculado en cada nodo** del trie: el lookup cuesta O(largo del prefijo) a cambio de memoria y de reconstruir en lote.
+- Separa los caminos: **logs → agregación con decaimiento → builder con filtros → snapshot versionado**, y servidores que solo leen un índice inmutable en memoria.
+- Con decenas de GB, **replica completo** antes de particionar; si particionas, hazlo por rangos de prefijo y sirve aparte los prefijos de 1–2 letras.
+- El cliente hace la mitad del trabajo: **debounce, caché por prefijo, cancelación y descarte de respuestas viejas**.
+- Moderación y privacidad (lista de bloqueo, mínimo de usuarios distintos) son requisitos, no extras.
+
+</Takeaways>
+
+## Fuentes y lecturas
+
+- Alex Xu, *System Design Interview – An Insider's Guide*, cap. "Design a Search Autocomplete System" (versión en línea en [ByteByteGo](https://bytebytego.com/courses/system-design-interview/design-a-search-autocomplete-system)).
+- [The Life of a Typeahead Query](https://engineering.fb.com/2010/05/17/web/the-life-of-a-typeahead-query/) — Facebook Engineering: caché en el navegador, agregadores y el umbral de 100 ms.
+- [Cleo: the open source technology behind LinkedIn's typeahead search](https://www.linkedin.com/blog/engineering/open-source/cleo-open-source-technology-behind-linkedins-typeahead-search) — índices invertidos, Bloom filters y typeahead sobre la red de contactos.
+- [Elasticsearch: search suggesters (completion suggester)](https://www.elastic.co/docs/reference/elasticsearch/rest-apis/search-suggesters) — documentación oficial, límites de memoria y contextos.
+- Mike McCandless, [Using Finite State Transducers in Lucene](https://blog.mikemccandless.com/2010/12/using-finite-state-transducers-in.html) — la estructura que hay debajo de los suggesters de Lucene.
+- Salvatore Sanfilippo (antirez), [Auto Complete with Redis](https://antirez.com/post/autocomplete-with-redis.html) — sorted sets por prefijo con `ZINCRBY`.
+- [Redis sorted sets](https://redis.io/docs/latest/develop/data-types/sorted-sets/) — documentación oficial.
+- [donnemartin/system-design-primer](https://github.com/donnemartin/system-design-primer) — fundamentos de caché, CDN y particionado.
+- En estos apuntes: [Estimaciones rápidas](/system-design/estimaciones), [Caché y CDN](/system-design/caching), [Replicación y sharding](/system-design/replicacion-y-sharding), [Colas y streaming](/system-design/colas-y-streaming).

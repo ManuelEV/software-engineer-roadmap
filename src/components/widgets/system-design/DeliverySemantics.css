@@ -1,0 +1,115 @@
+.ds-actions {
+  display: flex;
+  gap: var(--s-2);
+  align-items: center;
+}
+.ds-rows {
+  display: grid;
+  gap: var(--s-4);
+}
+.ds-row {
+  display: grid;
+  gap: var(--s-2);
+}
+.ds-rowlabel {
+  font-weight: 700;
+  font-size: 0.74rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.ds-empty {
+  margin: 0;
+  color: var(--ink-3);
+  font-style: italic;
+}
+.ds-line {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  position: relative;
+}
+.ds-line::before {
+  content: '';
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  top: 11px;
+  height: 5px;
+  border-radius: 3px;
+  background: var(--line);
+}
+.ds-stop {
+  position: relative;
+  display: grid;
+  justify-items: start;
+  gap: 6px;
+  padding-right: var(--s-2);
+}
+.ds-dot {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 3px solid var(--line);
+  background: var(--paper);
+  color: var(--paper);
+}
+.ds-stop.is-crash .ds-dot {
+  border-color: var(--bad);
+  background: var(--bad);
+}
+.ds-stop.is-dup .ds-dot {
+  border-color: var(--bad);
+}
+.ds-stop.is-skip .ds-dot {
+  border-color: var(--ok);
+}
+.ds-label {
+  display: grid;
+  font-size: 0.88rem;
+  font-weight: 600;
+  line-height: 1.25;
+  color: var(--ink);
+}
+.ds-label small {
+  font-weight: 400;
+  font-size: 0.78rem;
+  color: var(--ink-3);
+}
+.ds-stop.is-crash .ds-label,
+.ds-stop.is-dup .ds-label {
+  color: var(--bad);
+}
+.ds-stop.is-skip .ds-label {
+  color: var(--ok);
+}
+.ds-readout {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-4);
+  align-items: center;
+}
+@media (max-width: 420px) {
+  .ds-line {
+    grid-auto-flow: row;
+    gap: var(--s-2);
+  }
+  .ds-line::before {
+    left: 11px;
+    right: auto;
+    top: 12px;
+    bottom: 12px;
+    width: 5px;
+    height: auto;
+  }
+  .ds-stop {
+    grid-template-columns: 26px 1fr;
+    align-items: center;
+    gap: var(--s-2);
+  }
+}

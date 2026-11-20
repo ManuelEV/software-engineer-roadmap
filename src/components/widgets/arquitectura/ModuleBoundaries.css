@@ -1,0 +1,137 @@
+.mb-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+}
+.mb-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+  gap: var(--s-4);
+  align-items: center;
+}
+@media (max-width: 620px) {
+  .mb-layout {
+    grid-template-columns: 1fr;
+  }
+}
+.mb-svg {
+  width: 100%;
+  max-width: 420px;
+  height: auto;
+  display: block;
+  margin: 0 auto;
+}
+.mb-mod circle {
+  fill: var(--paper);
+  stroke: var(--rule-strong);
+  stroke-width: 3;
+  transition: stroke 200ms var(--ease-out);
+}
+.mb-mod text {
+  font-size: 14px;
+  font-weight: 700;
+  fill: var(--ink);
+}
+.mb-mod.is-next circle {
+  stroke: var(--line);
+  stroke-width: 4;
+}
+.mb-edge {
+  stroke: var(--ink-3);
+  stroke-width: 2.5;
+}
+.mb-edge.is-event {
+  stroke-dasharray: 2 5;
+  stroke-linecap: round;
+}
+.mb-edge.is-bad {
+  stroke: var(--bad);
+  stroke-dasharray: 7 5;
+}
+.mb-arrowhead {
+  fill: var(--ink-3);
+}
+.mb-arrowhead.is-bad {
+  fill: var(--bad);
+}
+.mb-pr {
+  display: grid;
+  gap: var(--s-2);
+  align-content: start;
+}
+.mb-pr__tag {
+  font-weight: 700;
+  font-size: 0.78rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--line-ink);
+}
+.mb-pr__title {
+  margin: 0;
+  font-family: var(--font-read);
+  font-size: var(--step-0);
+  line-height: 1.4;
+  color: var(--ink);
+}
+.mb-pr__meta {
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--step--1);
+  color: var(--ink-2);
+}
+.mb-pr__meta code {
+  font-family: var(--font-code);
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
+.mb-kind {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-weight: 700;
+  font-size: 0.78rem;
+}
+.mb-kind.is-ok {
+  background: color-mix(in oklab, var(--ok) 16%, var(--paper));
+  color: var(--ok);
+}
+.mb-kind.is-bad {
+  background: color-mix(in oklab, var(--bad) 14%, var(--paper));
+  color: var(--bad);
+}
+.mb-legend {
+  list-style: none;
+  margin: var(--s-2) 0 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2) var(--s-4);
+  font-size: 0.85rem;
+  color: var(--ink-3);
+}
+.mb-legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.mb-swatch {
+  display: inline-block;
+  width: 22px;
+  height: 0;
+  border-top: 3px solid var(--ink-3);
+}
+.mb-swatch.is-bad {
+  border-top: 3px dashed var(--bad);
+}
+.mb-readout {
+  display: grid;
+  gap: var(--s-3);
+}
+.mb-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-3) var(--s-5);
+}

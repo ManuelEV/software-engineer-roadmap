@@ -1,0 +1,118 @@
+.rl-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  align-items: center;
+  margin-bottom: var(--s-3);
+}
+.rl-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.rl-window {
+  fill: var(--line-tint-2);
+  stroke: var(--line);
+  stroke-width: 1.5;
+  stroke-dasharray: 4 4;
+}
+.rl-boundary {
+  stroke: var(--ink-3);
+  stroke-width: 2;
+  stroke-dasharray: 5 5;
+}
+.rl-axis {
+  stroke: var(--rule-strong);
+  stroke-width: 4;
+  stroke-linecap: round;
+}
+.rl-tick {
+  stroke: var(--paper);
+  stroke-width: 1.5;
+}
+.rl-tick.is-ok {
+  fill: var(--ok);
+}
+.rl-tick.is-ko {
+  fill: var(--bad);
+}
+.rl-label {
+  font-size: 14px;
+  fill: var(--ink-3);
+}
+.rl-label--window {
+  fill: var(--line-ink);
+  font-weight: 700;
+}
+.rl-state {
+  margin-top: var(--s-2);
+  font-family: var(--font-sign);
+  font-size: 0.92rem;
+  color: var(--ink-2);
+}
+.rl-state p,
+.rl-text {
+  margin: 0;
+}
+.rl-bucket {
+  display: grid;
+  gap: var(--s-2);
+}
+.rl-tokens {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.rl-token {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--line);
+  border: 3px solid var(--line);
+  transition: opacity 120ms linear;
+}
+.rl-queue {
+  position: relative;
+  height: 18px;
+  border-radius: 999px;
+  border: 2px solid var(--rule-strong);
+  background: var(--paper);
+  overflow: hidden;
+  max-width: 22rem;
+}
+.rl-queue__fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: var(--line);
+  transition: width 120ms linear;
+}
+.rl-readout {
+  display: grid;
+  gap: var(--s-2);
+}
+.rl-cmp {
+  display: grid;
+  gap: 2px;
+  font-size: 0.85rem;
+}
+.rl-cmp__row {
+  display: grid;
+  grid-template-columns: 1fr 3.5rem 3.5rem;
+  gap: var(--s-2);
+  padding: 2px 4px;
+  border-radius: var(--radius);
+  font-variant-numeric: tabular-nums;
+}
+.rl-cmp__row.is-on {
+  background: var(--line-tint);
+  font-weight: 700;
+}
+.rl-cmp__name {
+  color: var(--ink);
+}
+.rl-ok {
+  color: var(--ok);
+}
+.rl-ko {
+  color: var(--bad);
+}

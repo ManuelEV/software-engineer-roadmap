@@ -1,0 +1,121 @@
+.ivm-pick {
+  display: grid;
+  gap: 4px;
+}
+.ivm-pick select,
+.ivm-edit input {
+  min-height: 40px;
+  padding: 0 10px;
+  border: 1.5px solid var(--rule-strong);
+  border-radius: 8px;
+  background: var(--card);
+  color: var(--ink);
+  font-family: var(--font-code);
+  font-size: 0.86rem;
+}
+.ivm-edit {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 6px;
+  margin: 0;
+}
+.ivm-edit__lbl {
+  display: grid;
+  gap: 4px;
+}
+.ivm-edit input {
+  width: min(15rem, 62vw);
+}
+.ivm-edit input[aria-invalid='true'] {
+  border-color: var(--bad);
+}
+.ivm-edit__err {
+  flex-basis: 100%;
+  font-size: 0.82rem;
+  color: var(--bad);
+}
+
+.ivm-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-width: 520px;
+}
+.ivm-grid {
+  stroke: var(--rule);
+  stroke-width: 1;
+  stroke-dasharray: 2 4;
+}
+.ivm-tick {
+  font-size: 14px;
+  font-weight: 600;
+  fill: var(--ink-3);
+}
+.ivm-sep {
+  stroke: var(--rule-strong);
+  stroke-width: 1.5;
+}
+.ivm-lane {
+  font-family: var(--font-code);
+  font-size: 14px;
+  fill: var(--ink-3);
+}
+.ivm-lbl {
+  font-family: var(--font-code);
+  font-size: 14px;
+  font-weight: 600;
+  fill: var(--ink-2);
+}
+.ivm-lbl--m {
+  fill: var(--ink);
+  font-weight: 700;
+}
+
+.ivm-row rect {
+  fill: var(--card);
+  stroke: var(--rule-strong);
+  stroke-width: 1.5;
+  transition:
+    fill 220ms var(--ease-out),
+    stroke 220ms var(--ease-out),
+    opacity 220ms var(--ease-out);
+}
+.ivm-row.is-cur rect,
+.ivm-row.is-focus rect {
+  fill: var(--line);
+  stroke: var(--line);
+}
+.ivm-row.is-focus .ivm-lbl {
+  fill: var(--line-ink);
+  font-weight: 700;
+}
+.ivm-row.is-absorbed:not(.is-focus) rect,
+.ivm-row.is-opened:not(.is-focus) rect {
+  fill: var(--paper-3);
+  stroke: var(--rule-strong);
+  opacity: 0.7;
+}
+.ivm-row.is-absorbed:not(.is-focus) .ivm-lbl,
+.ivm-row.is-opened:not(.is-focus) .ivm-lbl {
+  fill: var(--ink-3);
+}
+
+.ivm-merged rect {
+  fill: var(--line-tint);
+  stroke: color-mix(in oklab, var(--line) 70%, var(--rule-strong));
+  stroke-width: 1.5;
+  transition:
+    fill 220ms var(--ease-out),
+    stroke 220ms var(--ease-out);
+}
+.ivm-merged.is-changed rect {
+  fill: color-mix(in oklab, var(--ok) 26%, var(--card));
+  stroke: var(--ok);
+  stroke-width: 2;
+}
+.ivm-guide line {
+  stroke: var(--line-ink);
+  stroke-width: 1.5;
+  stroke-dasharray: 5 4;
+}

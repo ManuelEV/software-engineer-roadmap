@@ -1,0 +1,927 @@
+import { ListReversal } from '../../components/widgets/entrevistas/ListReversal'
+import { FloydCycle } from '../../components/widgets/entrevistas/FloydCycle'
+import { LruCache } from '../../components/widgets/entrevistas/LruCache'
+
+En el trabajo diario casi nunca escribes una lista enlazada a mano. Usas el arreglo dinámico de tu lenguaje, que suele ser más rápido incluso para insertar en el medio de colecciones chicas, porque sus elementos están contiguos en memoria y aprovechan la caché del procesador. Entonces, ¿por qué siguen apareciendo en entrevistas?
+
+Porque son el ejercicio más puro de **manipular punteros sin perderse**. Un problema de listas no tiene trucos matemáticos: tiene tres o cuatro variables que apuntan a nodos y un orden exacto en que hay que reasignarlas. Si te equivocas en una línea, pierdes la mitad de la lista o creas un ciclo. El entrevistador ve, en diez líneas, si razonas sobre estado mutable con cuidado, si piensas en la lista vacía y en la de un nodo, y si sabes explicar por qué tu código no se rompe. Y además las listas sí existen en producción, aunque escondidas: el `LinkedHashMap` de Java, las listas intrusivas del kernel de Linux y casi toda **caché LRU** tienen una lista doblemente enlazada por dentro. Este tema termina armando una.
+
+<Sketch
+  width={640}
+  height={300}
+  caption="Todo el tema en un dibujo: una lista es una cadena de flechas, e invertirla es dar vuelta una flecha por vez sin soltar el resto de la cadena."
+  items={[
+    { type: 'text', x: 24, y: 34, text: 'una lista: nodos y flechas', size: 22, tone: 'pencil' },
+    { type: 'box', x: 60, y: 60, w: 70, h: 48, label: '1', font: 'code' },
+    { type: 'arrow', from: [132, 84], to: [196, 84] },
+    { type: 'box', x: 200, y: 60, w: 70, h: 48, label: '2', font: 'code' },
+    { type: 'arrow', from: [272, 84], to: [336, 84] },
+    { type: 'box', x: 340, y: 60, w: 70, h: 48, label: '3', font: 'code' },
+    { type: 'arrow', from: [412, 84], to: [466, 84] },
+    { type: 'text', x: 472, y: 92, text: 'None', size: 20, font: 'code', tone: 'muted' },
+    { type: 'box', x: 60, y: 170, w: 70, h: 48, label: '1', font: 'code', tone: 'line', fill: true },
+    { type: 'box', x: 200, y: 170, w: 70, h: 48, label: '2', font: 'code', tone: 'line', fill: true },
+    { type: 'arrow', from: [198, 194], to: [134, 194], tone: 'line', label: 'se da vuelta', labelAt: [166, 158] },
+    { type: 'box', x: 340, y: 170, w: 70, h: 48, label: '3', font: 'code' },
+    { type: 'arrow', from: [272, 194], to: [336, 194], dashed: true, tone: 'bad' },
+    { type: 'cross', x: 304, y: 194, size: 18 },
+    { type: 'text', x: 95, y: 254, text: 'prev', size: 20, font: 'code', anchor: 'middle', tone: 'line' },
+    { type: 'text', x: 235, y: 254, text: 'curr', size: 20, font: 'code', anchor: 'middle' },
+    { type: 'text', x: 375, y: 254, text: 'nxt', size: 20, font: 'code', anchor: 'middle', tone: 'ok' },
+    { type: 'text', x: 446, y: 186, text: ['nxt sostiene', 'el resto: sin él,', 'el 3 se pierde'], size: 19, tone: 'pencil' },
+  ]}
+/>
+
+## El nodo, los punteros y el nodo dummy
+
+Una lista simplemente enlazada es una cadena de nodos donde cada uno guarda un valor y una referencia al siguiente. La lista "es" su primer nodo, la cabeza (`head`); el último apunta a `None`.
+
+<CodeTabs>
+
+```java title="Java"
+class ListNode {
+    int val;
+    ListNode next;
+    ListNode() {}
+    ListNode(int val) { this.val = val; }
+    ListNode(int val, ListNode next) { this.val = val; this.next = next; }
+}
+```
+
+```python title="Python"
+class ListNode:
+    def __init__(self, val: int = 0, next: "ListNode | None" = None):
+        self.val = val
+        self.next = next
+```
+
+```ts title="TypeScript"
+class ListNode {
+  constructor(
+    public val: number = 0,
+    public next: ListNode | null = null,
+  ) {}
+}
+```
+
+</CodeTabs>
+
+Lo que cuesta cada operación es lo que hace que una lista sirva o no:
+
+| Operación | Arreglo dinámico | Lista enlazada |
+|---|---|---|
+| Acceder al elemento `i` | O(1) | O(n): hay que caminar |
+| Insertar o borrar al principio | O(n): se corre todo | O(1) |
+| Insertar o borrar **teniendo ya el nodo** | O(n) | O(1) en una lista doble |
+| Recorrer en orden | Rápido, memoria contigua | Más lento, un salto de puntero por nodo |
+| Memoria extra | Capacidad sobrante | Un puntero (o dos) por elemento |
+
+La fila clave es la tercera. Una lista gana cuando **ya tienes la referencia al nodo** y quieres sacarlo o moverlo sin tocar el resto. Eso es exactamente lo que necesita una caché LRU. Para el resto de los casos, un arreglo suele ganar. Lo desarrollamos más en [estructuras de datos](/casos/estructuras-de-datos).
+
+### El nodo dummy (o centinela)
+
+Muchos bugs de listas vienen de que la cabeza es un caso especial: si borras el primer nodo, cambia lo que devuelves; si construyes una lista nueva, el primer nodo no tiene "anterior" al que engancharlo. El truco es crear un nodo falso antes de la cabeza:
+
+<CodeTabs>
+
+```java title="Java"
+ListNode dummy = new ListNode(0, head);   // dummy.next es la cabeza real
+// … trabajar sin preguntar nunca "¿es el primero?"
+return dummy.next;                        // la cabeza puede haber cambiado
+```
+
+```python title="Python"
+dummy = ListNode(0, head)   # dummy.next es la cabeza real
+# … trabajar sin preguntar nunca "¿es el primero?"
+return dummy.next           # la cabeza puede haber cambiado
+```
+
+```ts title="TypeScript"
+const dummy = new ListNode(0, head) // dummy.next es la cabeza real
+// … trabajar sin preguntar nunca "¿es el primero?"
+return dummy.next // la cabeza puede haber cambiado
+```
+
+</CodeTabs>
+
+Con el dummy, todo nodo real tiene un anterior y el código no necesita ramas para el primero. En una lista doble se usan **dos** centinelas, `head` y `tail`, y así ningún nodo real tiene `prev` ni `next` en `None`.
+
+<Callout type="idea" title="Las señales del patrón">
+
+Si el problema dice **"lista enlazada"** y además "en el lugar" u "O(1) memoria", piensa en reasignar punteros, no en copiar a un arreglo. Si dice **"mitad"**, **"ciclo"** o **"k-ésimo desde el final"**, piensa en **dos punteros**: uno rápido y uno lento, o dos con un desfase fijo. Si tienes que **construir** una lista o **borrar** nodos que pueden incluir la cabeza, empieza con un **dummy**.
+
+</Callout>
+
+<Callout type="interview">
+
+Lo que el entrevistador está evaluando en problemas de listas: que **dibujes** antes de escribir (tres cajas y flechas en la pizarra o en un comentario), que digas qué apunta a qué después de cada línea, y que pruebes con la lista vacía, con un nodo y con dos. Copiar la lista a un arreglo, resolver ahí y reconstruirla suele funcionar, pero usa O(n) memoria y esquiva justo lo que querían ver. Puedes mencionarlo como fuerza bruta.
+
+</Callout>
+
+## Reverse Linked List
+
+**Enunciado.** Dada la cabeza de una lista, inviértela y devuelve la nueva cabeza. Ejemplo: `1 → 2 → 3 → 4 → 5` → `5 → 4 → 3 → 2 → 1`.
+
+**Qué preguntar.** ¿Puedo modificar la lista original o necesitas una copia? ¿Puede venir vacía? ¿Lo quieres iterativo o recursivo?
+
+**Fuerza bruta.** Recorrer, guardar los valores en un arreglo y reescribirlos al revés. O(n) tiempo y O(n) memoria. O meter los nodos en una pila. Funciona, pero no aprovecha que puedes reapuntar las flechas.
+
+**Idea clave.** Recorre la lista una vez y da vuelta **una flecha por nodo**. El problema es que, en cuanto haces `curr.next = prev`, pierdes el camino hacia el resto de la lista. Por eso necesitas tres punteros: `prev` (la parte ya invertida), `curr` (el nodo que estás dando vuelta) y `nxt` (la copia del siguiente que te salva). El invariante: **`prev` es la cabeza de la lista ya invertida y `curr` la cabeza de lo que falta**.
+
+En el widget, mira cómo cambia una sola flecha por vuelta y cómo las dos cadenas de abajo ("desde prev" y "desde curr") se reparten los nodos. Después cambia a "Sin guardar next": es el bug más común en esta pregunta, y ves exactamente qué se pierde.
+
+<ListReversal />
+
+<CodeTabs>
+
+```java title="Java"
+public ListNode reverseList(ListNode head) {
+    ListNode prev = null, curr = head;
+    while (curr != null) {
+        ListNode nxt = curr.next;   // 1. guardar el resto
+        curr.next = prev;           // 2. dar vuelta la flecha
+        prev = curr;                // 3. avanzar los dos punteros
+        curr = nxt;
+    }
+    return prev;                    // prev es la nueva cabeza
+}
+```
+
+```python title="Python"
+def reverse_list(head: ListNode | None) -> ListNode | None:
+    prev, curr = None, head
+    while curr:
+        nxt = curr.next        # 1. guardar el resto
+        curr.next = prev       # 2. dar vuelta la flecha
+        prev = curr            # 3. avanzar los dos punteros
+        curr = nxt
+    return prev                # prev es la nueva cabeza
+```
+
+```ts title="TypeScript"
+function reverseList(head: ListNode | null): ListNode | null {
+  let prev: ListNode | null = null
+  let curr = head
+  while (curr) {
+    const nxt: ListNode | null = curr.next // 1. guardar el resto
+    curr.next = prev // 2. dar vuelta la flecha
+    prev = curr // 3. avanzar
+    curr = nxt
+  }
+  return prev
+}
+```
+
+</CodeTabs>
+
+**Complejidad.** O(n) tiempo, O(1) memoria.
+
+### La versión recursiva
+
+La pregunta para pensar recursivamente es "¿qué devuelve la función para el resto de la lista?". Si `reverse(head.next)` ya invirtió todo lo que viene después de `head`, el nodo `head.next` quedó como **último** de esa lista invertida. Solo falta colgar `head` detrás de él y cortar la flecha vieja.
+
+<CodeTabs>
+
+```java title="Java"
+public ListNode reverseList(ListNode head) {
+    if (head == null || head.next == null) return head;   // vacía o un nodo: ya está
+    ListNode newHead = reverseList(head.next);
+    head.next.next = head;      // el que era mi siguiente ahora me apunta
+    head.next = null;           // y yo paso a ser el último
+    return newHead;
+}
+```
+
+```python title="Python"
+def reverse_list(head: ListNode | None) -> ListNode | None:
+    if head is None or head.next is None:
+        return head                    # vacía o un nodo: ya está invertida
+    new_head = reverse_list(head.next)
+    head.next.next = head              # el que era mi siguiente ahora me apunta
+    head.next = None                   # y yo paso a ser el último
+    return new_head
+```
+
+```ts title="TypeScript"
+function reverseList(head: ListNode | null): ListNode | null {
+  if (head === null || head.next === null) return head
+  const newHead = reverseList(head.next)
+  head.next.next = head
+  head.next = null
+  return newHead
+}
+```
+
+</CodeTabs>
+
+Es elegante, pero usa **O(n) de pila**. Con una lista de 100.000 nodos, Python supera su límite de recursión por defecto (1.000) y JavaScript puede desbordar la pila. En Java, con la pila por defecto de la JVM, una lista de 200.000 nodos termina en `StackOverflowError` (lo probamos; el límite exacto depende del tamaño de pila del hilo, `-Xss`). Decirlo sin que te pregunten es exactamente el tipo de comentario que suma: "la recursiva es más corta, pero en producción usaría la iterativa".
+
+**Casos borde y errores.** Lista vacía y de un nodo (el `while` no entra o entra una vez). Olvidar `head.next = None` en la recursiva deja un ciclo entre los dos primeros nodos. Devolver `head` en lugar de `prev` en la iterativa: `head` ahora es el último.
+
+**Variantes.** Reverse Linked List II (invertir solo entre las posiciones `left` y `right`: dummy, avanzar hasta `left - 1` y aplicar el mismo bucle `right - left + 1` veces) y Reverse Nodes in k-Group (la misma idea por bloques, Hard).
+
+<Quiz
+  question="En la versión iterativa, ¿qué pasa si escribes curr.next = prev antes de guardar nxt = curr.next?"
+  options={[
+    { text: 'Nada: Python evalúa curr.next antes de asignar.', why: 'Son dos sentencias distintas. Cuando llega la segunda, curr.next ya fue reemplazado por prev.' },
+    { text: 'Se pierde la referencia al resto de la lista: curr retrocede a prev y el bucle termina con un solo nodo invertido.', correct: true, why: 'El único puntero al nodo siguiente era curr.next, y lo pisaste. Los nodos restantes quedan inalcanzables. Es justo lo que muestra el modo "Sin guardar next" del widget.' },
+    { text: 'Se crea un ciclo infinito.', why: 'No hay ciclo: en la primera vuelta prev es None, así que curr pasa a None y el bucle termina enseguida.' },
+  ]}
+/>
+
+## Merge Two Sorted Lists
+
+**Enunciado.** Dadas dos listas ordenadas, fusiónalas en una sola lista ordenada reutilizando sus nodos. Ejemplo: `1 → 2 → 4` y `1 → 3 → 4` → `1 → 1 → 2 → 3 → 4 → 4`.
+
+**Qué preguntar.** ¿Alguna puede estar vacía? ¿Hay repetidos? ¿Debo crear nodos nuevos o puedo reutilizar los existentes?
+
+**Fuerza bruta.** Juntar todos los valores en un arreglo, ordenar y construir una lista nueva: O((n + m) log(n + m)) y memoria extra.
+
+**Idea clave.** Es el paso de fusión de *merge sort*. Mira las dos cabezas, engancha la menor al final de la lista resultado y avanza en esa lista. El **dummy** evita preguntar "¿es el primer nodo del resultado?" en cada vuelta.
+
+<CodeTabs>
+
+```java title="Java"
+public ListNode mergeTwoLists(ListNode a, ListNode b) {
+    ListNode dummy = new ListNode();
+    ListNode tail = dummy;              // último nodo del resultado
+    while (a != null && b != null) {
+        if (a.val <= b.val) {           // <= mantiene el orden original: es estable
+            tail.next = a;
+            a = a.next;
+        } else {
+            tail.next = b;
+            b = b.next;
+        }
+        tail = tail.next;
+    }
+    tail.next = (a != null) ? a : b;    // lo que sobra ya está ordenado
+    return dummy.next;
+}
+```
+
+```python title="Python"
+def merge_two_lists(a: ListNode | None, b: ListNode | None) -> ListNode | None:
+    dummy = ListNode()
+    tail = dummy                      # último nodo del resultado
+    while a and b:
+        if a.val <= b.val:            # <= mantiene el orden original: es estable
+            tail.next = a
+            a = a.next
+        else:
+            tail.next = b
+            b = b.next
+        tail = tail.next
+    tail.next = a if a else b         # lo que sobra ya está ordenado
+    return dummy.next
+```
+
+```ts title="TypeScript"
+function mergeTwoLists(a: ListNode | null, b: ListNode | null): ListNode | null {
+  const dummy = new ListNode()
+  let tail = dummy
+  while (a && b) {
+    if (a.val <= b.val) {
+      tail.next = a
+      a = a.next
+    } else {
+      tail.next = b
+      b = b.next
+    }
+    tail = tail.next!
+  }
+  tail.next = a ?? b
+  return dummy.next
+}
+```
+
+</CodeTabs>
+
+**Complejidad.** O(n + m) tiempo, O(1) memoria extra (reutilizas los nodos).
+
+**Casos borde.** Una o ambas vacías: el `while` no entra y `tail.next` toma la otra. Olvidar enganchar el resto al final es el error típico: pierdes la cola de la lista más larga.
+
+**Variantes.** Merge k Sorted Lists, con un heap de las k cabezas (lo vemos en [heaps y top-K](/casos/heaps-y-top-k)), y Sort List, que es merge sort completo sobre una lista: buscar la mitad con rápido y lento, ordenar cada mitad y fusionar.
+
+## Rápido y lento: la mitad y los ciclos
+
+Dos punteros que avanzan a distinta velocidad responden preguntas sobre la **forma** de la lista sin memoria extra.
+
+### Middle of the Linked List
+
+Si `fast` avanza dos nodos por cada uno de `slow`, cuando `fast` llega al final `slow` está en la mitad.
+
+<CodeTabs>
+
+```java title="Java"
+public ListNode middleNode(ListNode head) {
+    ListNode slow = head, fast = head;
+    while (fast != null && fast.next != null) {
+        slow = slow.next;
+        fast = fast.next.next;
+    }
+    return slow;        // con largo par, devuelve el segundo del medio
+}
+```
+
+```python title="Python"
+def middle_node(head: ListNode | None) -> ListNode | None:
+    slow = fast = head
+    while fast and fast.next:
+        slow = slow.next
+        fast = fast.next.next
+    return slow        # con largo par, devuelve el segundo del medio
+```
+
+```ts title="TypeScript"
+function middleNode(head: ListNode | null): ListNode | null {
+  let slow = head
+  let fast = head
+  while (fast && fast.next) {
+    slow = slow!.next
+    fast = fast.next.next
+  }
+  return slow
+}
+```
+
+</CodeTabs>
+
+O(n) tiempo, O(1) memoria. Pregunta siempre **qué mitad quieren con largo par**. Con esta condición sale la segunda (`[1, 2, 3, 4]` → `3`), que es lo que pide LeetCode. Si necesitas la primera, por ejemplo para cortar la lista en dos como en Reorder List, cambia la condición a `while fast.next and fast.next.next`.
+
+### Linked List Cycle
+
+**Enunciado.** ¿La lista tiene un ciclo, es decir, algún nodo al que se vuelve siguiendo `next`?
+
+**Fuerza bruta.** Guardar cada nodo visitado en un conjunto y parar si uno se repite. O(n) tiempo y **O(n) memoria**. Es una respuesta perfectamente válida para empezar; el seguimiento será "¿y con O(1) memoria?".
+
+**Idea clave.** Algoritmo de Floyd, la tortuga y la liebre. Si no hay ciclo, `fast` llega a `None`. Si lo hay, los dos terminan dando vueltas dentro del ciclo y `fast` alcanza a `slow` por detrás. **¿Por qué no se lo puede saltar?** Una vez que ambos están en el ciclo, en cada paso `slow` avanza 1 y `fast` avanza 2, así que la distancia de `fast` hasta `slow` **baja exactamente en 1**. Una distancia que baja de a 1 pasa por 0 sí o sí. Y como esa distancia es menor que el largo del ciclo, se encuentran antes de que `slow` complete una vuelta: el total es O(n).
+
+<CodeTabs>
+
+```java title="Java"
+public boolean hasCycle(ListNode head) {
+    ListNode slow = head, fast = head;
+    while (fast != null && fast.next != null) {
+        slow = slow.next;
+        fast = fast.next.next;
+        if (slow == fast) return true;    // misma referencia, no mismo valor
+    }
+    return false;
+}
+```
+
+```python title="Python"
+def has_cycle(head: ListNode | None) -> bool:
+    slow = fast = head
+    while fast and fast.next:
+        slow = slow.next
+        fast = fast.next.next
+        if slow is fast:          # identidad, no igualdad de valores
+            return True
+    return False
+```
+
+```ts title="TypeScript"
+function hasCycle(head: ListNode | null): boolean {
+  let slow = head
+  let fast = head
+  while (fast && fast.next) {
+    slow = slow!.next
+    fast = fast.next.next
+    if (slow === fast) return true
+  }
+  return false
+}
+```
+
+</CodeTabs>
+
+Un detalle que el entrevistador puede pinchar: se compara **identidad** de nodos (`is` en Python, `===` en TypeScript, `==` en Java), no valores. Dos nodos distintos pueden tener el mismo `val`.
+
+<Callout type="tip" title="En Java">
+
+Para nodos, `slow == fast` es exactamente lo que quieres: compara referencias. El mismo `==` es una trampa con `Integer`: `map.get(a) == map.get(b)` compara dos objetos, y "funciona" solo entre −128 y 127 porque `Integer.valueOf` reutiliza esas cajas. Para valores en caja, usa `equals` o compara `int`.
+
+</Callout>
+
+### Linked List Cycle II: dónde empieza el ciclo
+
+Ahora quieren el **nodo** donde empieza el ciclo. La solución tiene una segunda fase sorprendente: cuando `slow` y `fast` se encuentran, devuelves `slow` a la cabeza, mueves los dos **de a uno**, y el punto donde vuelven a encontrarse es la entrada.
+
+**Por qué funciona.** Llama μ al largo de la cola (los nodos antes del ciclo), λ al largo del ciclo y `m` a cuántos pasos dentro del ciclo avanzó `slow` hasta el encuentro. Al encontrarse:
+
+1. `slow` caminó `k = μ + m` pasos y `fast` caminó `2k`.
+2. Están en el mismo nodo, así que lo que `fast` caminó de más, `2k − k = k`, son vueltas completas: **`k` es múltiplo de λ**.
+3. Entonces `μ + m` es múltiplo de λ. Dicho de otra forma: si desde el punto de encuentro avanzas μ pasos, completas una cantidad entera de vueltas contando desde la entrada, y **caes justo en la entrada**.
+4. Y desde la cabeza, avanzar μ pasos también te deja en la entrada. Por eso, si sueltas un puntero desde la cabeza y otro desde el encuentro, ambos de a uno, llegan juntos a la entrada.
+
+<Sketch
+  width={640}
+  height={300}
+  caption="Por qué funciona la fase 2: slow caminó μ + m pasos y fast el doble. La diferencia son vueltas completas, así que desde el encuentro M faltan exactamente μ pasos (más vueltas enteras) para llegar a la entrada E."
+  items={[
+    { type: 'circle', x: 60, y: 150, r: 14 },
+    { type: 'arrow', from: [76, 150], to: [114, 150] },
+    { type: 'circle', x: 130, y: 150, r: 14 },
+    { type: 'arrow', from: [146, 150], to: [184, 150] },
+    { type: 'circle', x: 200, y: 150, r: 14 },
+    { type: 'arrow', from: [216, 150], to: [244, 150] },
+    { type: 'circle', x: 340, y: 150, r: 90 },
+    { type: 'circle', x: 250, y: 150, r: 8, tone: 'line', fill: true },
+    { type: 'text', x: 222, y: 126, text: 'E', size: 22, tone: 'line' },
+    { type: 'line', points: [[60, 186], [250, 186]], tone: 'line' },
+    { type: 'text', x: 150, y: 214, text: 'μ', size: 24, anchor: 'middle', tone: 'line' },
+    { type: 'path', d: 'M 236 150 A 104 104 0 0 1 413 76', len: 260, tone: 'line' },
+    { type: 'text', x: 296, y: 36, text: 'm', size: 24, tone: 'line' },
+    { type: 'circle', x: 404, y: 86, r: 8, tone: 'warn', fill: true },
+    { type: 'text', x: 420, y: 72, text: 'M', size: 22, tone: 'warn' },
+    { type: 'text', x: 460, y: 140, text: ['slow: μ + m', 'fast: 2(μ + m)'], size: 20, font: 'code' },
+    { type: 'text', x: 460, y: 212, text: ['la diferencia', 'son vueltas'], size: 19, tone: 'pencil' },
+    { type: 'text', x: 24, y: 284, text: 'desde M, avanzar μ pasos cae justo en E', size: 20, tone: 'line' },
+  ]}
+/>
+
+No necesitas saber μ ni λ: el algoritmo los "mide" solo. Prueba el widget con las distintas formas de lista. Fíjate en el contador de distancia de la fase 1 y en la nota del primer paso de la fase 2, que hace esta cuenta con los números del ejemplo.
+
+<FloydCycle />
+
+<CodeTabs>
+
+```java title="Java"
+public ListNode detectCycle(ListNode head) {
+    ListNode slow = head, fast = head;
+    while (fast != null && fast.next != null) {
+        slow = slow.next;
+        fast = fast.next.next;
+        if (slow == fast) break;
+    }
+    if (fast == null || fast.next == null) return null;   // llegó al final: sin ciclo
+    slow = head;                                          // fase 2
+    while (slow != fast) {
+        slow = slow.next;
+        fast = fast.next;
+    }
+    return slow;
+}
+```
+
+```python title="Python"
+def detect_cycle(head: ListNode | None) -> ListNode | None:
+    slow = fast = head
+    while fast and fast.next:
+        slow = slow.next
+        fast = fast.next.next
+        if slow is fast:
+            break
+    if not fast or not fast.next:
+        return None                 # fast llegó al final: no hay ciclo
+    slow = head                     # fase 2
+    while slow is not fast:
+        slow = slow.next
+        fast = fast.next
+    return slow
+```
+
+```ts title="TypeScript"
+function detectCycle(head: ListNode | null): ListNode | null {
+  let slow = head
+  let fast = head
+  while (fast && fast.next) {
+    slow = slow!.next
+    fast = fast.next.next
+    if (slow === fast) break
+  }
+  if (!fast || !fast.next) return null
+  slow = head
+  while (slow !== fast) {
+    slow = slow!.next
+    fast = fast!.next
+  }
+  return slow
+}
+```
+
+</CodeTabs>
+
+**Complejidad.** O(n) tiempo, O(1) memoria. **Casos borde.** Lista vacía, un nodo sin ciclo, un nodo que se apunta a sí mismo, y ciclo que empieza en la cabeza (μ = 0: la fase 2 no da ningún paso). **Repregunta frecuente:** Find the Duplicate Number, que es este mismo algoritmo aplicado a un arreglo donde `nums[i]` se interpreta como "el siguiente de `i`".
+
+<Quiz
+  question="Un compañero propone que fast avance 3 nodos por paso en vez de 2, 'para encontrar el ciclo más rápido'. ¿Qué pasa?"
+  options={[
+    { text: 'Funciona igual y encuentra el ciclo en menos pasos.', why: 'Con velocidad relativa 2, la distancia baja de a 2 por paso. Si el ciclo tiene largo par y la distancia es impar, nunca llega exactamente a 0.' },
+    { text: 'Ya no hay garantía de que se encuentren: la distancia baja de a 2 y puede saltarse el 0.', correct: true, why: 'La garantía de Floyd viene de que la distancia baja exactamente en 1 por paso. Con un ciclo de largo 4 y distancia inicial 1, la distancia pasa por 1, 3, 1, 3… y nunca es 0. Además, la cuenta de la fase 2 deja de valer.' },
+    { text: 'Funciona, pero la fase 2 necesita que slow avance de a 3.', why: 'El problema aparece antes: la fase 1 puede no terminar nunca.' },
+  ]}
+/>
+
+## Remove Nth Node From End of List
+
+**Enunciado.** Borra el n-ésimo nodo contando desde el final y devuelve la cabeza. Ejemplo: `1 → 2 → 3 → 4 → 5`, `n = 2` → `1 → 2 → 3 → 5`.
+
+**Qué preguntar.** ¿`n` siempre es válido (entre 1 y el largo)? ¿Puede pedirme borrar la cabeza?
+
+**Fuerza bruta.** Dos pasadas: contar el largo `L` y después caminar `L − n` nodos para borrar el siguiente. Es O(n) y está bien; la repregunta típica es "¿en una sola pasada?".
+
+**Idea clave.** Dos punteros con un **desfase fijo de `n` nodos**. Adelantas `fast` n posiciones; después mueves los dos juntos. Cuando `fast` llega al último nodo, `slow` está justo **antes** del que hay que borrar. El dummy resuelve el caso en que el nodo a borrar es la cabeza: `slow` se queda en el dummy.
+
+<CodeTabs>
+
+```java title="Java"
+public ListNode removeNthFromEnd(ListNode head, int n) {
+    ListNode dummy = new ListNode(0, head);
+    ListNode fast = dummy, slow = dummy;
+    for (int i = 0; i < n; i++) fast = fast.next;   // desfase de n nodos
+    while (fast.next != null) {                     // fast se detiene en el último
+        fast = fast.next;
+        slow = slow.next;
+    }
+    slow.next = slow.next.next;                     // saltar el n-ésimo desde el final
+    return dummy.next;
+}
+```
+
+```python title="Python"
+def remove_nth_from_end(head: ListNode | None, n: int) -> ListNode | None:
+    dummy = ListNode(0, head)
+    fast = slow = dummy
+    for _ in range(n):              # desfase de n nodos
+        fast = fast.next
+    while fast.next:                # fast se detiene en el último
+        fast = fast.next
+        slow = slow.next
+    slow.next = slow.next.next      # saltar el n-ésimo desde el final
+    return dummy.next
+```
+
+```ts title="TypeScript"
+function removeNthFromEnd(head: ListNode | null, n: number): ListNode | null {
+  const dummy = new ListNode(0, head)
+  let fast: ListNode = dummy
+  let slow: ListNode = dummy
+  for (let i = 0; i < n; i++) fast = fast.next!
+  while (fast.next) {
+    fast = fast.next
+    slow = slow.next!
+  }
+  slow.next = slow.next!.next
+  return dummy.next
+}
+```
+
+</CodeTabs>
+
+**Complejidad.** O(n) tiempo, O(1) memoria. **Casos borde.** Lista de un nodo con `n = 1` (resultado vacío), `n` igual al largo (se borra la cabeza: por eso el dummy). Un off-by-one típico es detener `fast` en `None` en vez de en el último nodo: entonces `slow` queda **sobre** el nodo a borrar, no antes, y en una lista simple no puedes borrar un nodo sin su anterior.
+
+## Reorder List: tres técnicas en un problema
+
+**Enunciado.** Reordena `L0 → L1 → … → Ln` como `L0 → Ln → L1 → Ln−1 → L2 → …`, en el lugar. Ejemplo: `1 → 2 → 3 → 4 → 5` → `1 → 5 → 2 → 4 → 3`.
+
+**Fuerza bruta.** Copiar los nodos a un arreglo y usar dos índices desde los extremos para reenlazarlos. O(n) tiempo y O(n) memoria: es una buena primera respuesta.
+
+**Idea clave.** El orden pedido es "intercalar la primera mitad con la segunda mitad al revés". Eso se descompone en tres problemas que ya resolviste: **buscar la mitad** (rápido y lento), **invertir** la segunda mitad e **intercalar** dos listas. Decir esa descomposición en voz alta antes de codificar es la mitad de la nota.
+
+<CodeTabs>
+
+```java title="Java"
+public void reorderList(ListNode head) {
+    if (head == null || head.next == null) return;
+    // 1. Mitad: slow termina en el último nodo de la primera mitad.
+    ListNode slow = head, fast = head.next;
+    while (fast != null && fast.next != null) {
+        slow = slow.next;
+        fast = fast.next.next;
+    }
+    ListNode second = slow.next;
+    slow.next = null;                       // cortar en dos listas
+    // 2. Invertir la segunda mitad.
+    ListNode prev = null;
+    while (second != null) {
+        ListNode nxt = second.next;
+        second.next = prev;
+        prev = second;
+        second = nxt;
+    }
+    // 3. Intercalar.
+    ListNode first = head;
+    second = prev;
+    while (second != null) {
+        ListNode n1 = first.next, n2 = second.next;
+        first.next = second;
+        second.next = n1;
+        first = n1;
+        second = n2;
+    }
+}
+```
+
+```python title="Python"
+def reorder_list(head: ListNode | None) -> None:
+    if not head or not head.next:
+        return
+    # 1. Mitad: slow termina en el último nodo de la primera mitad.
+    slow, fast = head, head.next
+    while fast and fast.next:
+        slow = slow.next
+        fast = fast.next.next
+    second = slow.next
+    slow.next = None                      # cortar en dos listas
+    # 2. Invertir la segunda mitad.
+    prev = None
+    while second:
+        nxt = second.next
+        second.next = prev
+        prev, second = second, nxt
+    # 3. Intercalar.
+    first, second = head, prev
+    while second:
+        n1, n2 = first.next, second.next
+        first.next = second
+        second.next = n1
+        first, second = n1, n2
+```
+
+```ts title="TypeScript"
+function reorderList(head: ListNode | null): void {
+  if (!head || !head.next) return
+  // 1. Mitad
+  let slow: ListNode = head
+  let fast: ListNode | null = head.next
+  while (fast && fast.next) {
+    slow = slow.next!
+    fast = fast.next.next
+  }
+  let second: ListNode | null = slow.next
+  slow.next = null
+  // 2. Invertir la segunda mitad
+  let prev: ListNode | null = null
+  while (second) {
+    const nxt: ListNode | null = second.next
+    second.next = prev
+    prev = second
+    second = nxt
+  }
+  // 3. Intercalar
+  let first: ListNode | null = head
+  second = prev
+  while (second) {
+    const n1: ListNode | null = first!.next
+    const n2: ListNode | null = second.next
+    first!.next = second
+    second.next = n1
+    first = n1
+    second = n2
+  }
+}
+```
+
+</CodeTabs>
+
+**Complejidad.** O(n) tiempo, O(1) memoria. **Error típico:** no cortar la lista después de la mitad (`slow.next = None`). La primera mitad sigue apuntando a la segunda y el intercalado crea un ciclo. **Variante:** Palindrome Linked List, con las mismas dos primeras piezas y una comparación en lugar del intercalado.
+
+## LRU Cache: hash map más lista doble
+
+**Enunciado.** Diseña una caché con capacidad fija que soporte `get(key)` y `put(key, value)` en **O(1)**. Cuando se llena, desaloja la clave usada hace más tiempo (*least recently used*). Leer una clave cuenta como usarla.
+
+Es una de las preguntas más frecuentes de toda la entrevista técnica porque une diseño de datos y punteros, y porque es exactamente lo que hacen las cachés reales cuando se quedan sin memoria (repasa las políticas de desalojo en [caching](/system-design/caching)).
+
+**Qué preguntar.** ¿Qué devuelve `get` si no está? (−1.) ¿`put` de una clave existente actualiza el valor y cuenta como uso? (Sí.) ¿Concurrencia? (Normalmente no; si la piden, un lock alrededor de cada operación es lo mínimo.) ¿Puedo usar `LinkedHashMap`, `OrderedDict` o el `Map` del lenguaje? (Pregúntalo: a veces sí, y la solución cabe en diez líneas; casi siempre quieren ver la versión a mano.)
+
+**Fuerza bruta.** Un diccionario con un timestamp de último uso por clave. `get` y `put` son O(1), pero desalojar exige buscar el mínimo timestamp: O(n). O una lista con el orden de uso: mover una clave al frente es O(n) porque primero hay que encontrarla.
+
+**Idea clave.** Necesitas dos cosas en O(1): **encontrar** una clave y **mover o sacar** su entrada del orden de uso. Ninguna estructura sola hace las dos. Juntas sí:
+
+- Un **hash map** `clave → nodo` (`HashMap` en Java, `dict` en Python, `Map` en TypeScript) encuentra el nodo en O(1).
+- Una **lista doblemente enlazada** ordenada por uso permite sacar ese nodo en O(1) (tiene `prev` y `next`, así que sus vecinos se reenganchan sin recorrer nada) y meterlo al frente en O(1). El menos usado siempre está al final.
+- Dos **centinelas** (`head` y `tail`) eliminan todos los casos especiales de lista vacía o de primer y último nodo.
+
+Recorre las operaciones en el widget. Fíjate en por qué el nodo guarda **también la clave**: al desalojar el último de la lista, necesitas saber qué entrada borrar del mapa.
+
+<LruCache />
+
+<CodeTabs>
+
+```java title="Java"
+class LRUCache {
+    private static class Node {
+        int key, val;
+        Node prev, next;
+        Node(int key, int val) { this.key = key; this.val = val; }
+    }
+
+    private final int cap;
+    private final Map<Integer, Node> map = new HashMap<>();
+    private final Node head = new Node(0, 0), tail = new Node(0, 0);   // centinelas
+
+    public LRUCache(int capacity) {
+        cap = capacity;
+        head.next = tail;
+        tail.prev = head;
+    }
+
+    private void remove(Node node) {
+        node.prev.next = node.next;
+        node.next.prev = node.prev;
+    }
+
+    private void addFront(Node node) {
+        node.prev = head;
+        node.next = head.next;
+        head.next.prev = node;
+        head.next = node;
+    }
+
+    public int get(int key) {
+        Node node = map.get(key);
+        if (node == null) return -1;
+        remove(node);
+        addFront(node);                 // leer también es usar
+        return node.val;
+    }
+
+    public void put(int key, int value) {
+        Node old = map.get(key);
+        if (old != null) remove(old);
+        Node node = new Node(key, value);
+        map.put(key, node);
+        addFront(node);
+        if (map.size() > cap) {
+            Node lru = tail.prev;       // el menos usado
+            remove(lru);
+            map.remove(lru.key);
+        }
+    }
+}
+```
+
+```python title="Python"
+class Node:
+    def __init__(self, key: int = 0, val: int = 0):
+        self.key, self.val = key, val
+        self.prev: Node | None = None
+        self.next: Node | None = None
+
+
+class LRUCache:
+    def __init__(self, capacity: int):
+        self.cap = capacity
+        self.map: dict[int, Node] = {}
+        self.head, self.tail = Node(), Node()     # centinelas
+        self.head.next, self.tail.prev = self.tail, self.head
+
+    def _remove(self, node: Node) -> None:
+        node.prev.next = node.next
+        node.next.prev = node.prev
+
+    def _add_front(self, node: Node) -> None:
+        node.prev, node.next = self.head, self.head.next
+        self.head.next.prev = node
+        self.head.next = node
+
+    def get(self, key: int) -> int:
+        if key not in self.map:
+            return -1
+        node = self.map[key]
+        self._remove(node)
+        self._add_front(node)                     # leer también es usar
+        return node.val
+
+    def put(self, key: int, value: int) -> None:
+        if key in self.map:
+            self._remove(self.map[key])
+        node = Node(key, value)
+        self.map[key] = node
+        self._add_front(node)
+        if len(self.map) > self.cap:
+            lru = self.tail.prev                  # el menos usado
+            self._remove(lru)
+            del self.map[lru.key]
+```
+
+```ts title="TypeScript"
+class DNode {
+  prev: DNode | null = null
+  next: DNode | null = null
+  constructor(
+    public key = 0,
+    public val = 0,
+  ) {}
+}
+
+class LRUCache {
+  private map = new Map<number, DNode>()
+  private head = new DNode() // centinelas
+  private tail = new DNode()
+
+  constructor(private cap: number) {
+    this.head.next = this.tail
+    this.tail.prev = this.head
+  }
+
+  private remove(node: DNode) {
+    node.prev!.next = node.next
+    node.next!.prev = node.prev
+  }
+
+  private addFront(node: DNode) {
+    node.prev = this.head
+    node.next = this.head.next
+    this.head.next!.prev = node
+    this.head.next = node
+  }
+
+  get(key: number): number {
+    const node = this.map.get(key)
+    if (!node) return -1
+    this.remove(node)
+    this.addFront(node)
+    return node.val
+  }
+
+  put(key: number, value: number): void {
+    const old = this.map.get(key)
+    if (old) this.remove(old)
+    const node = new DNode(key, value)
+    this.map.set(key, node)
+    this.addFront(node)
+    if (this.map.size > this.cap) {
+      const lru = this.tail.prev!
+      this.remove(lru)
+      this.map.delete(lru.key)
+    }
+  }
+}
+```
+
+</CodeTabs>
+
+**Complejidad.** O(1) tiempo para `get` y `put`; O(capacidad) memoria.
+
+**Casos borde y errores.** Capacidad 1. `put` de una clave existente: si no sacas el nodo viejo, quedan dos nodos con la misma clave en la lista y el desalojo posterior borra la entrada equivocada del mapa. Olvidar mover el nodo en `get`. Desalojar **antes** de insertar cuando la clave ya existía (desalojas algo que no hacía falta).
+
+**La versión corta.** En Java, `LinkedHashMap` ya es un mapa con una lista doble adentro: créalo con orden de acceso (`new LinkedHashMap<>(cap, 0.75f, true)`), así cada `get` mueve la clave al final, y sobrescribe `removeEldestEntry` para que devuelva `size() > cap`: desaloja solo. En Python, `collections.OrderedDict` ya es un mapa con orden: `move_to_end(key)` en cada uso y `popitem(last=False)` para desalojar. En JavaScript, `Map` recuerda el orden de inserción: para "usar" una clave la borras y la vuelves a insertar, y la más vieja es `map.keys().next().value`. Si te dejan usarlas, explica igual qué hay por dentro.
+
+**Repreguntas.** "¿Y si hay muchos hilos?" (un lock global es simple pero serializa todo; se puede particionar la caché por hash de la clave, con un lock por partición). "¿Y LFU en vez de LRU?" (LFU Cache, Hard: un mapa de frecuencia a lista doble y la frecuencia mínima actual). "¿Cómo lo hace Redis?" (aproxima LRU muestreando unas pocas claves en lugar de mantener una lista exacta, para ahorrar memoria).
+
+<Quiz
+  question="En la caché LRU, ¿por qué hace falta que la lista sea doblemente enlazada?"
+  options={[
+    { text: 'Para poder recorrerla de atrás hacia adelante al imprimirla.', why: 'Recorrer al revés no es una operación que la caché necesite.' },
+    { text: 'Porque sacar un nodo del medio exige reenganchar a su anterior, y con una lista simple encontrar el anterior cuesta O(n).', correct: true, why: 'El mapa te da el nodo, pero no su anterior. Con prev, el nodo sabe quién lo apunta y se desengancha en O(1). Es la fila "insertar o borrar teniendo ya el nodo" de la tabla del principio.' },
+    { text: 'Para que el mapa pueda guardar dos punteros por clave.', why: 'El mapa guarda un solo puntero al nodo; los dos punteros viven en el nodo.' },
+  ]}
+/>
+
+## Errores típicos
+
+- **Perder el resto de la lista** por reasignar `next` antes de guardarlo.
+- **Desreferenciar `None`**: `fast.next.next` sin comprobar `fast.next`; `slow.next.next` cuando `slow.next` puede ser `None`.
+- **Olvidar el caso de la cabeza** al borrar o construir. El dummy lo elimina.
+- **No cortar** una lista que partiste en dos: aparece un ciclo.
+- **Comparar valores en vez de nodos** al detectar ciclos o intersecciones.
+- **Devolver la cabeza vieja** después de invertir o borrar.
+
+La defensa es la misma para todos: dibuja tres o cuatro cajas, ejecuta tu código a mano sobre el dibujo y prueba la lista vacía, la de un nodo y la de dos.
+
+## Problemas típicos de este patrón
+
+| Problema (LeetCode) | Técnica | Dificultad |
+|---|---|---|
+| [Reverse Linked List](https://leetcode.com/problems/reverse-linked-list/) | Tres punteros; recursión | Easy |
+| [Merge Two Sorted Lists](https://leetcode.com/problems/merge-two-sorted-lists/) | Dummy + fusión | Easy |
+| [Middle of the Linked List](https://leetcode.com/problems/middle-of-the-linked-list/) | Rápido y lento | Easy |
+| [Linked List Cycle](https://leetcode.com/problems/linked-list-cycle/) | Floyd | Easy |
+| [Palindrome Linked List](https://leetcode.com/problems/palindrome-linked-list/) | Mitad + invertir + comparar | Easy |
+| [Linked List Cycle II](https://leetcode.com/problems/linked-list-cycle-ii/) | Floyd, fase 2 | Medium |
+| [Remove Nth Node From End of List](https://leetcode.com/problems/remove-nth-node-from-end-of-list/) | Dos punteros con desfase + dummy | Medium |
+| [Reorder List](https://leetcode.com/problems/reorder-list/) | Mitad + invertir + intercalar | Medium |
+| [Add Two Numbers](https://leetcode.com/problems/add-two-numbers/) | Dummy + acarreo | Medium |
+| [Copy List with Random Pointer](https://leetcode.com/problems/copy-list-with-random-pointer/) | Mapa de nodo viejo a nuevo | Medium |
+| [LRU Cache](https://leetcode.com/problems/lru-cache/) | Hash map + lista doble | Medium |
+| [Merge k Sorted Lists](https://leetcode.com/problems/merge-k-sorted-lists/) | Heap de cabezas | Hard |
+| [Reverse Nodes in k-Group](https://leetcode.com/problems/reverse-nodes-in-k-group/) | Invertir por bloques | Hard |
+
+Si tienes poco tiempo: Reverse Linked List (las dos versiones), Merge Two Sorted Lists, Linked List Cycle II, Remove Nth Node From End y LRU Cache. Con esas cinco ya practicaste las cuatro técnicas.
+
+<Takeaways>
+
+- Las listas aparecen en entrevistas porque prueban **manipulación de punteros y casos borde**, no porque las uses a diario. Su fuerza real es borrar o mover un nodo en O(1) cuando ya lo tienes.
+- **Dibuja antes de codificar** y prueba con lista vacía, un nodo y dos nodos.
+- **Nodo dummy** cuando construyes una lista o puedes borrar la cabeza; **dos centinelas** en una lista doble.
+- Invertir: guarda `next`, da vuelta la flecha, avanza. La recursiva es elegante pero usa O(n) de pila.
+- **Rápido y lento** encuentra la mitad y los ciclos. En Floyd, la distancia baja de a 1 por paso, por eso no se la saltan; la fase 2 funciona porque μ + m es múltiplo del largo del ciclo.
+- **Desfase fijo de n** para "el n-ésimo desde el final".
+- **LRU = hash map + lista doble con centinelas**: el mapa encuentra, la lista ordena por uso, y ambos en O(1).
+
+</Takeaways>
+
+## Fuentes y lecturas
+
+- Donald Knuth, *The Art of Computer Programming*, vol. 2, sección 3.1, ejercicio 6: el método de detección de ciclos que se atribuye a Robert Floyd.
+- Wikipedia, [Cycle detection](https://en.wikipedia.org/wiki/Cycle_detection) (Floyd y la variante de Brent, con la demostración).
+- Oracle, [LinkedHashMap (Java SE 21)](https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/LinkedHashMap.html): una lista doble dentro de un mapa, con `removeEldestEntry` para armar una caché LRU.
+- Python, [collections.OrderedDict](https://docs.python.org/3/library/collections.html#collections.OrderedDict) (`move_to_end` y `popitem`).
+- MDN, [Map](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Map): el orden de inserción garantizado que permite la versión corta en JavaScript.
+- Redis, [Key eviction](https://redis.io/docs/latest/develop/reference/eviction/): cómo Redis aproxima LRU con muestreo.
+- Tech Interview Handbook, [Linked list cheatsheet](https://www.techinterviewhandbook.org/algorithms/linked-list/).
+- Las páginas de LeetCode enlazadas en la tabla de problemas.

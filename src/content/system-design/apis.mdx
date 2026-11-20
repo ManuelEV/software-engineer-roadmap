@@ -1,0 +1,307 @@
+import { PaginationDemo } from '../../components/widgets/system-design/PaginationDemo'
+import { RealtimeTimeline } from '../../components/widgets/system-design/RealtimeTimeline'
+
+La API es el contrato entre tu sistema y el mundo. En una entrevista de system design aparece temprano, justo después de los requisitos y las entidades, y el entrevistador la usa para ver dos cosas: si entendiste qué tiene que hacer el sistema y si sabes diseñar interfaces que sobrevivan a la red real, donde las peticiones se pierden, se repiten y llegan tarde.
+
+Este tema cubre las decisiones que más se preguntan. REST frente a gRPC y GraphQL. Cómo paginar sin duplicar resultados. Cómo hacer que un reintento no cobre dos veces. Cómo versionar. Y cómo empujar datos al cliente en tiempo real con polling, long polling, SSE o WebSockets. La regla es la de siempre: cada opción tiene un costo, y lo que se evalúa es que lo nombres.
+
+## REST bien hecho: recursos, verbos y códigos
+
+REST modela el sistema como **recursos** (sustantivos) que se manipulan con los verbos de HTTP. La URL dice *qué* y el método dice *qué le haces*: `POST /pedidos` crea un pedido, `GET /pedidos/123` lo lee, `PATCH /pedidos/123` lo modifica. Las acciones que no encajan en CRUD se modelan como sub-recursos o como recursos propios: `POST /pedidos/123/cancelacion` se lee mejor que `POST /cancelarPedido`.
+
+Lo que más importa en una entrevista no es la pureza REST, sino la **semántica de los métodos**, porque decide qué se puede reintentar sin miedo:
+
+| Método | Uso | ¿Seguro? | ¿Idempotente? |
+| --- | --- | --- | --- |
+| `GET` | Leer | Sí | Sí |
+| `PUT` | Reemplazar completo | No | Sí |
+| `DELETE` | Borrar | No | Sí |
+| `POST` | Crear o ejecutar una acción | No | **No** |
+| `PATCH` | Modificar parcialmente | No | No necesariamente |
+
+*Seguro* significa que no cambia estado. <Term def="Aplicar la operación una o N veces deja el sistema en el mismo estado.">Idempotente</Term> significa que repetirla no produce efectos extra: borrar el pedido 123 dos veces deja el mismo resultado que borrarlo una vez (aunque la segunda respuesta sea un 404). `POST` es el problema: si el cliente no recibe la respuesta de `POST /pagos` y reintenta, puede cobrar dos veces. Lo resolvemos más abajo con claves de idempotencia.
+
+Los códigos de estado son parte del contrato. Con estos cubres casi todo:
+
+- **2xx**: `200 OK`, `201 Created` (con `Location`), `202 Accepted` (lo procesaré en segundo plano; devuelve un id para consultar el estado), `204 No Content`.
+- **4xx, culpa del cliente, no reintentes igual**: `400` (petición mal formada), `401` (no autenticado), `403` (autenticado pero sin permiso), `404`, `409 Conflict` (choca con el estado actual, por ejemplo una versión vieja), `422` (sintaxis válida pero semánticamente inválida), `429 Too Many Requests` (con `Retry-After`).
+- **5xx, culpa del servidor, reintentar puede funcionar**: `500`, `502`/`504` (un proxy no obtuvo respuesta del backend), `503 Service Unavailable` (sobrecarga o mantenimiento; también con `Retry-After`).
+
+```http title="Crear un pedido"
+POST /v1/pedidos HTTP/1.1
+Authorization: Bearer eyJhbGciOi...
+Idempotency-Key: 6f1c2a9e-3b7d-4f0a-9c51-2d8e7b4a1f30
+Content-Type: application/json
+
+{ "items": [{ "productoId": "p_881", "cantidad": 2 }], "direccionId": "d_17" }
+
+HTTP/1.1 201 Created
+Location: /v1/pedidos/ord_7Hk2
+```
+
+<Callout type="interview" title="Cómo presentar la API">
+
+Lista **un endpoint por requisito funcional**, no veinte. Para un feed: `POST /posts`, `GET /feed?cursor=…`, `POST /follows`. Di de dónde sale el usuario: "el `userId` viene del token de autenticación, no del body; si lo aceptara en el body, cualquiera podría publicar en nombre de otro". Menciona la paginación en cada lista y la idempotencia en cada operación que mueve dinero o crea recursos. Con eso muestras criterio sin perder cinco minutos.
+
+</Callout>
+
+## REST, gRPC o GraphQL
+
+No hay ganador universal. Cada estilo optimiza algo distinto, y lo normal en una empresa grande es usar los tres: REST para la API pública, gRPC entre microservicios y GraphQL como capa de agregación para los clientes.
+
+<Compare>
+<Option title="REST + JSON" verdict="API pública por defecto">
+
+Recursos sobre HTTP con JSON. Lo entiende cualquier cliente, se depura con `curl` y aprovecha toda la infraestructura HTTP: caché de CDN y navegador para `GET`, proxies, códigos de estado.
+
+**Costo:** el cliente recibe lo que el servidor decidió (*over-fetching*) o tiene que hacer varias llamadas para armar una pantalla (*under-fetching*). JSON es verboso y el contrato suele vivir en documentación (OpenAPI) en lugar de forzarse en el compilador.
+
+</Option>
+<Option title="gRPC" verdict="Entre servicios internos">
+
+RPC con contratos en Protocol Buffers sobre HTTP/2. Mensajes binarios compactos, código cliente y servidor generado y tipado, multiplexación de muchas llamadas en una conexión, y cuatro modos: unario, *streaming* del servidor, del cliente y bidireccional. Trae **deadlines** de serie: el cliente dice cuánto está dispuesto a esperar y la llamada termina con `DEADLINE_EXCEEDED`.
+
+**Costo:** los navegadores no hablan gRPC directo (necesitas gRPC-Web o un proxy), los payloads binarios no se leen a simple vista y el balanceo es más delicado: una conexión HTTP/2 larga hace que un balanceador L4 mande todo a una sola instancia.
+
+</Option>
+<Option title="GraphQL" verdict="Muchos clientes, pantallas ricas">
+
+Un solo endpoint con un esquema tipado; el cliente pide exactamente los campos que necesita y obtiene en una ida lo que en REST costaría varias. Ideal cuando la web, iOS y Android necesitan formas distintas de los mismos datos.
+
+**Costo:** la caché HTTP casi no ayuda (todo es `POST /graphql`). Un resolver ingenuo genera el problema **N+1** (un query por cada elemento de una lista), que se resuelve con *batching* tipo DataLoader. Una consulta maliciosa puede pedir un árbol enorme, así que necesitas límites de profundidad y de costo por consulta.
+
+</Option>
+</Compare>
+
+Una heurística útil: **gRPC cuando controlas ambos extremos y te importa la latencia; REST cuando no controlas al cliente; GraphQL cuando el cuello de botella es la cantidad de idas y vueltas del cliente**, no el servidor.
+
+<Quiz
+  question="Diseñas la comunicación entre el servicio de pedidos y el de inventario, ambos internos, con miles de llamadas por segundo y requisitos estrictos de latencia. ¿Qué eliges?"
+  options={[
+    { text: 'gRPC con contratos protobuf y deadlines.', correct: true, why: 'Controlas ambos extremos, ganas serialización binaria, tipos generados, multiplexación HTTP/2 y deadlines propagables. Recuerda balancear por petición (L7 o del lado del cliente), no por conexión.' },
+    { text: 'GraphQL, para que pedidos pida solo los campos que necesita.', why: 'GraphQL brilla cuando hay muchos clientes con necesidades distintas. Entre dos servicios con un contrato estable, agrega una capa de resolución y análisis de consultas que no aporta nada.' },
+    { text: 'REST con JSON, porque se cachea en la CDN.', why: 'Las llamadas internas de reserva de inventario no son cacheables (son escrituras y lecturas de estado cambiante), y JSON cuesta más CPU y bytes. REST funcionaría, pero no es la mejor opción con esos requisitos.' },
+    { text: 'WebSockets, para mantener una conexión abierta.', why: 'WebSocket es para empujar mensajes a clientes (navegadores, apps). Entre servicios, gRPC ya mantiene conexiones HTTP/2 persistentes y agrega contrato, deadlines y códigos de error.' },
+  ]}
+/>
+
+## Paginación: offset contra cursor
+
+Cualquier endpoint que devuelve una lista que puede crecer necesita paginación. Hay dos familias.
+
+**Offset**: `GET /posts?page=3&size=20` se traduce a `LIMIT 20 OFFSET 40`. Es simple, permite saltar a la página 50 y mostrar "página 3 de 80". Tiene dos problemas serios:
+
+1. **Rendimiento**: la base de datos no puede saltar 40 000 filas; tiene que recorrerlas y descartarlas. `OFFSET` profundo cuesta proporcional al offset, aunque solo devuelvas 20 filas.
+2. **Corrección con datos vivos**: si entre la página 1 y la 2 alguien inserta un post arriba, todo se corre una posición y vuelves a ver el último elemento de la página anterior. Si alguien borra uno, te saltas un elemento sin enterarte.
+
+**Cursor** (también llamada *keyset* o *seek*): el cliente devuelve un marcador de dónde se quedó, y la consulta filtra por él: `WHERE id < :ultimo_id ORDER BY id DESC LIMIT 20`. Con un índice sobre la columna de orden, cada página cuesta lo mismo sin importar cuán profundo estés, y las inserciones arriba no afectan lo que falta por leer.
+
+Pruébalo: pasa un par de páginas, inserta posts nuevos o borra uno que ya viste, y sigue paginando.
+
+<PaginationDemo />
+
+Detalles que separan una respuesta buena de una excelente:
+
+- **El cursor debe ser único y estable.** Ordenar solo por `created_at` falla si dos posts tienen el mismo timestamp. Usa una tupla `(created_at, id)` y compara por tupla: `WHERE (created_at, id) < (:ts, :id)`.
+- **Hazlo opaco.** Devuelve `next_cursor` como un string codificado (por ejemplo base64 de `{"ts":…,"id":…}`) para poder cambiar la implementación sin romper clientes. GraphQL estandarizó esto con el modelo de *connections* de Relay (`edges`, `cursor`, `pageInfo.endCursor`, `hasNextPage`).
+- **Lo que pierdes**: no puedes saltar a una página arbitraria ni mostrar el total barato. Para un feed infinito o una API de exportación da igual; para una tabla de backoffice con "ir a página 37", offset sigue siendo razonable si la tabla es chica.
+
+```sql title="Keyset pagination con desempate"
+-- índice: CREATE INDEX ON posts (autor_id, created_at DESC, id DESC);
+SELECT id, texto, created_at
+FROM posts
+WHERE autor_id = $1
+  AND (created_at, id) < ($2, $3)   -- valores decodificados del cursor
+ORDER BY created_at DESC, id DESC
+LIMIT 20;
+```
+
+<Callout type="tip">
+
+Si el ID ya es ordenable por tiempo (Snowflake, UUIDv7, ULID; los vemos en *IDs, búsqueda, geo y blobs*), el propio ID sirve como cursor y te ahorras la tupla.
+
+</Callout>
+
+## Idempotencia: que reintentar sea seguro
+
+En una red real, el cliente no puede distinguir "la petición nunca llegó" de "llegó, se procesó y se perdió la respuesta". Ante un timeout la única opción sensata es reintentar, y por eso toda operación que se reintenta tiene que ser idempotente. Para `GET`, `PUT` y `DELETE` viene gratis. Para `POST` necesitas una **clave de idempotencia**.
+
+El patrón lo popularizó Stripe y hoy hay un borrador del IETF que estandariza el header `Idempotency-Key`. Funciona así: el cliente genera un identificador único (un UUIDv4 está bien) **por operación lógica**, no por intento, y lo manda en cada reintento. El servidor guarda la clave junto con el resultado y, si la ve de nuevo, devuelve el resultado guardado en lugar de ejecutar otra vez.
+
+<FlowDiagram
+  caption="Un cobro con clave de idempotencia: la respuesta se pierde, el cliente reintenta y no se cobra dos veces."
+  nodes={[
+    { id: 'app', label: 'App', kind: 'mobile', x: 0, y: 1, sub: 'genera la clave' },
+    { id: 'api', label: 'API de pagos', kind: 'service', x: 1.5, y: 1 },
+    { id: 'idem', label: 'Claves', kind: 'db', x: 3, y: 0, sub: 'clave → estado, respuesta' },
+    { id: 'psp', label: 'Procesador', kind: 'payment', x: 3, y: 2, sub: 'cobro con tarjeta' },
+  ]}
+  edges={[
+    { from: 'app', to: 'api', label: 'POST /pagos' },
+    { from: 'api', to: 'idem' },
+    { from: 'api', to: 'psp' },
+  ]}
+  steps={[
+    { title: '1. Primera petición', body: <>La app genera <code>Idempotency-Key: 6f1c…</code> al tocar "Pagar" y la envía con el body.</>, active: ['app', 'api'], flow: ['app-api'] },
+    { title: '2. Reserva la clave', body: <>La API inserta la clave con estado <code>en_curso</code> de forma atómica (<code>INSERT … ON CONFLICT DO NOTHING</code>). Si ya existía en curso, responde <code>409</code>; si existía con otro body, <code>422</code>.</>, active: ['api', 'idem'], flow: ['api-idem'] },
+    { title: '3. Ejecuta el efecto', body: 'Cobra al procesador, pasando a su vez una clave derivada: la idempotencia tiene que llegar hasta el último sistema con efectos.', active: ['api', 'psp'], flow: ['api-psp'] },
+    { title: '4. Guarda la respuesta', body: <>Marca la clave como <code>completada</code> con el código y el body. La respuesta <code>201</code> sale… y se pierde por un corte de red.</>, active: ['api', 'idem'], flow: ['api-idem'] },
+    { title: '5. Reintento', body: 'La app no recibió nada y reintenta con la misma clave. La API la encuentra completada y devuelve la respuesta guardada. Un solo cobro.', active: ['app', 'api', 'idem'], flow: ['app-api', 'api-idem'] },
+  ]}
+/>
+
+Tres detalles que suelen fallar:
+
+1. **Atomicidad.** Registrar la clave y aplicar el efecto tienen que ser una unidad. Si guardas la clave en Redis y el pedido en Postgres, un crash entre ambos te deja en un estado ambiguo. Lo más robusto es guardar la clave en la misma transacción que el cambio de negocio.
+2. **Mismo significado en la respuesta.** El reintento debe recibir una respuesta equivalente a la original, no "ya existe". AWS describe exactamente esto para el `ClientToken` de EC2: un error de "ya existe" confundiría al cliente, que no sabría si su operación se aplicó.
+3. **Retención.** Las claves no se guardan para siempre. Stripe documenta que puede purgarlas después de al menos 24 horas; después de eso, la misma clave crea una operación nueva. El cliente tiene que reintentar dentro de esa ventana.
+
+```ts title="src/pagos/idempotencia.ts"
+export async function conIdempotencia(clave: string, hashBody: string, ejecutar: () => Promise<Respuesta>) {
+  return db.transaction(async (tx) => {
+    const previa = await tx.claves.buscarParaActualizar(clave) // SELECT … FOR UPDATE
+    if (previa?.estado === 'completada') {
+      if (previa.hashBody !== hashBody) throw new HttpError(422, 'Clave reutilizada con otro body')
+      return previa.respuesta // mismo resultado, sin repetir el efecto
+    }
+    if (previa?.estado === 'en_curso') throw new HttpError(409, 'Petición original todavía en curso')
+    await tx.claves.insertar({ clave, hashBody, estado: 'en_curso' })
+    const respuesta = await ejecutar() // escribe en la misma transacción
+    await tx.claves.completar(clave, respuesta)
+    return respuesta
+  })
+}
+```
+
+<Quiz
+  question="Un cliente reintenta POST /pagos con la misma Idempotency-Key, pero ahora el monto es distinto. ¿Qué debería hacer el servidor?"
+  options={[
+    { text: 'Rechazar con un error de validación (422 en el borrador del IETF).', correct: true, why: 'La clave identifica una operación concreta. Reutilizarla con otro payload es un error del cliente, y aplicar cualquiera de las dos versiones sería adivinar su intención.' },
+    { text: 'Devolver la respuesta guardada del primer intento.', why: 'Eso ocultaría un bug grave del cliente: creería que cobró el monto nuevo cuando en realidad se aplicó el viejo.' },
+    { text: 'Procesar el nuevo monto, porque el body cambió.', why: 'Entonces la clave no protege nada: un cliente con un bug que regenera el body cobraría dos veces.' },
+    { text: 'Responder 409 Conflict.', why: 'En el borrador del IETF, 409 se reserva para cuando la petición original con esa clave todavía se está procesando. El payload distinto es otro caso.' },
+  ]}
+/>
+
+## Versionado y evolución del contrato
+
+Una API pública no se puede cambiar a la fuerza: hay apps móviles instaladas que llamarán al endpoint viejo durante años. Por eso la primera regla es **evolucionar sin romper**: agregar campos opcionales y endpoints nuevos es seguro; quitar o renombrar campos, cambiar tipos o volver obligatorio un parámetro no lo es. Los clientes, por su parte, deben ignorar campos que no conocen.
+
+Cuando no queda otra que romper, versionas. Las variantes comunes:
+
+- **En la ruta**: `/v1/pedidos`, `/v2/pedidos`. Explícito, fácil de enrutar en el gateway y de ver en los logs. Es lo más común.
+- **En un header o media type**: `Accept: application/vnd.tienda.v2+json`. URLs más limpias, pero más difícil de probar y de cachear.
+- **Por fecha, fijada por cliente**: Stripe asigna a cada cuenta la versión vigente cuando hizo su primera llamada y permite elegir otra por petición. Internamente, transforma las respuestas hacia atrás versión por versión.
+
+Para retirar una versión, avisa con tiempo y de forma legible por máquinas: el header `Sunset` (RFC 8594) indica la fecha en que el recurso dejará de responder.
+
+## Tiempo real: polling, long polling, SSE y WebSockets
+
+HTTP clásico es *request/response*: el cliente pregunta y el servidor contesta. Cuando el servidor es el que tiene novedades (un mensaje de chat, el conductor que se mueve en el mapa, el precio que cambia) necesitas una forma de empujarlas. Hay cuatro técnicas, y el simulador las corre sobre los mismos eventos:
+
+<RealtimeTimeline />
+
+- **Short polling**: el cliente pregunta cada *N* segundos. Trivial de implementar y funciona con cualquier infraestructura, pero tiene una tensión que no se resuelve: si bajas *N* para reducir la latencia, multiplicas las peticiones vacías; si lo subes, los eventos esperan hasta *N* segundos.
+- **Long polling**: el cliente pregunta y el servidor **retiene** la petición hasta que hay un evento o vence un timeout; al recibir respuesta, el cliente vuelve a preguntar de inmediato. La latencia baja a casi un RTT y casi no hay respuestas vacías. A cambio, el servidor mantiene muchas peticiones colgadas y en ráfagas el cliente gasta un ciclo de reconexión por evento.
+- **Server-Sent Events (SSE)**: una sola petición HTTP que el servidor deja abierta y por la que escribe eventos en formato `text/event-stream`. El navegador reconecta solo (el campo `retry` ajusta la espera) y, si cada evento lleva `id`, al reconectar envía el último recibido para retomar donde se quedó. Es **unidireccional**, servidor a cliente. Con HTTP/1.1 los navegadores limitan a 6 conexiones por dominio, contando todas las pestañas; con HTTP/2 se multiplexan.
+- **WebSocket**: arranca como HTTP y se convierte, mediante `Upgrade` y `101 Switching Protocols` (RFC 6455), en un canal **bidireccional** de mensajes sobre TCP. Es la opción para chat, juegos o edición colaborativa, donde el cliente también envía con frecuencia. Pero pierdes casi todo lo que HTTP te daba gratis: reconexión, retomar desde el último mensaje, autenticación por petición y caché pasan a ser tu responsabilidad.
+
+| | Dirección | Latencia | Carga en el servidor | Cuándo |
+| --- | --- | --- | --- | --- |
+| Short polling | cliente → servidor | hasta *N* s | muchas peticiones vacías | Novedades raras y tolerancia a demora (estado de un reporte) |
+| Long polling | cliente → servidor | ~1 RTT | peticiones colgadas | Cuando SSE/WS no pasan por la red del cliente |
+| SSE | servidor → cliente | ~½ RTT | una conexión por cliente | Notificaciones, feeds, progreso, tokens de un LLM |
+| WebSocket | ambas | ~½ RTT | una conexión con estado | Chat, presencia, juegos, colaboración |
+
+### El problema real: escalar conexiones con estado
+
+Con SSE o WebSockets el servidor deja de ser *stateless*: cada usuario está conectado a una máquina concreta. Eso trae tres consecuencias que el entrevistador espera que menciones:
+
+1. **Enrutar el mensaje a la máquina correcta.** Si Ana está conectada al servidor 1 y Beto le escribe desde el servidor 2, el servidor 2 tiene que hacer llegar el mensaje al 1. La solución típica es un registro de conexiones (usuario → servidor) o un bus pub/sub (Redis Pub/Sub, Kafka) por el que todos los servidores de conexión escuchan.
+2. **Balanceo.** Las conexiones viven minutos u horas, así que el reparto se desbalancea cuando agregas máquinas. Hace falta drenar conexiones de forma gradual en cada despliegue y prever la "manada" de reconexiones cuando cae un servidor (con jitter en el cliente; lo vemos en *Confiabilidad*).
+3. **Separar conexión de lógica.** Una capa delgada de *gateways* de conexión que solo mantiene sockets, detrás de la cual los servicios de negocio siguen siendo stateless.
+
+<FlowDiagram
+  caption="Entrega de un mensaje de chat cuando emisor y receptor están en servidores de conexión distintos."
+  nodes={[
+    { id: 'a', label: 'Beto', kind: 'mobile', x: 0, y: 0 },
+    { id: 'b', label: 'Ana', kind: 'mobile', x: 0, y: 2 },
+    { id: 'ws2', label: 'Gateway WS 2', kind: 'server', x: 1.5, y: 0 },
+    { id: 'ws1', label: 'Gateway WS 1', kind: 'server', x: 1.5, y: 2 },
+    { id: 'chat', label: 'Servicio chat', kind: 'service', x: 3, y: 0, sub: 'stateless' },
+    { id: 'bus', label: 'Pub/Sub', kind: 'stream', x: 3, y: 2, sub: 'canal por usuario' },
+  ]}
+  edges={[
+    { from: 'a', to: 'ws2', bidir: true },
+    { from: 'b', to: 'ws1', bidir: true },
+    { from: 'ws2', to: 'chat' },
+    { from: 'chat', to: 'bus' },
+    { from: 'bus', to: 'ws1' },
+  ]}
+  steps={[
+    { title: 'Conexiones abiertas', body: 'Cada app mantiene un WebSocket con algún gateway. Al conectar, el gateway 1 se suscribe al canal de Ana.', active: ['a', 'b', 'ws1', 'ws2'] },
+    { title: 'Beto envía', body: 'El mensaje viaja por el socket de Beto al gateway 2, que lo pasa al servicio de chat.', active: ['a', 'ws2', 'chat'], flow: ['a-ws2', 'ws2-chat'] },
+    { title: 'Persistir y publicar', body: 'El servicio guarda el mensaje (para historial y para quien esté desconectado) y lo publica en el canal de Ana.', active: ['chat', 'bus'], flow: ['chat-bus'] },
+    { title: 'Entrega', body: 'El gateway 1, suscrito a ese canal, lo empuja por el socket de Ana. Si Ana no estaba conectada, recibirá una notificación push y leerá el historial al volver.', active: ['bus', 'ws1', 'b'], flow: ['bus-ws1', 'b-ws1'] },
+  ]}
+/>
+
+<Callout type="interview" title="Elige con un argumento">
+
+No digas "WebSockets" por reflejo. Pregúntate si el cliente necesita enviar con frecuencia. Si solo recibe (notificaciones, marcador en vivo, progreso de un trabajo), **SSE** es más simple: es HTTP normal, pasa por proxies y CDNs y reconecta solo. Si la tolerancia es de segundos y los eventos son raros, **polling** es perfectamente defendible. Reserva WebSockets para la comunicación bidireccional de verdad, y en ese caso menciona enseguida cómo enrutas mensajes entre servidores de conexión.
+
+</Callout>
+
+<Quiz
+  question="Un dashboard muestra el estado de pedidos que cambia unas pocas veces por minuto. El cliente nunca envía datos por ese canal. ¿Qué técnica es la más adecuada?"
+  options={[
+    { text: 'Server-Sent Events.', correct: true, why: 'Es unidireccional, como el caso de uso. Es HTTP estándar, reconecta solo y puede retomar desde el último id. Sobre HTTP/2 no sufre el límite de 6 conexiones.' },
+    { text: 'WebSocket, porque es lo más rápido.', why: 'La latencia de entrega es equivalente a la de SSE. Agregas bidireccionalidad que nadie usa y te haces cargo de reconexión y reanudación.' },
+    { text: 'Short polling cada 100 ms.', why: 'Casi todas las respuestas serían vacías: miles de peticiones por cliente para unos pocos cambios por minuto.' },
+    { text: 'gRPC unario.', why: 'Unario es request/response; no empuja nada. Además, los navegadores no hablan gRPC sin un proxy.' },
+  ]}
+/>
+
+## API gateway: la puerta de entrada
+
+Cuando hay muchos servicios detrás, no quieres que cada uno implemente TLS, autenticación, rate limiting y logs por su cuenta. Un **API gateway** es un proxy L7 que centraliza esas preocupaciones transversales:
+
+- **Enrutamiento** por ruta, host o versión hacia el servicio correcto.
+- **Autenticación** (validar el JWT o la API key) y propagar la identidad hacia adentro en un header confiable.
+- **Rate limiting y cuotas** por cliente o por API key.
+- **Terminación TLS**, compresión, CORS y transformación de peticiones.
+- **Observabilidad**: un punto donde medir latencia, errores y tráfico de toda la API, y donde iniciar el *trace id*.
+- **Agregación**: el patrón *Backend for Frontend* (BFF) arma en una llamada lo que la app móvil necesita de cinco servicios.
+
+¿Cuál es el riesgo? Que se vuelva un monolito distribuido: si metes lógica de negocio en el gateway, cada cambio de producto pasa por el equipo que lo opera. Mantenlo delgado. Y como todo el tráfico pasa por él, tiene que ser horizontalmente escalable y redundante, igual que un balanceador.
+
+<Callout type="note">
+
+Gateway, balanceador y service mesh se solapan. El balanceador reparte tráfico (lo vimos en *Balanceo de carga*). El gateway entiende tu API: rutas, claves, cuotas. El service mesh resuelve la comunicación servicio a servicio dentro del clúster (mTLS, reintentos, métricas) con *sidecars*. En una entrevista basta con un recuadro "API Gateway" en el borde, explicando qué hace.
+
+</Callout>
+
+<Takeaways>
+
+- Diseña la API a partir de los requisitos funcionales: un endpoint por caso de uso, identidad sacada del token y paginación en toda lista.
+- REST para clientes que no controlas, gRPC entre servicios con contratos y deadlines, GraphQL cuando el problema son las idas y vueltas de clientes heterogéneos.
+- Pagina con cursor (keyset) sobre una clave única y estable: costo constante y sin duplicados ni saltos cuando los datos cambian. Offset solo para tablas chicas con salto a página.
+- Todo `POST` que se reintenta necesita una clave de idempotencia guardada atómicamente con el efecto, que devuelva la misma respuesta en el reintento y rechace la clave si llega con otro payload.
+- Evoluciona de forma aditiva. Versiona solo para cambios incompatibles y anuncia el retiro (`Sunset`).
+- Tiempo real: polling si la demora se tolera, SSE si solo empuja el servidor, WebSocket si es bidireccional. Toda conexión persistente obliga a resolver el enrutamiento entre servidores y la reconexión masiva.
+
+</Takeaways>
+
+## Fuentes y lecturas
+
+- Brandur Leach, [Designing robust and predictable APIs with idempotency](https://stripe.com/blog/idempotency), Stripe (2017).
+- Stripe, [Idempotent requests](https://docs.stripe.com/api/idempotent_requests), referencia de la API.
+- IETF HTTPAPI WG, [The Idempotency-Key HTTP Header Field](https://datatracker.ietf.org/doc/draft-ietf-httpapi-idempotency-key-header/) (borrador).
+- Malcolm Featonby, [Making retries safe with idempotent APIs](https://aws.amazon.com/builders-library/making-retries-safe-with-idempotent-APIs/), Amazon Builders' Library.
+- Michael Hahn, [Evolving API Pagination at Slack](https://slack.engineering/evolving-api-pagination-at-slack/), Slack Engineering.
+- Markus Winand, [We need tool support for keyset pagination](https://use-the-index-luke.com/no-offset), Use The Index, Luke.
+- GraphQL Foundation, [Pagination](https://graphql.org/learn/pagination/) (connections y cursores).
+- gRPC, [Core concepts, architecture and lifecycle](https://grpc.io/docs/what-is-grpc/core-concepts/).
+- MDN, [Using server-sent events](https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events/Using_server-sent_events).
+- I. Fette y A. Melnikov, [RFC 6455: The WebSocket Protocol](https://www.rfc-editor.org/rfc/rfc6455) (2011).
+- E. Wilde, [RFC 8594: The Sunset HTTP Header Field](https://www.rfc-editor.org/rfc/rfc8594) (2019).

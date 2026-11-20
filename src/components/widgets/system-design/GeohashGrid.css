@@ -1,0 +1,145 @@
+.gh-zoom {
+  display: grid;
+  gap: var(--s-3);
+}
+.gh-crumbs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  align-items: center;
+}
+.gh-path {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  align-items: center;
+}
+.gh-char {
+  min-width: 32px;
+  min-height: 40px;
+  border-radius: var(--radius);
+  border: 1.5px solid var(--line);
+  background: var(--line-tint);
+  color: var(--ink);
+  font-family: var(--font-code);
+  font-weight: 700;
+  font-size: 1rem;
+}
+.gh-char:hover {
+  background: var(--line-tint-2);
+}
+.gh-world {
+  font-size: 0.9rem;
+  color: var(--ink-3);
+}
+.gh-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: 60vh;
+}
+.gh-cell rect {
+  fill: var(--paper);
+  stroke: var(--rule-strong);
+  stroke-width: 1.5;
+  transition: fill 160ms var(--ease-out);
+}
+.gh-cell text {
+  font-family: var(--font-code);
+  font-size: 17px;
+  fill: var(--ink-2);
+  pointer-events: none;
+}
+.gh-cell {
+  cursor: pointer;
+  outline: none;
+}
+.gh-cell:hover rect,
+.gh-cell:focus-visible rect {
+  fill: var(--paper-3);
+}
+.gh-cell:focus-visible rect {
+  stroke: var(--line-ink);
+  stroke-width: 3;
+}
+.gh-cell.has-point rect {
+  fill: var(--line-tint-2);
+  stroke: var(--line);
+  stroke-width: 3;
+}
+.gh-cell.has-point text {
+  fill: var(--ink);
+  font-weight: 700;
+}
+.gh-point circle {
+  fill: var(--paper);
+  stroke: var(--ink);
+  stroke-width: 3;
+}
+.gh-point .gh-point__dot {
+  fill: var(--ink);
+  stroke: none;
+}
+.gh-grid {
+  display: grid;
+  gap: 4px;
+  max-width: 34rem;
+  margin: 0 auto;
+}
+.gh-grid__row {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px;
+}
+.gh-n {
+  display: grid;
+  place-items: center;
+  min-height: 64px;
+  padding: 4px;
+  border-radius: var(--radius);
+  border: 1.5px solid var(--rule-strong);
+  background: var(--paper);
+  font-family: var(--font-code);
+  font-size: clamp(0.72rem, 2.6vw, 0.95rem);
+  overflow-wrap: anywhere;
+  text-align: center;
+}
+.gh-n b {
+  color: var(--ink);
+}
+.gh-n span {
+  color: var(--ink-3);
+}
+.gh-n.is-center {
+  border: 3px solid var(--line);
+  background: var(--line-tint-2);
+}
+.gh-n.is-diff {
+  border-color: var(--warn);
+}
+.gh-n.is-far {
+  border-color: var(--bad);
+  border-style: dashed;
+}
+.gh-n.is-far span {
+  color: var(--bad);
+}
+.gh-n.is-void {
+  color: var(--ink-3);
+}
+.gh-note {
+  margin: var(--s-2) 0 0;
+  font-size: 0.85rem;
+  color: var(--ink-3);
+  flex-basis: 100%;
+}
+.gh-readout {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-3) var(--s-5);
+  align-items: flex-start;
+}
+.gh-code {
+  font-family: var(--font-code);
+  font-size: 0.9em;
+}

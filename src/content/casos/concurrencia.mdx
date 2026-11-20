@@ -1,0 +1,799 @@
+import { QuestionDeck } from '../../components/widgets/entrevistas/QuestionDeck'
+import { RaceInterleaving } from '../../components/widgets/entrevistas/RaceInterleaving'
+import { DeadlockDemo } from '../../components/widgets/entrevistas/DeadlockDemo'
+
+Las preguntas de concurrencia tienen fama de difíciles, y es merecida: un bug de concurrencia no aparece en tu máquina, pasa los tests y explota un viernes en producción con el doble de tráfico. Por eso los entrevistadores las usan para separar a quien escribió código concurrente de verdad de quien solo usó `async` porque el framework lo pedía.
+
+La buena noticia es que el repertorio es acotado. Casi todo sale de cinco ideas: la diferencia entre concurrencia y paralelismo, por qué `contador++` no es atómico, cómo se protege una sección crítica, cómo se produce (y se evita) un deadlock, y cómo funciona un event loop. Este tema las recorre con respuestas que se pueden decir en un minuto, dos simuladores para ver los intercalados que en la vida real no se ven, y el problema clásico de código en vivo: hacer que dos hilos se turnen.
+
+<Sketch
+  width={640}
+  height={300}
+  caption="Concurrencia es turnarse: un núcleo alterna entre A y B. Paralelismo es hacer a la vez: dos núcleos terminan el mismo trabajo en la mitad del tiempo."
+  items={[
+    { type: 'text', x: 24, y: 36, text: 'un núcleo: se turnan', size: 22, tone: 'pencil' },
+    { type: 'cells', x: 24, y: 56, values: ['A', 'B', 'A', 'B', 'A', 'B'], size: 44, states: ['line', null, 'line', null, 'line', null] },
+    { type: 'text', x: 24, y: 150, text: 'dos núcleos: a la vez', size: 22, tone: 'pencil' },
+    { type: 'cells', x: 24, y: 166, values: ['A', 'A', 'A'], size: 44, states: ['line', 'line', 'line'] },
+    { type: 'cells', x: 24, y: 210, values: ['B', 'B', 'B'], size: 44, with: true },
+    { type: 'check', x: 172, y: 210, size: 24 },
+    { type: 'arrow', from: [24, 276], to: [290, 276], tone: 'muted', label: 'tiempo', labelAt: [250, 268] },
+    { type: 'line', points: [[318, 24], [318, 284]], dashed: true, tone: 'muted' },
+    { type: 'text', x: 344, y: 64, text: ['concurrencia:', 'lidiar con muchas', 'cosas a la vez'], size: 22, tone: 'line' },
+    { type: 'text', x: 344, y: 186, text: ['paralelismo:', 'hacer muchas', 'cosas a la vez'], size: 22, tone: 'ok' },
+  ]}
+/>
+
+## Concurrencia no es paralelismo
+
+Es la primera pregunta casi siempre, y la respuesta tiene una frase famosa de Rob Pike: la concurrencia trata de **lidiar** con muchas cosas a la vez; el paralelismo, de **hacer** muchas cosas a la vez.
+
+- **Concurrencia** es una propiedad del diseño: el programa está estructurado como varias tareas que avanzan de forma independiente y se pueden intercalar. Un servidor de Node con un solo hilo atiende miles de conexiones de forma concurrente: mientras una espera a la base de datos, atiende a otra.
+- **Paralelismo** es una propiedad de la ejecución: varias tareas corren **en el mismo instante**, en núcleos distintos. Codificar ocho videos en una máquina de ocho núcleos es paralelo.
+
+Puedes tener concurrencia sin paralelismo (un núcleo que alterna entre tareas) y paralelismo sin mucha concurrencia (una suma de un arreglo enorme repartida en cuatro núcleos, que es una sola tarea partida en trozos idénticos).
+
+<Callout type="example" title="Respuesta modelo (30 segundos)">
+
+"Concurrencia es estructurar el programa como varias tareas independientes que se pueden intercalar; paralelismo es ejecutar varias a la vez en distintos núcleos. Un event loop con un hilo es concurrente pero no paralelo: mientras una petición espera a la base de datos, atiende otra. Procesar imágenes en ocho núcleos es paralelo. La concurrencia sirve sobre todo para cargas que esperan I/O; el paralelismo, para cargas que usan CPU."
+
+</Callout>
+
+## Proceso, hilo y corrutina
+
+| | Proceso | Hilo | Corrutina (tarea async, goroutine) |
+| --- | --- | --- | --- |
+| Memoria | Propia, aislada de los demás | Compartida con los otros hilos del proceso | Compartida; vive dentro de un hilo |
+| Quién lo planifica | El sistema operativo | El sistema operativo | El runtime del lenguaje (event loop, scheduler de Go) |
+| Cambio de contexto | Caro (cambia el espacio de memoria) | Más barato, pero pasa por el kernel | Muy barato, en espacio de usuario |
+| Costo de crear miles | Alto | Alto (cada hilo reserva su propia pila) | Bajo |
+| Comunicación | IPC: pipes, sockets, memoria compartida explícita | Variables compartidas (y por eso, carreras) | Variables compartidas, colas, canales |
+| Si uno se cae | Los demás siguen | Puede tumbar todo el proceso | Puede tumbar todo el proceso |
+
+El matiz de las corrutinas: el cambio entre ellas es **cooperativo**. Una corrutina solo cede el control en un `await` (o al bloquearse en un canal, en Go). Si hace un cálculo largo sin ceder, nadie más avanza. Las goroutines de Go y los *virtual threads* (hilos virtuales) de Java 21 son un punto intermedio: el runtime los reparte entre unos pocos hilos del sistema operativo, así que puedes tener cientos de miles. A diferencia de las corrutinas de `async`, el código se escribe como código bloqueante normal: cuando un hilo virtual espera I/O, la JVM lo desmonta y usa ese hilo del sistema para otro.
+
+<Callout type="example" title="Respuesta modelo (40 segundos)">
+
+"Un proceso tiene su propia memoria; si se cae, no arrastra a los demás, pero crearlo y comunicarlo es caro. Los hilos de un proceso comparten memoria: comunicarse es leer una variable, y justo por eso aparecen las condiciones de carrera. Las corrutinas son tareas livianas que planifica el runtime y que ceden el control en cada `await`; puedo tener miles en un solo hilo. Uso procesos para aislar o para paralelismo de CPU en Python, hilos para paralelismo en lenguajes como Java o Go, y corrutinas para miles de operaciones de I/O concurrentes."
+
+</Callout>
+
+## Condiciones de carrera: por qué `contador++` no es atómico
+
+Una **condición de carrera** ocurre cuando el resultado depende del orden en que se intercalan las operaciones de varios hilos. El ejemplo canónico es incrementar un contador compartido. `contador++` parece una sola operación, pero el procesador ejecuta tres:
+
+1. **Leer** el valor de memoria a un registro.
+2. **Sumar** 1 al registro.
+3. **Escribir** el registro de vuelta en memoria.
+
+Si dos hilos leen el mismo valor antes de que cualquiera escriba, los dos escriben el mismo resultado y uno de los incrementos se pierde. Elige el intercalado y míralo pasar:
+
+<RaceInterleaving />
+
+Fíjate en el preset "A y luego B": sale bien. Ese es el problema de las carreras. El planificador del sistema operativo decide los intercalados, y en tu máquina, con poca carga, casi siempre salen ordenados. En producción, con más núcleos y más tráfico, no.
+
+El tramo de código que accede al estado compartido (leer, sumar, escribir) se llama **sección crítica**, y la solución es garantizar que solo un hilo esté dentro a la vez: eso es **exclusión mutua**.
+
+### También pasa sin hilos
+
+Muchos desarrolladores de Node creen que, al tener un solo hilo, están a salvo de las carreras. No es así: cada `await` es un punto donde otra tarea puede intercalarse. El patrón peligroso es **verificar y después actuar** con un `await` en medio:
+
+```ts title="Una carrera en un solo hilo"
+let stock = 1
+
+async function comprar(usuario: string) {
+  if (stock > 0) {           // verificar
+    await cobrar(usuario)    // aquí el event loop atiende la otra compra
+    stock--                  // actuar: el stock puede terminar en -1
+  }
+}
+
+await Promise.all([comprar('ana'), comprar('beto')]) // ambos pasan el if
+```
+
+La solución es la misma idea: que verificar y actuar sean una unidad. Reservar antes del `await` (`stock--` y devolverlo si el cobro falla), usar un lock asíncrono, o, si el stock vive en una base de datos, un `UPDATE` atómico con condición, como se ve en [backend y bases de datos](/casos/backend-y-bases-de-datos).
+
+<Callout type="note" title="Data race y race condition no son lo mismo">
+
+Un **data race** es un término preciso: dos hilos acceden a la misma posición de memoria, al menos uno escribe y no hay sincronización. En lenguajes como C++ o Rust es comportamiento indefinido. Una **race condition** es más general: el resultado depende del orden, aunque cada acceso individual esté sincronizado. El ejemplo de Node no tiene data race (es un solo hilo) y sí tiene race condition.
+
+</Callout>
+
+## Mutex, semáforo y variables atómicas
+
+**Mutex** (*mutual exclusion*): un lock que solo un hilo puede tener a la vez. Quien lo toma entra a la sección crítica; los demás esperan. Lo suelta **el mismo hilo** que lo tomó.
+
+**Semáforo**: un contador de permisos. `acquire()` toma uno (o espera si no hay) y `release()` devuelve uno. Un semáforo con un permiso se comporta parecido a un mutex, pero su uso típico es otro: **limitar cuántos** pueden hacer algo a la vez, como no más de 10 llamadas simultáneas a una API externa o 20 conexiones a la base. Además, a diferencia del mutex, lo puede liberar un hilo distinto del que lo tomó, lo que permite usarlo para **señalizar** entre hilos (lo usamos en el problema de código en vivo).
+
+**Variables atómicas**: operaciones que el hardware garantiza indivisibles, como `AtomicInteger.incrementAndGet()` en Java o `Atomics.add` en JavaScript. Por dentro usan instrucciones como *compare-and-swap* (CAS): "escribe el valor nuevo solo si el actual sigue siendo el que leí; si no, reintenta". Son más rápidas que un lock para una sola variable, pero no sirven para proteger varias variables que deben cambiar juntas.
+
+<CodeTabs>
+
+```java title="Java"
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.atomic.AtomicInteger;
+
+class Contador {
+    private int valor = 0;
+
+    synchronized void incrementar() { // un hilo a la vez por instancia
+        valor++;
+    }
+
+    synchronized int valor() {
+        return valor;
+    }
+}
+
+class ContadorAtomico {
+    private final AtomicInteger valor = new AtomicInteger();
+
+    void incrementar() {
+        valor.incrementAndGet(); // compare-and-swap, sin lock
+    }
+
+    int valor() {
+        return valor.get();
+    }
+}
+
+class Demo {
+    static int contar() {
+        var contador = new ContadorAtomico();
+        try (ExecutorService pool = Executors.newFixedThreadPool(8)) {
+            for (int i = 0; i < 100_000; i++) pool.submit(contador::incrementar);
+        } // close() espera a que terminen las tareas (Java 19+)
+        return contador.valor(); // 100000, siempre
+    }
+}
+
+// Semáforo: como máximo 10 llamadas simultáneas a la API de envíos
+class Cotizador {
+    private final Semaphore limite = new Semaphore(10);
+    private final ApiEnvios api;
+
+    Cotizador(ApiEnvios api) {
+        this.api = api;
+    }
+
+    String cotizar(String pedido) throws InterruptedException {
+        limite.acquire();
+        try {
+            return api.cotizar(pedido);
+        } finally {
+            limite.release(); // siempre, aunque la llamada falle
+        }
+    }
+}
+```
+
+```python title="Python"
+import threading
+from concurrent.futures import ThreadPoolExecutor
+
+class Contador:
+    def __init__(self) -> None:
+        self._valor = 0
+        self._lock = threading.Lock()
+
+    def incrementar(self) -> None:
+        with self._lock:          # sección crítica: leer, sumar, escribir
+            self._valor += 1
+
+    @property
+    def valor(self) -> int:
+        with self._lock:
+            return self._valor
+
+contador = Contador()
+with ThreadPoolExecutor(max_workers=8) as pool:
+    for _ in range(100_000):
+        pool.submit(contador.incrementar)
+print(contador.valor)  # 100000, siempre
+
+# Semáforo: como máximo 10 llamadas simultáneas a la API de envíos
+limite = threading.Semaphore(10)
+
+def cotizar_envio(pedido):
+    with limite:
+        return api_envios.cotizar(pedido)
+```
+
+```ts title="TypeScript"
+// Node: memoria compartida real entre workers con SharedArrayBuffer + Atomics
+import { Worker, isMainThread, workerData } from 'node:worker_threads'
+
+if (isMainThread) {
+  const compartido = new Int32Array(new SharedArrayBuffer(4))
+  const workers = Array.from({ length: 4 }, () =>
+    new Worker(new URL(import.meta.url), { workerData: compartido }),
+  )
+  await Promise.all(workers.map((w) => new Promise((ok) => w.on('exit', ok))))
+  console.log(compartido[0]) // 400000, siempre
+} else {
+  const contador = workerData as Int32Array
+  for (let i = 0; i < 100_000; i++) {
+    Atomics.add(contador, 0, 1) // leer-sumar-escribir indivisible
+    // contador[0]++ aquí perdería actualizaciones
+  }
+}
+```
+
+</CodeTabs>
+
+### En Java: `synchronized`, `ReentrantLock` y las colecciones concurrentes
+
+Java es el lenguaje donde más se pregunta concurrencia "de verdad", así que conviene tener claras sus piezas:
+
+- **`synchronized`** (en un método o en un bloque `synchronized (obj)`) toma el *monitor* del objeto: exclusión mutua más **visibilidad**, porque al salir del bloque lo escrito queda visible para el próximo hilo que entre. Es reentrante: el mismo hilo puede volver a entrar sin bloquearse.
+- **`ReentrantLock`** hace lo mismo con más control: `tryLock(timeout)` para no esperar para siempre, locks justos (`new ReentrantLock(true)`) contra la inanición y varias condiciones de espera. El precio es que el `unlock()` va siempre en un `finally`.
+- **`volatile`** garantiza visibilidad, **no** atomicidad: `contador++` sobre un campo `volatile` sigue perdiendo actualizaciones. Sirve para una bandera como `volatile boolean detenido`.
+- **Colecciones concurrentes**: `ConcurrentHashMap` en lugar de `HashMap` compartido, `CopyOnWriteArrayList` para listas que casi no cambian y las `BlockingQueue` para productor-consumidor.
+
+```java title="Contar visitas con ConcurrentHashMap"
+class Visitas {
+    static void registrar(Map<String, Integer> visitas, String pagina) {
+        // MAL: entre el get y el put otro hilo puede escribir; se pierden visitas
+        // visitas.put(pagina, visitas.getOrDefault(pagina, 0) + 1);
+
+        // BIEN: merge es atómico por clave en un ConcurrentHashMap
+        visitas.merge(pagina, 1, Integer::sum);
+    }
+}
+```
+
+<Callout type="tip" title="En Java">
+
+Una colección thread-safe no hace atómicas las operaciones **compuestas**: `get` seguido de `put` en un `ConcurrentHashMap` es un verificar-y-actuar con carrera. Usa los métodos atómicos (`merge`, `compute`, `putIfAbsent`). Y un `HashMap` común compartido entre hilos no solo pierde escrituras: modificarlo mientras otro lo recorre puede lanzar `ConcurrentModificationException`, una protección que la propia documentación describe como de "mejor esfuerzo", no como garantía.
+
+</Callout>
+
+<Quiz
+  question="Tu servicio llama a una API de un proveedor que acepta como máximo 5 peticiones simultáneas por cliente. Tienes 200 tareas para enviar. ¿Qué primitiva usas?"
+  options={[
+    { text: 'Un mutex alrededor de la llamada.', why: 'Un mutex deja pasar de a una: cumples el límite, pero desperdicias 4 de los 5 lugares y todo tarda cinco veces más.' },
+    { text: 'Un semáforo con 5 permisos: cada tarea toma uno antes de llamar y lo devuelve al terminar.', correct: true, why: 'Correcto. Es el uso típico del semáforo: acotar cuántos hacen algo a la vez. En asyncio es asyncio.Semaphore(5); en Node, librerías como p-limit hacen lo mismo.' },
+    { text: 'Una variable atómica que cuente las llamadas en curso.', why: 'Contarlas no basta: también necesitas que las tareas esperen cuando el contador llega a 5. Eso es exactamente lo que un semáforo ya hace por ti.' },
+    { text: 'Nada: el proveedor devolverá 429 y reintentas.', why: 'Funciona, pero desperdicias peticiones, puedes caer en un bloqueo por abuso y agregas latencia. Respetar el límite del lado del cliente es lo correcto.' },
+  ]}
+/>
+
+## Deadlock, livelock e inanición
+
+Un **deadlock** (interbloqueo) es cuando un grupo de hilos espera algo que solo otro del grupo puede liberar, y por lo tanto ninguno avanza nunca. El ejemplo clásico son dos transferencias bancarias en sentidos opuestos: la de A a B toma el lock de A y espera el de B; la de B a A toma el de B y espera el de A.
+
+Coffman, Elphick y Shoshani describieron en 1971 las **cuatro condiciones** que deben cumplirse a la vez para que haya deadlock:
+
+1. **Exclusión mutua**: el recurso lo tiene un solo hilo a la vez.
+2. **Retener y esperar**: un hilo retiene un recurso mientras espera otro.
+3. **Sin expropiación**: nadie puede quitarle un recurso a un hilo; solo él lo suelta.
+4. **Espera circular**: hay un ciclo de hilos donde cada uno espera al siguiente.
+
+Para evitarlo basta con romper **una**. La más práctica es la cuarta: definir un **orden global de locks** (por ejemplo, siempre el id de cuenta menor primero). Si todos piden en el mismo orden, nadie puede tener B mientras espera A, y el ciclo es imposible. Pruébalo:
+
+<DeadlockDemo />
+
+<CodeTabs>
+
+```java title="Java"
+class Banco {
+    static void transferir(Cuenta origen, Cuenta destino, long monto) {
+        Cuenta primero = origen.id < destino.id ? origen : destino; // siempre el id menor primero
+        Cuenta segundo = primero == origen ? destino : origen;
+        synchronized (primero) {
+            synchronized (segundo) {
+                if (origen.saldo < monto) throw new SaldoInsuficiente(origen.id);
+                origen.saldo -= monto;
+                destino.saldo += monto;
+            }
+        }
+    }
+
+    // Alternativa: tryLock con timeout; si no consigue ambos, suelta todo y reintenta
+    static void transferirConTryLock(Cuenta origen, Cuenta destino, long monto) throws InterruptedException {
+        while (true) {
+            if (origen.lock.tryLock(50, TimeUnit.MILLISECONDS)) {
+                try {
+                    if (destino.lock.tryLock(50, TimeUnit.MILLISECONDS)) {
+                        try {
+                            if (origen.saldo < monto) throw new SaldoInsuficiente(origen.id);
+                            origen.saldo -= monto;
+                            destino.saldo += monto;
+                            return;
+                        } finally {
+                            destino.lock.unlock();
+                        }
+                    }
+                } finally {
+                    origen.lock.unlock();
+                }
+            }
+            Thread.sleep(ThreadLocalRandom.current().nextInt(1, 10)); // espera aleatoria: evita el livelock
+        }
+    }
+}
+```
+
+```python title="Python"
+def transferir(origen: Cuenta, destino: Cuenta, monto: int) -> None:
+    primero, segundo = sorted([origen, destino], key=lambda c: c.id)
+    with primero.lock, segundo.lock:      # siempre el id menor primero
+        if origen.saldo < monto:
+            raise SaldoInsuficiente(origen.id)
+        origen.saldo -= monto
+        destino.saldo += monto
+```
+
+</CodeTabs>
+
+Las otras formas de romper una condición: **tomar todos los locks de una vez** o ninguno (rompe "retener y esperar"), usar **`tryLock` con timeout** y soltar todo si falla (rompe "sin expropiación", a costa de reintentos), o diseñar para no compartir: un solo dueño por dato, mensajes en lugar de memoria compartida.
+
+**Livelock**: los hilos no están bloqueados, cambian de estado todo el tiempo, pero ninguno progresa. Es lo que pasa cuando dos personas se cruzan en un pasillo y ambas se corren hacia el mismo lado una y otra vez. En código aparece con el `tryLock` mal hecho: los dos fallan, sueltan, reintentan al mismo tiempo y vuelven a fallar. Se arregla con **espera aleatoria** (*jitter*) antes de reintentar.
+
+**Inanición** (*starvation*): un hilo nunca consigue el recurso porque otros siempre se le adelantan, por prioridades o por un lock injusto. Se mitiga con locks justos (FIFO), envejecimiento de prioridades o colas.
+
+<Callout type="interview" title="Lo que el entrevistador está evaluando aquí">
+
+Que nombres las cuatro condiciones **y** una estrategia concreta para romper una, con un ejemplo. "Ordeno los locks por id de cuenta" vale más que "evito los deadlocks con cuidado". Puntos extra si mencionas cómo lo detectarías en producción: un *thread dump* (`jstack` en Java, `py-spy dump` en Python) muestra a cada hilo esperando un lock que tiene el otro.
+
+</Callout>
+
+## async/await y el event loop
+
+### Cómo atiende Node miles de conexiones con un hilo
+
+El código JavaScript de Node corre en un solo hilo, alrededor de un **event loop**. Cuando haces una operación de I/O (leer un socket, consultar la base), Node la delega al sistema operativo (o a un pequeño pool de hilos de libuv, para cosas como el sistema de archivos o `crypto`) y sigue con lo siguiente. Cuando la operación termina, su callback entra a una cola y el event loop lo ejecuta en cuanto el hilo está libre.
+
+Por eso Node es excelente para cargas **I/O-bound** (la mayor parte del tiempo se espera a la red) y malo para **CPU-bound**: un cálculo de 200 ms bloquea el único hilo y **todas** las peticiones esperan esos 200 ms. Para CPU se usan `worker_threads` o se saca el trabajo a otro servicio.
+
+<Sketch
+  width={640}
+  height={300}
+  caption="El event loop por dentro: un solo hilo ejecuta tu código; el I/O se delega, y cuando termina su callback espera en una cola. Las microtareas se vacían antes que cualquier macrotarea."
+  items={[
+    { type: 'text', x: 24, y: 36, text: 'un hilo, dos colas', size: 22, tone: 'line' },
+    { type: 'box', x: 24, y: 96, w: 160, h: 60, label: 'tu código', size: 22, tone: 'line', fill: true },
+    { type: 'circle', x: 318, y: 126, rx: 78, ry: 44, label: 'event loop', size: 22 },
+    { type: 'arrow', from: [238, 126], to: [190, 126], tone: 'line' },
+    { type: 'box', x: 456, y: 50, w: 164, h: 50, label: 'microtareas', size: 20, tone: 'line' },
+    { type: 'text', x: 538, y: 124, text: 'promesas: primero', size: 18, anchor: 'middle', tone: 'line' },
+    { type: 'box', x: 456, y: 150, w: 164, h: 50, label: 'macrotareas', size: 20 },
+    { type: 'text', x: 576, y: 226, text: 'timers, I/O', size: 18, anchor: 'middle', tone: 'pencil' },
+    { type: 'arrow', from: [452, 80], to: [394, 106], tone: 'line' },
+    { type: 'arrow', from: [452, 172], to: [394, 148] },
+    { type: 'box', x: 200, y: 234, w: 170, h: 46, label: 'SO / libuv', size: 20, tone: 'pencil' },
+    { type: 'arrow', from: [104, 160], to: [196, 252], dashed: true, label: 'delega el I/O', labelAt: [96, 214] },
+    { type: 'arrow', from: [374, 254], to: [476, 206], dashed: true, label: 'listo', labelAt: [452, 254] },
+  ]}
+/>
+
+Un detalle que se pregunta: hay dos tipos de colas. Las **microtareas** (callbacks de promesas, `queueMicrotask`, y en Node `process.nextTick`, que va aún antes) se vacían por completo después de cada tarea, antes de pasar a la siguiente **macrotarea** (timers, I/O).
+
+```ts title="¿En qué orden se imprime?"
+console.log('A')
+setTimeout(() => console.log('B'), 0)
+Promise.resolve().then(() => console.log('C'))
+console.log('D')
+// A, D, C, B: primero el código síncrono, luego las microtareas, luego los timers
+```
+
+### Java: hilos virtuales y `CompletableFuture`
+
+Java tomó el camino contrario a `async`/`await`. Desde Java 21, los **hilos virtuales** (JEP 444) permiten escribir código bloqueante normal y aun así tener cientos de miles de tareas de I/O concurrentes: cuando un hilo virtual espera la red, la JVM lo desmonta de su hilo del sistema operativo (el *carrier*) y lo usa para otro. No hay "colores de funciones" ni que marcar nada como `async`.
+
+```java title="Hilos virtuales y CompletableFuture"
+class Cotizaciones {
+    // Hilos virtuales (Java 21): un hilo por tarea, sin pool que dimensionar
+    static int mejorPrecio(List<Proveedor> proveedores, String sku) throws Exception {
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            List<Future<Integer>> precios = proveedores.stream()
+                .map(p -> executor.submit(() -> p.cotizar(sku))) // bloquear un hilo virtual es barato
+                .toList();
+            int mejor = Integer.MAX_VALUE;
+            for (Future<Integer> f : precios) mejor = Math.min(mejor, f.get());
+            return mejor;
+        }
+    }
+}
+
+class Envios {
+    // CompletableFuture: componer pasos asíncronos con un timeout y un plan B
+    static CompletableFuture<String> cotizarConTimeout(String pedido) {
+        return CompletableFuture.supplyAsync(() -> cotizar(pedido))
+            .thenApply(Envios::formatear)
+            .orTimeout(2, TimeUnit.SECONDS)
+            .exceptionally(error -> "tarifa plana: 5000"); // si falla o tarda, valor por defecto
+    }
+}
+```
+
+Tres matices que suman en una entrevista de Java:
+
+- **Los hilos virtuales sirven para I/O, no para CPU.** Para cálculo, el paralelismo sigue limitado por los núcleos; usa un pool fijo o *parallel streams*.
+- **No se ponen en un pool.** Son baratos: se crea uno por tarea. Si necesitas limitar cuántas llamadas simultáneas haces a un servicio, usa un `Semaphore`, no el tamaño del pool.
+- **El *pinning***: en Java 21 a 23, un hilo virtual que se bloquea dentro de un bloque `synchronized` queda "clavado" a su hilo del sistema y no lo libera. Java 24 lo resolvió para `synchronized` (JEP 491); siguen clavándose las llamadas a código nativo. En código que corre en Java 21, por eso se recomendaba `ReentrantLock` en las secciones que hacen I/O.
+
+`CompletableFuture` (Java 8) es la herramienta para **componer** resultados asíncronos: encadenar con `thenApply` y `thenCompose`, combinar con `thenCombine` o `allOf`, y poner límites con `orTimeout`. Sin un executor explícito, `supplyAsync` usa el `ForkJoinPool.commonPool()`, que es compartido y tiene tantos hilos como núcleos menos uno: no le mandes tareas que bloquean esperando I/O.
+
+### Python: asyncio, I/O contra CPU y el GIL
+
+`asyncio` funciona igual en lo esencial: un event loop, corrutinas que ceden el control en cada `await`. El error más común en Python asíncrono es llamar algo **bloqueante** dentro de una corrutina (`time.sleep`, `requests.get`, un driver de base sincrónico): congela el loop entero, igual que un cálculo largo en Node. Se usa la versión asíncrona (`asyncio.sleep`, `httpx`, `asyncpg`) o se manda la llamada a un hilo con `asyncio.to_thread`.
+
+El **GIL** (*Global Interpreter Lock*) de CPython es un lock que permite que solo un hilo ejecute bytecode de Python a la vez dentro de un intérprete. Tres precisiones que conviene decir con cuidado:
+
+1. **Los hilos sí sirven para I/O**: el GIL se libera mientras un hilo espera la red o el disco, así que diez hilos descargando archivos avanzan en paralelo.
+2. **Los hilos no sirven para paralelizar cálculo en Python puro**: dos hilos sumando números se turnan el GIL y tardan lo mismo o más que uno. Para eso se usa `multiprocessing` o `ProcessPoolExecutor` (cada proceso tiene su propio intérprete y su propio GIL), o librerías en C como NumPy, que liberan el GIL durante sus operaciones.
+3. **El GIL no hace tu código thread-safe.** `contador += 1` son varias instrucciones de bytecode y el intérprete puede cambiar de hilo entre ellas. Que en tu máquina el resultado salga bien no prueba nada: necesitas el lock igual.
+
+La novedad: **Python 3.13 introdujo un build experimental sin GIL** (*free-threaded*, el ejecutable `python3.13t`), propuesto en el PEP 703. En Python 3.14 ese build dejó de ser experimental y pasó a tener soporte oficial (PEP 779), pero sigue siendo **opcional**: el build por defecto mantiene el GIL, y las extensiones en C tienen que declararse compatibles. Si lo mencionas, dilo así, como algo en transición, no como "Python ya no tiene GIL".
+
+<Callout type="example" title="Respuesta modelo: ¿hilos, procesos o async? (45 segundos)">
+
+"Depende de si la carga espera o calcula. Para I/O-bound, como llamar a muchas APIs, uso async si el stack es asíncrono de punta a punta, o un pool de hilos si las librerías son sincrónicas; en ambos casos el GIL no estorba porque se libera al esperar I/O. Para CPU-bound en Python uso procesos, porque con el GIL los hilos no ejecutan bytecode en paralelo. Python 3.13 trajo un build experimental sin GIL, y en 3.14 tiene soporte oficial, pero sigue siendo opcional, así que hoy no lo asumo en producción."
+
+</Callout>
+
+<Quiz
+  question="Un endpoint de FastAPI declarado con async def llama a requests.get() para consultar un servicio externo que tarda 2 segundos. Bajo carga, todo el servidor se vuelve lento, incluso los endpoints que no llaman a ese servicio. ¿Por qué?"
+  options={[
+    { text: 'Por el GIL: solo un hilo puede ejecutar Python a la vez.', why: 'El GIL se libera durante la espera de red. El problema es otro: la llamada bloquea el event loop, que es un solo hilo atendiendo a todas las corrutinas.' },
+    { text: 'requests.get es bloqueante: dentro de una corrutina congela el event loop durante 2 segundos y ninguna otra petición avanza.', correct: true, why: 'Correcto. Hay que usar un cliente asíncrono (httpx.AsyncClient) con await, o declarar el endpoint con def normal para que el framework lo ejecute en un pool de hilos.' },
+    { text: 'Porque async def crea un hilo por petición y se agotan.', why: 'async def no crea hilos: todas las corrutinas comparten el hilo del event loop. Justamente por eso una llamada bloqueante afecta a todas.' },
+  ]}
+/>
+
+## Productor-consumidor y thread pools
+
+El patrón **productor-consumidor** desacopla a quien genera trabajo de quien lo procesa mediante una **cola acotada** compartida. Los productores agregan tareas; los consumidores (*workers*) las sacan. Es la misma idea que una cola de mensajes entre servicios ([colas y streaming](/system-design/colas-y-streaming)), pero dentro de un proceso.
+
+<FlowDiagram
+  caption="Productor-consumidor con una cola acotada. La cola llena es la señal de contrapresión."
+  nodes={[
+    { id: 'p1', label: 'Productor', kind: 'service', x: 0, y: 0.5, sub: 'API de pedidos' },
+    { id: 'p2', label: 'Productor', kind: 'service', x: 0, y: 1.7, sub: 'importación CSV' },
+    { id: 'q', label: 'Cola acotada', kind: 'queue', x: 1.6, y: 1.1, sub: 'máx. 1.000 tareas' },
+    { id: 'w1', label: 'Worker 1', kind: 'worker', x: 3.2, y: 0.2 },
+    { id: 'w2', label: 'Worker 2', kind: 'worker', x: 3.2, y: 1.1 },
+    { id: 'w3', label: 'Worker 3', kind: 'worker', x: 3.2, y: 2 },
+  ]}
+  edges={[
+    { from: 'p1', to: 'q', label: 'put' },
+    { from: 'p2', to: 'q', label: 'put' },
+    { from: 'q', to: 'w1', label: 'get' },
+    { from: 'q', to: 'w2' },
+    { from: 'q', to: 'w3' },
+  ]}
+  steps={[
+    { title: 'Producir', body: 'Los productores agregan tareas (generar la factura del pedido 881) sin esperar a que alguien las procese. Responden rápido al usuario.', active: ['p1', 'p2', 'q'], flow: ['p1-q', 'p2-q'] },
+    { title: 'Consumir', body: <>Cada worker hace <code>get()</code>: si la cola está vacía, se bloquea esperando, sin gastar CPU. Varios workers se reparten la carga solos.</>, active: ['q', 'w1', 'w2', 'w3'], flow: ['q-w1', 'q-w2', 'q-w3'] },
+    { title: 'Contrapresión', body: <>Si los productores van más rápido que los workers, la cola se llena y <code>put()</code> se bloquea (o rechaza). Una cola sin límite solo esconde el problema hasta que se acaba la memoria.</>, active: ['p1', 'p2', 'q'] },
+  ]}
+/>
+
+En Java, la cola acotada es una `BlockingQueue`: `put()` espera si está llena y `take()` espera si está vacía, sin que escribas ni un lock.
+
+```java title="Productor-consumidor con BlockingQueue"
+class Facturacion {
+    private final BlockingQueue<Tarea> cola = new ArrayBlockingQueue<>(1_000); // acotada
+
+    void producir(Tarea tarea) throws InterruptedException {
+        cola.put(tarea); // si la cola está llena, espera: contrapresión
+    }
+
+    void consumir() {
+        try {
+            while (true) {
+                Tarea tarea = cola.take(); // si está vacía, espera sin gastar CPU
+                if (tarea == Tarea.FIN) return;
+                System.out.println("factura " + tarea.pedidoId());
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt(); // respeta la cancelación
+        }
+    }
+}
+```
+
+Un **thread pool** es la versión empaquetada: un número fijo de hilos reutilizables que consumen de una cola interna (`ThreadPoolExecutor` en Python y en Java, que en Java se crea casi siempre con `Executors.newFixedThreadPool(n)`). Evita el costo de crear un hilo por tarea y, sobre todo, **acota** cuántos corren a la vez. ¿Cuántos hilos? Para CPU-bound, alrededor del número de núcleos; más solo agrega cambios de contexto. Para I/O-bound, más: Brian Goetz propone en *Java Concurrency in Practice* la aproximación `núcleos × (1 + tiempo de espera / tiempo de cómputo)`. Si cada tarea espera 90 ms de red y calcula 10 ms, en 8 núcleos son unos 80 hilos. Es un punto de partida para medir, no una ley.
+
+## Locking optimista contra pesimista
+
+La concurrencia no termina en tu proceso: varias instancias de tu servicio escriben en la misma base de datos. Ahí las dos estrategias clásicas son:
+
+- **Pesimista**: bloquear la fila antes de modificarla, asumiendo que habrá conflicto. `SELECT ... FOR UPDATE` dentro de una transacción; los demás esperan. Seguro y simple, pero las transacciones largas retienen locks y pueden producir deadlocks entre filas.
+- **Optimista**: no bloquear; detectar el conflicto al escribir. Cada fila tiene una columna `version`, y la escritura es `UPDATE ... SET ..., version = version + 1 WHERE id = ? AND version = ?`. Si actualizó 0 filas, otro escribió primero: se relee y se reintenta (o se devuelve `409 Conflict`). En JPA basta con un campo `@Version` en la entidad; Hibernate agrega esa condición y lanza `OptimisticLockException` si no actualizó nada. El pesimista es `@Lock(LockModeType.PESSIMISTIC_WRITE)` en el método del repositorio.
+
+```sql title="Optimista: falla si alguien escribió antes"
+UPDATE productos
+SET precio = 1290, version = version + 1
+WHERE id = 42 AND version = 7;   -- 0 filas afectadas = conflicto
+```
+
+La regla para elegir: **optimista cuando los conflictos son raros** (editar el perfil de un usuario, un formulario de backoffice), porque no paga locks en el caso común; **pesimista cuando son frecuentes** (la última entrada de un concierto, un contador muy disputado), porque con mucha contención el optimista reintenta una y otra vez. El tema de [backend y bases de datos](/casos/backend-y-bases-de-datos) muestra estos casos desde los niveles de aislamiento.
+
+## Código en vivo: dos hilos que se turnan
+
+**Enunciado** ([Print FooBar Alternately](https://leetcode.com/problems/print-foobar-alternately/), LeetCode 1115). Una clase `FooBar` tiene dos métodos, `foo()` y `bar()`, y cada uno imprime su palabra `n` veces. Un hilo llama a `foo()` y otro a `bar()`, y no sabes cuál arranca primero. Modifica la clase para que la salida sea siempre `foobarfoobar...` con `n` repeticiones.
+
+- Entrada: `n = 2`. Salida: `foobarfoobar`.
+- Entrada: `n = 1`, con el hilo de `bar` arrancando primero. Salida: `foobar`.
+
+**Qué preguntar para aclarar**: ¿quién empieza siempre? (`foo`) ¿Puedo usar las primitivas de la librería estándar? (sí) ¿Me importa el uso de CPU mientras un hilo espera? (sí: nada de esperas activas).
+
+**Fuerza bruta**: una variable compartida `turno` y que cada hilo haga `while turno != 'foo': pass`. Funciona a veces, pero es **espera activa**: el hilo que espera quema un núcleo entero sin hacer nada útil, y en lenguajes como Java, sin `volatile`, ni siquiera está garantizado que vea el cambio del otro hilo. Tiempo O(n) de trabajo útil, pero un desperdicio de CPU proporcional a la espera.
+
+**Idea clave**: dos **semáforos** que se pasan el turno como una pelota. `turno_foo` empieza con 1 permiso y `turno_bar` con 0. `foo` toma su permiso, imprime y le da uno a `bar`; `bar` toma el suyo, imprime y le devuelve uno a `foo`. Quien espera queda bloqueado sin gastar CPU.
+
+<Callout type="tip" title="La señal para reconocer el patrón">
+
+Si el enunciado dice "el hilo X debe esperar a que el hilo Y haga algo", piensa en **señalizar con semáforos** (o variables de condición), no en un lock. Un lock protege una sección crítica; un semáforo en 0 sirve para **ordenar** eventos entre hilos.
+
+</Callout>
+
+<CodeTabs>
+
+```java title="Java"
+class FooBar {
+    private final int n;
+    private final Semaphore turnoFoo = new Semaphore(1); // foo empieza
+    private final Semaphore turnoBar = new Semaphore(0); // bar espera su primer turno
+
+    public FooBar(int n) {
+        this.n = n;
+    }
+
+    public void foo(Runnable printFoo) throws InterruptedException {
+        for (int i = 0; i < n; i++) {
+            turnoFoo.acquire(); // espera su turno
+            printFoo.run();
+            turnoBar.release(); // le pasa el turno a bar
+        }
+    }
+
+    public void bar(Runnable printBar) throws InterruptedException {
+        for (int i = 0; i < n; i++) {
+            turnoBar.acquire();
+            printBar.run();
+            turnoFoo.release();
+        }
+    }
+}
+```
+
+```python title="Python"
+from threading import Semaphore
+from typing import Callable
+
+class FooBar:
+    def __init__(self, n: int) -> None:
+        self.n = n
+        self.turno_foo = Semaphore(1)  # foo empieza
+        self.turno_bar = Semaphore(0)  # bar espera su primer turno
+
+    def foo(self, print_foo: Callable[[], None]) -> None:
+        for _ in range(self.n):
+            self.turno_foo.acquire()   # espera su turno
+            print_foo()
+            self.turno_bar.release()   # le pasa el turno a bar
+
+    def bar(self, print_bar: Callable[[], None]) -> None:
+        for _ in range(self.n):
+            self.turno_bar.acquire()
+            print_bar()
+            self.turno_foo.release()
+```
+
+```ts title="TypeScript"
+// Node no comparte memoria entre hilos por defecto: modelamos los dos "hilos"
+// como tareas async y escribimos un semáforo con promesas.
+class Semaforo {
+  private cola: (() => void)[] = []
+  constructor(private permisos: number) {}
+
+  async acquire(): Promise<void> {
+    if (this.permisos > 0) {
+      this.permisos--
+      return
+    }
+    await new Promise<void>((resolve) => this.cola.push(resolve))
+  }
+
+  release(): void {
+    const siguiente = this.cola.shift()
+    if (siguiente) siguiente() // le entrega el permiso directo al que espera
+    else this.permisos++
+  }
+}
+
+class FooBar {
+  private turnoFoo = new Semaforo(1)
+  private turnoBar = new Semaforo(0)
+  constructor(private n: number) {}
+
+  async foo(printFoo: () => void) {
+    for (let i = 0; i < this.n; i++) {
+      await this.turnoFoo.acquire()
+      printFoo()
+      this.turnoBar.release()
+    }
+  }
+
+  async bar(printBar: () => void) {
+    for (let i = 0; i < this.n; i++) {
+      await this.turnoBar.acquire()
+      printBar()
+      this.turnoFoo.release()
+    }
+  }
+}
+
+const fb = new FooBar(2)
+// bar "arranca" primero y aun así la salida es foobarfoobar
+await Promise.all([fb.bar(() => process.stdout.write('bar')), fb.foo(() => process.stdout.write('foo'))])
+```
+
+</CodeTabs>
+
+**Complejidad**: O(n) en tiempo, con 2n operaciones sobre semáforos, y O(1) en memoria. Ningún hilo consume CPU mientras espera.
+
+**Casos borde y errores típicos**:
+
+- `n = 0`: ningún hilo entra al bucle y no se imprime nada. Correcto sin código extra.
+- **El hilo de `bar` arranca primero**: se bloquea en `turno_bar.acquire()` porque empieza en 0. Es justo por eso que los valores iniciales son 1 y 0, y es el error más común: inicializar ambos en 1.
+- **Usar un solo lock**: garantiza que no impriman a la vez, pero no el **orden**; el mismo hilo puede volver a tomarlo y salir `foofoobarbar`.
+- **Liberar el semáforo propio en vez del del otro**: cada hilo se da el turno a sí mismo y el orden se pierde.
+- **Imprimir fuera de la sección protegida**: si `release()` va antes de imprimir, el otro hilo puede imprimir primero.
+
+**Variantes y repreguntas**: "hazlo con una variable de condición" (un `Condition` con un `while turno != 'foo': cond.wait()`, siempre en un `while` por los despertares espurios), "¿y con tres hilos en ronda?" (tres semáforos en anillo), y el contador thread-safe de la sección de mutex como calentamiento.
+
+| Problema (LeetCode) | Qué practica |
+| --- | --- |
+| [Print in Order](https://leetcode.com/problems/print-in-order/) | Ordenar tres hilos con dos señales |
+| [Print FooBar Alternately](https://leetcode.com/problems/print-foobar-alternately/) | Ping-pong con dos semáforos |
+| [Print Zero Even Odd](https://leetcode.com/problems/print-zero-even-odd/) | Tres hilos con turnos que dependen del valor |
+| [Building H2O](https://leetcode.com/problems/building-h2o/) | Semáforos para agrupar (2 H por cada O) |
+| [Fizz Buzz Multithreaded](https://leetcode.com/problems/fizz-buzz-multithreaded/) | Cuatro hilos y un turno compartido |
+| [The Dining Philosophers](https://leetcode.com/problems/the-dining-philosophers/) | Evitar deadlock con orden de recursos |
+
+## Practica en voz alta
+
+<QuestionDeck
+  cards={[
+    {
+      q: '¿Cuál es la diferencia entre concurrencia y paralelismo?',
+      level: 'junior',
+      checks: 'Diseño contra ejecución, con un ejemplo de cada uno.',
+      answer: <><p>Concurrencia es estructurar el programa como tareas independientes que se pueden intercalar; paralelismo es ejecutarlas en el mismo instante en varios núcleos. Un servidor de Node con un hilo es concurrente: mientras una petición espera a la base, atiende otra. Redimensionar imágenes en ocho núcleos es paralelo.</p><p>La concurrencia ayuda sobre todo con I/O; el paralelismo, con CPU.</p></>,
+      strong: ['Un ejemplo de concurrencia sin paralelismo', 'Relacionarlo con I/O y CPU'],
+      weak: ['"Son lo mismo"', 'Definir uno con el otro'],
+      followups: ['¿Se puede tener paralelismo sin concurrencia?'],
+    },
+    {
+      q: '¿Qué diferencia hay entre un proceso y un hilo?',
+      level: 'junior',
+      checks: 'Memoria compartida y sus consecuencias.',
+      answer: <><p>Un proceso tiene su propio espacio de memoria; los hilos de un mismo proceso comparten la memoria. Eso hace que los hilos sean más baratos de crear y de comunicar (leen las mismas variables), pero también que puedan pisarse: de ahí las condiciones de carrera. Si un proceso se cae, los demás siguen; si un hilo corrompe la memoria, puede tumbar el proceso entero.</p><p>Las corrutinas son un tercer nivel: tareas livianas que planifica el runtime y ceden en cada await.</p></>,
+      strong: ['Memoria compartida como origen de las carreras', 'Mencionar corrutinas'],
+      weak: ['"Un hilo es un proceso más chico" sin más'],
+      followups: ['¿Qué es un cambio de contexto?', '¿Qué son los virtual threads de Java?'],
+    },
+    {
+      q: '¿Qué es una condición de carrera? Dame un ejemplo.',
+      level: 'semi',
+      checks: 'Que puedas explicar el intercalado concreto.',
+      answer: <><p>Es cuando el resultado depende del orden en que se intercalan operaciones concurrentes. El ejemplo clásico es <code>contador++</code> en dos hilos: son tres pasos, leer, sumar y escribir. Si ambos leen 100 antes de que cualquiera escriba, ambos escriben 101 y se pierde un incremento.</p><p>También pasa en Node sin hilos: verificar el stock, hacer un <code>await</code> y después restar deja que otra petición pase la misma verificación. Se arregla haciendo atómica la sección crítica: un lock, una operación atómica o un UPDATE condicional en la base.</p></>,
+      strong: ['Desglosar leer-sumar-escribir', 'El caso check-then-act con await'],
+      weak: ['"Es cuando dos hilos corren a la vez"'],
+      followups: ['¿Cómo la reproducirías en un test?', '¿Qué es un data race?'],
+    },
+    {
+      q: '¿Qué diferencia hay entre un mutex y un semáforo?',
+      level: 'semi',
+      checks: 'Exclusión contra conteo y señalización.',
+      answer: <><p>Un mutex da exclusión mutua: un solo hilo a la vez en la sección crítica, y lo suelta el mismo hilo que lo tomó. Un semáforo es un contador de permisos: deja pasar a N a la vez, y sirve para acotar concurrencia, como no más de 10 llamadas simultáneas a una API.</p><p>Además, un semáforo lo puede liberar otro hilo, así que sirve para señalizar: un semáforo en 0 hace que un hilo espere hasta que otro le avise.</p></>,
+      strong: ['El uso para acotar', 'El uso para señalizar'],
+      weak: ['"Un semáforo es un mutex con contador" sin usos'],
+      followups: ['¿Qué es una variable de condición?', '¿Qué es un read-write lock?'],
+    },
+    {
+      q: '¿Qué es un deadlock y cómo lo evitas?',
+      level: 'semi',
+      checks: 'Las cuatro condiciones y una estrategia concreta.',
+      answer: <><p>Es cuando un grupo de hilos espera recursos que solo otro del grupo puede liberar, y ninguno avanza. Requiere cuatro condiciones a la vez: exclusión mutua, retener y esperar, sin expropiación y espera circular. Basta romper una.</p><p>Lo más práctico es un orden global de locks: en transferencias, tomar siempre primero la cuenta con id menor, así nadie puede tener B mientras espera A. Otras opciones: tomar todos los locks de una vez, o tryLock con timeout y reintento con espera aleatoria.</p></>,
+      strong: ['Las cuatro condiciones de Coffman', 'Orden global con un ejemplo', 'Cómo detectarlo con un thread dump'],
+      weak: ['"Tener cuidado con los locks"'],
+      followups: ['¿Qué es un livelock?', '¿Cómo detectarías un deadlock en producción?'],
+    },
+    {
+      q: '¿Qué es un livelock? ¿Y la inanición?',
+      level: 'senior',
+      checks: 'Distinguir fallas de progreso que no son deadlock.',
+      answer: <><p>En un livelock los hilos no están bloqueados: se mueven, pero no progresan. Pasa cuando dos hilos con tryLock fallan, sueltan y reintentan exactamente al mismo ritmo, como dos personas que se esquivan hacia el mismo lado en un pasillo. Se arregla con espera aleatoria antes de reintentar.</p><p>Inanición es cuando un hilo nunca obtiene el recurso porque otros siempre se le adelantan, por prioridades o locks injustos. Se mitiga con locks justos o con envejecimiento de prioridades.</p></>,
+      strong: ['El ejemplo del pasillo o de tryLock', 'Jitter como solución'],
+      weak: ['Confundir livelock con deadlock'],
+      followups: ['¿Un lock justo tiene costo?'],
+    },
+    {
+      q: 'Si Node tiene un solo hilo, ¿cómo atiende miles de conexiones a la vez?',
+      level: 'semi',
+      checks: 'Event loop, I/O no bloqueante y el límite con CPU.',
+      answer: <><p>El código JavaScript corre en un hilo con un event loop, pero el I/O no bloquea: Node delega la espera al sistema operativo o al pool de libuv y sigue atendiendo. Cuando el I/O termina, el callback entra a la cola y se ejecuta cuando el hilo está libre. Como un servidor web pasa la mayor parte del tiempo esperando red, un hilo alcanza para miles de conexiones.</p><p>El límite es el CPU: un cálculo largo bloquea el loop y todas las peticiones esperan. Para eso uso worker_threads o saco el trabajo a otro servicio.</p></>,
+      strong: ['I/O no bloqueante', 'El pool de libuv', 'El límite con CPU-bound'],
+      weak: ['"Node es multihilo por dentro, así que da igual"'],
+      followups: ['¿Qué se imprime primero, un setTimeout 0 o un Promise.then?', '¿Qué es process.nextTick?'],
+    },
+    {
+      q: '¿Qué es el GIL de Python y qué implica?',
+      level: 'senior',
+      checks: 'Precisión: qué limita y qué no.',
+      answer: <><p>Es un lock de CPython que permite que un solo hilo ejecute bytecode de Python a la vez. Implica que los hilos no paralelizan cálculo en Python puro, así que para CPU uso procesos o librerías en C que liberan el GIL, como NumPy. Para I/O los hilos sí sirven, porque el GIL se libera al esperar.</p><p>No hace el código thread-safe: <code>x += 1</code> son varias instrucciones y puede intercalarse. Python 3.13 trajo un build experimental sin GIL (PEP 703) y en 3.14 tiene soporte oficial, pero sigue siendo opcional.</p></>,
+      strong: ['I/O contra CPU', 'El GIL no da thread-safety', 'El estado actual del build sin GIL, sin exagerar'],
+      weak: ['"Python no puede hacer nada en paralelo"', '"Python ya no tiene GIL"'],
+      followups: ['¿Cuándo usarías multiprocessing en vez de asyncio?'],
+    },
+    {
+      q: '¿Cuándo usas async/await, hilos o procesos?',
+      level: 'semi',
+      checks: 'Elegir según I/O-bound o CPU-bound.',
+      answer: <><p>Para I/O-bound, async si todo el stack es asíncrono, porque miles de corrutinas cuestan poco; hilos si dependo de librerías sincrónicas. Para CPU-bound, procesos en Python o hilos en lenguajes sin GIL como Java o Go, con un pool del tamaño de los núcleos.</p><p>El error a evitar es mezclar: una llamada bloqueante dentro de una corrutina congela todo el event loop.</p></>,
+      strong: ['La regla I/O contra CPU', 'El peligro de bloquear el loop'],
+      weak: ['"Async es más rápido siempre"'],
+      followups: ['¿Qué pasa si llamas a requests.get dentro de un async def?'],
+    },
+    {
+      q: '¿Locking optimista o pesimista?',
+      level: 'senior',
+      checks: 'Elegir según la contención esperada.',
+      answer: <><p>Pesimista bloquea la fila antes de modificarla con <code>SELECT ... FOR UPDATE</code>: seguro, pero retiene locks y puede producir esperas y deadlocks. Optimista no bloquea: guarda una versión y escribe con <code>WHERE version = ?</code>; si actualizó 0 filas, otro escribió antes y reintento o devuelvo 409.</p><p>Uso optimista cuando los conflictos son raros, como editar un perfil, y pesimista cuando son frecuentes, como la última entrada de un concierto, porque ahí el optimista reintentaría sin parar.</p></>,
+      strong: ['La columna de versión', 'Elegir por contención', '409 como respuesta al conflicto'],
+      weak: ['"Optimista es mejor porque no bloquea"'],
+      followups: ['¿Cómo implementarías optimista con una caché o un ETag?'],
+    },
+    {
+      q: '¿Cuántos hilos debería tener un thread pool?',
+      level: 'semi',
+      checks: 'Que dependa del tipo de carga y que se mida.',
+      answer: <><p>Depende de la carga. Para CPU-bound, cerca del número de núcleos; más hilos solo agregan cambios de contexto. Para I/O-bound, más, porque los hilos pasan tiempo esperando: la aproximación de Goetz es núcleos por uno más la razón entre espera y cómputo. Con 8 núcleos y tareas que esperan 90 ms y calculan 10, son unos 80.</p><p>Es un punto de partida: lo ajusto midiendo latencia y uso de CPU, y acoto también la cola del pool para no esconder la sobrecarga.</p></>,
+      strong: ['Distinguir CPU e I/O', 'La fórmula como aproximación', 'Cola acotada'],
+      weak: ['Un número fijo sin justificación'],
+      followups: ['¿Qué pasa si la cola del pool no tiene límite?'],
+    },
+    {
+      q: 'Un bug aparece solo en producción y parece de concurrencia. ¿Cómo lo investigas?',
+      level: 'senior',
+      checks: 'Método, herramientas y humildad ante lo no determinista.',
+      answer: <><p>Primero confirmo el patrón: si depende de la carga o de peticiones simultáneas sobre el mismo recurso, por los logs con ID de correlación. Si hay cuelgues, saco un thread dump (<code>jstack</code>, <code>py-spy dump</code>) para ver quién espera qué lock. Luego busco el estado compartido sin protección: check-then-act, leer-modificar-escribir, cachés en memoria compartidas.</p><p>Para reproducirlo, un test que lance muchas tareas concurrentes sobre el mismo recurso, a veces con pausas inyectadas para forzar el intercalado. Y uso detectores cuando existen, como el race detector de Go o ThreadSanitizer.</p></>,
+      strong: ['Thread dumps', 'Buscar patrones conocidos', 'Herramientas como -race o TSan'],
+      weak: ['"Agrego un sleep y listo"', 'Agregar locks por todos lados sin entender'],
+      followups: ['¿Cómo escribirías un test que falle de forma confiable?'],
+    },
+  ]}
+/>
+
+<Takeaways>
+
+- Concurrencia es estructura (tareas que se intercalan); paralelismo es ejecución simultánea. La primera sirve para esperar I/O; la segunda, para usar varios núcleos.
+- `contador++` son tres pasos: leer, sumar y escribir. Sin exclusión mutua se pierden actualizaciones. Y en Node también hay carreras: cada `await` en medio de un verificar-y-actuar es una ventana.
+- Mutex para exclusión; semáforo para acotar o señalizar; atómicos (CAS) para una sola variable. El problema de "dos hilos que se turnan" se resuelve con dos semáforos que se pasan el permiso.
+- Un deadlock necesita las cuatro condiciones de Coffman. Rompe una: el **orden global de locks** elimina la espera circular. Livelock se cura con espera aleatoria; inanición, con locks justos.
+- El event loop brilla con I/O y sufre con CPU. Nunca bloquees una corrutina. El GIL limita el cálculo en hilos, no el I/O, y no hace tu código thread-safe; el build sin GIL existe desde 3.13 y es opcional.
+- En la base de datos, optimista (versión) cuando los conflictos son raros y pesimista (`FOR UPDATE`) cuando son frecuentes.
+
+</Takeaways>
+
+## Fuentes y lecturas
+
+- Rob Pike, [*Concurrency is not Parallelism*](https://go.dev/blog/waza-talk) (charla en Heroku Waza, 2012).
+- Remzi y Andrea Arpaci-Dusseau, [*Operating Systems: Three Easy Pieces*](https://pages.cs.wisc.edu/~remzi/OSTEP/), la parte de concurrencia: hilos, locks, variables de condición, semáforos y bugs comunes. Gratis en línea.
+- E. G. Coffman, M. Elphick y A. Shoshani, [*System Deadlocks*](https://dl.acm.org/doi/10.1145/356586.356588) (ACM Computing Surveys, 1971).
+- Brian Goetz y otros, [*Java Concurrency in Practice*](https://jcip.net/) (Addison-Wesley, 2006): tamaño de thread pools, visibilidad de memoria y orden de locks.
+- Oracle, [`java.util.concurrent`](https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/concurrent/package-summary.html) (locks, atómicos, colecciones concurrentes y executors) y la guía de [Virtual Threads](https://docs.oracle.com/en/java/javase/21/core/virtual-threads.html).
+- OpenJDK, [JEP 444: Virtual Threads](https://openjdk.org/jeps/444) y [JEP 491: Synchronize Virtual Threads without Pinning](https://openjdk.org/jeps/491).
+- Node.js, [The Node.js Event Loop](https://nodejs.org/en/learn/asynchronous-work/event-loop-timers-and-nexttick) y la documentación de [`worker_threads`](https://nodejs.org/api/worker_threads.html).
+- Python, [`asyncio`](https://docs.python.org/3/library/asyncio.html), [`threading`](https://docs.python.org/3/library/threading.html) y la guía [Python support for free threading](https://docs.python.org/3/howto/free-threading-python.html).
+- [PEP 703: Making the Global Interpreter Lock Optional in CPython](https://peps.python.org/pep-0703/) y [PEP 779: Criteria for supported status for free-threaded Python](https://peps.python.org/pep-0779/).
+- PostgreSQL, [Explicit Locking](https://www.postgresql.org/docs/current/explicit-locking.html) (`SELECT ... FOR UPDATE` y deadlocks entre filas).
+- LeetCode, [Print in Order](https://leetcode.com/problems/print-in-order/) y [Print FooBar Alternately](https://leetcode.com/problems/print-foobar-alternately/), los dos problemas de hilos más pedidos.
+

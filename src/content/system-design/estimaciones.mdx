@@ -1,0 +1,216 @@
+import { LatencyLadder } from '../../components/widgets/system-design/LatencyLadder'
+import { BackOfEnvelope } from '../../components/widgets/system-design/BackOfEnvelope'
+
+¿Cabe en memoria? ¿Necesito un caché o la base aguanta? ¿Uno, diez o mil servidores? ¿Un disco o un *data lake*? Estas preguntas no se responden con intuición: se responden con un cálculo de dos líneas hecho en la servilleta. Jeff Dean, uno de los arquitectos de la infraestructura de Google, lo llamaba *back-of-the-envelope calculation* y lo consideraba una habilidad básica para cualquiera que diseñe sistemas.
+
+El objetivo no es la precisión. Es el **orden de magnitud**: saber si algo son 10 o 10.000 peticiones por segundo, si son gigabytes o petabytes. Equivocarte por un factor de 2 casi nunca cambia el diseño; equivocarte por un factor de 1.000 te hace elegir la arquitectura equivocada.
+
+En este tema aprendes las constantes que conviene tener memorizadas, una receta fija para estimar tráfico, almacenamiento y ancho de banda, y cuándo vale la pena hacer cada cálculo en una entrevista.
+
+## Las reglas del juego
+
+Antes de los números, cuatro hábitos que separan un cálculo útil de uno que confunde:
+
+1. **Redondea sin culpa.** 86.400 segundos por día son «unos 100.000». 99.987 ÷ 9,1 es «100.000 ÷ 10». Nadie te va a pedir decimales.
+2. **Escribe los supuestos.** «Asumo 100 M de usuarios activos diarios y 10 lecturas por escritura.» Si el entrevistador no está de acuerdo, cambias un número, no todo el razonamiento.
+3. **Etiqueta las unidades.** El error más caro de una estimación es confundir KB con MB o bits con bytes. Un enlace de 1 Gbps mueve unos 125 MB por segundo, no 1 GB.
+4. **Saca una conclusión.** Un número sin consecuencia es ruido. «Son 20 TB al año: cabe en un clúster pequeño de base de datos, no necesito sharding todavía» es lo que el entrevistador quiere oír.
+
+## Las constantes que conviene memorizar
+
+### Potencias de dos (y de diez)
+
+Los tamaños se miden en potencias de dos, pero para estimar basta con tratarlas como potencias de diez:
+
+| Potencia | Valor exacto | Aproximación | Nombre |
+| --- | --- | --- | --- |
+| 2¹⁰ | 1.024 | mil (10³) | 1 KB |
+| 2²⁰ | 1.048.576 | un millón (10⁶) | 1 MB |
+| 2³⁰ | ~1,07 × 10⁹ | mil millones (10⁹) | 1 GB |
+| 2⁴⁰ | ~1,1 × 10¹² | un billón (10¹²) | 1 TB |
+| 2⁵⁰ | ~1,13 × 10¹⁵ | mil billones (10¹⁵) | 1 PB |
+
+<Callout type="warn" title="Billón no es billion">
+
+En español, un **billón** es 10¹² (un millón de millones). En inglés, *billion* es 10⁹ (mil millones). Cuando leas «1 B users» en un enunciado en inglés, son mil millones de usuarios. En esta guía escribimos «mil millones» o la abreviatura B para evitar el malentendido.
+
+</Callout>
+
+### Tiempo
+
+- Un día tiene **86.400 s ≈ 10⁵ s**. Este es el número más útil de todo el tema.
+- Por lo tanto, **1 millón de eventos al día ≈ 12 por segundo**, y **mil millones al día ≈ 12.000 por segundo**.
+- Un mes ≈ 2,5 millones de segundos; un año ≈ 3 × 10⁷ s (un truco mnemotécnico: π × 10⁷).
+
+### Tamaños típicos
+
+Supuestos razonables para arrancar, que conviene decir en voz alta y ajustar al problema:
+
+| Dato | Tamaño aproximado |
+| --- | --- |
+| Entero de 64 bits, timestamp | 8 B |
+| UUID (binario / texto) | 16 B / 36 B |
+| Carácter ASCII / UTF-8 | 1 B / 1–4 B |
+| Un tuit o mensaje de chat corto con metadatos | del orden de cientos de bytes a 1 KB |
+| Una fila típica de metadatos (usuario, publicación) | del orden de 1 KB |
+| Una foto comprimida para móvil | cientos de KB a pocos MB |
+| Un minuto de video en calidad media | del orden de decenas de MB |
+
+## Números de latencia
+
+La lista *Latency numbers every programmer should know* se popularizó a partir de una charla de Jeff Dean y la recopilación de Peter Norvig. Los valores exactos cambian con el hardware, pero las **proporciones** se mantienen y son las que guían el diseño. Compara la versión clásica (alrededor de 2012) con números de hardware en la nube actual, y activa la escala humana para sentir las diferencias:
+
+<LatencyLadder />
+
+Las lecciones que debes sacar de esa escalera, más que las cifras:
+
+- **La memoria es unas mil veces más rápida que ir por la red dentro del datacenter**, y la red local es cientos de veces más rápida que cruzar un océano. Por eso existen los cachés en memoria y las CDN.
+- **Un viaje de ida y vuelta entre continentes cuesta del orden de 100–150 ms**, y eso lo pone la física (la velocidad de la luz en fibra), no tu código. Si tu usuario está en Santiago y tu servidor en Virginia, cada viaje redondo se lleva una buena parte de tu presupuesto de latencia. Diseños multi-región existen sobre todo por esto.
+- **Secuencial gana a aleatorio**, sobre todo en discos. Es la razón de fondo de que los *logs* de solo-anexar (Kafka, los árboles LSM) sean tan eficientes.
+- **Las llamadas en serie se suman.** Si tu endpoint hace 8 llamadas secuenciales a otros servicios dentro del datacenter, a medio milisegundo cada una, ya gastaste 4 ms solo en red, antes de hacer trabajo útil. Paraleliza o reduce saltos.
+- **Comprimir es barato comparado con enviar.** Comprimir unos KB cuesta microsegundos; mandarlos lejos, milisegundos.
+
+<Quiz
+  question="Un endpoint de tu API, desplegado en us-east, responde en 40 ms medidos en el servidor. Usuarios en Sídney reportan que tarda más de medio segundo en cargar. ¿Cuál es la explicación más probable?"
+  options={[
+    { text: 'El servidor está sobrecargado durante el horario de Australia.', why: 'Posible, pero entonces lo verías en la latencia medida del lado del servidor, que sigue en 40 ms.' },
+    { text: 'Varios viajes de ida y vuelta (DNS, TCP, TLS, la petición y quizá redirecciones) a ~200 ms cada uno entre Australia y EE. UU.', correct: true, why: 'Con RTTs intercontinentales de cientos de milisegundos, tres o cuatro viajes redondos ya superan el medio segundo. La solución es acercar contenido y terminación TLS al usuario (CDN, edge, región en Asia-Pacífico) y reducir viajes.' },
+    { text: 'La base de datos hace lecturas aleatorias de disco.', why: 'Eso se reflejaría en los 40 ms del servidor. La diferencia ocurre fuera del servidor: en la red.' },
+    { text: 'JSON es un formato lento; hay que pasar a Protobuf.', why: 'Serializar unos KB cuesta microsegundos. Cambiar el formato no recupera cientos de milisegundos.' },
+  ]}
+/>
+
+### Disponibilidad en «nueves»
+
+Otra tabla que vale la pena tener a mano: cuánto tiempo fuera de servicio permite cada nivel de disponibilidad (sin contar mantenimientos planificados).
+
+| Disponibilidad | Por año | Por mes (30 días) | Por día |
+| --- | --- | --- | --- |
+| 99 % | 3,65 días | 7,2 horas | 14,4 min |
+| 99,9 % | 8,76 horas | 43,2 min | 1,44 min |
+| 99,95 % | 4,38 horas | 21,6 min | 43,2 s |
+| 99,99 % | 52,6 min | 4,32 min | 8,64 s |
+| 99,999 % | 5,26 min | 25,9 s | 0,87 s |
+
+Dos reglas para combinar componentes:
+
+- **En serie, las disponibilidades se multiplican.** Si una petición pasa por tres servicios con 99,9 % cada uno, el total es 0,999³ ≈ 99,7 %. Cada dependencia síncrona te resta nueves.
+- **En paralelo (redundancia), se multiplican las indisponibilidades.** Dos réplicas independientes con 99 % cada una: 1 − 0,01² = 99,99 %. «Independientes» es la palabra clave: dos réplicas en el mismo rack comparten fallas.
+
+## La receta: tráfico, almacenamiento, ancho de banda, servidores
+
+Casi cualquier estimación de entrevista sale de estas cinco fórmulas:
+
+<Steps>
+<Step title="QPS promedio">
+
+**QPS de escritura = DAU × escrituras por usuario al día ÷ 86.400.** Las lecturas salen de multiplicar por la proporción lectura/escritura.
+
+</Step>
+<Step title="QPS de pico">
+
+**Pico ≈ promedio × factor.** Un factor de 2–3 es un supuesto común para tráfico diario con forma de onda; eventos (un torneo, una venta de entradas) pueden ser de 10× o más. Diseñas para el pico, no para el promedio.
+
+</Step>
+<Step title="Almacenamiento">
+
+**Bytes por día = escrituras por día × tamaño de cada una.** Multiplica por 365 × años de retención × número de copias (réplicas o el overhead del *erasure coding*).
+
+</Step>
+<Step title="Ancho de banda">
+
+**Entrada = QPS de escritura × tamaño; salida = QPS de lectura × tamaño de respuesta.** Multiplica por 8 para pasar de bytes a bits.
+
+</Step>
+<Step title="Servidores">
+
+**Servidores ≈ QPS de pico ÷ capacidad por servidor**, más margen para perder uno y desplegar. La capacidad por servidor es un supuesto que depende del trabajo por petición: dilo explícitamente.
+
+</Step>
+</Steps>
+
+Prueba la receta. Los ejemplos precargados reproducen los supuestos de dos capítulos clásicos del libro de Alex Xu (el de estimaciones con «tuits» y el del acortador de URLs) y uno propio de chat:
+
+<BackOfEnvelope />
+
+Juega con el ejemplo de los tuits: con 150 M de DAU y 2 tuits al día salen unos 3.500 por segundo, que es poco para un clúster moderno. Lo que asusta son los **~30 TB diarios de media**: 55 PB en cinco años. La conclusión de diseño es inmediata. Los metadatos van en una base de datos; las fotos y videos, en *blob storage* (S3, GCS) detrás de una CDN.
+
+### Capacidad con la ley de Little
+
+Cuando necesites saber cuántas peticiones están «en vuelo» al mismo tiempo, por ejemplo para dimensionar un pool de conexiones o hilos, usa la **ley de Little**:
+
+> concurrencia = throughput × latencia
+
+Si tu servicio recibe 5.000 peticiones por segundo y cada una tarda 200 ms, en promedio hay 5.000 × 0,2 = **1.000 peticiones simultáneas**. Si cada instancia tiene un pool de 100 conexiones a la base, necesitas al menos 10 instancias solo para no hacer cola, y la base tiene que aguantar 1.000 conexiones (o necesitas un *pooler* como PgBouncer delante). La ley se cumple para cualquier sistema estable, sin importar la distribución de las llegadas, y por eso es tan útil.
+
+<Quiz
+  question="Un servicio de notificaciones envía 2.000 millones de notificaciones al día, cada una de ~1 KB con metadatos. ¿Cuál es el orden de magnitud correcto?"
+  options={[
+    { text: 'Unas 2.000 por segundo y 2 GB por día.', why: 'Te equivocaste por un factor de 10 en el QPS y de 1.000 en el almacenamiento. 2 × 10⁹ ÷ 10⁵ = 2 × 10⁴, y 2 × 10⁹ × 1 KB = 2 TB.' },
+    { text: 'Unas 23.000 por segundo en promedio y ~2 TB por día.', correct: true, why: '2 × 10⁹ ÷ 86.400 ≈ 23.000/s, y con picos de 2–3× hablamos de 50.000–70.000/s. 2 × 10⁹ × 1 KB = 2 × 10¹² B = 2 TB diarios: una cola o un log particionado y retención acotada, no una tabla que crece para siempre.' },
+    { text: 'Unas 230.000 por segundo y 20 TB por día.', why: 'Multiplicaste por 10 de más en ambos. Revisa la división por 86.400 ≈ 10⁵.' },
+    { text: 'No se puede estimar sin saber cuántos usuarios hay.', why: 'Ya te dieron el total diario, que es lo que importa. Pedir datos que no necesitas es una forma de no comprometerse con un número.' },
+  ]}
+/>
+
+## Ejemplo trabajado: una app para compartir fotos
+
+Enunciado: *estima la escala de una app para compartir fotos*. Supuestos (dichos en voz alta): 100 M de usuarios activos diarios; 1 de cada 10 sube una foto al día; cada usuario ve 50 fotos al día; cada foto pesa ~2 MB original más ~300 KB de miniaturas y versiones reducidas.
+
+**Escrituras.** 100 M × 0,1 = 10 M fotos al día ÷ 10⁵ ≈ **115 subidas por segundo** (pico ~350/s). Poquísimo: un par de servidores de API aguantan esto. Las subidas grandes ni siquiera deberían pasar por tus servidores; el cliente sube directo a blob storage con una URL prefirmada (lo vemos en *IDs, búsqueda, geo y blobs*).
+
+**Almacenamiento de fotos.** 10 M × 2,3 MB ≈ **23 TB por día**, unos **8,4 PB al año** por copia. Conclusión: blob storage, que se encarga de la durabilidad con replicación o *erasure coding*, y políticas de ciclo de vida para mover fotos viejas a almacenamiento más barato.
+
+**Metadatos.** Supongamos ~500 B por foto (id, autor, fecha, ubicación, URL): 10 M × 500 B = 5 GB/día ≈ **1,8 TB al año**. Cabe en una base relacional con réplicas durante años; el sharding puede esperar.
+
+**Lecturas.** 100 M × 50 = 5.000 M vistas al día ÷ 10⁵ ≈ **50.000 por segundo** en promedio, con picos de 150.000. La proporción lectura/escritura es de unos 500:1. Conclusión: este sistema es de lectura; caché agresivo para metadatos y una CDN para las imágenes.
+
+**Ancho de banda de salida.** Si cada vista sirve en promedio una versión de ~300 KB: 5 × 10⁹ × 300 KB = 1,5 PB por día ≈ 17 GB/s ≈ **140 Gbps** sostenidos. Ningún grupo pequeño de servidores sirve eso de forma económica: es trabajo para una CDN, y es probablemente tu mayor costo.
+
+En cinco minutos pasaste de un enunciado vago a cuatro decisiones de arquitectura justificadas: blob storage para fotos, base relacional para metadatos, caché por la proporción de lecturas y CDN por el ancho de banda.
+
+<Callout type="interview" title="Cómo presentar una estimación">
+
+Hazlo en una esquina de la pizarra, en voz alta y en este orden: **supuestos → cálculo → conclusión**. «Asumo 100 M de DAU y que el 10 % sube una foto. Son 10 M al día, unos 100 por segundo: las escrituras no son el problema. Pero 50 vistas por usuario son 50.000 lecturas por segundo y 140 Gbps de salida: el problema es servir imágenes, así que la CDN es parte central del diseño.» Y no calcules lo que no vas a usar.
+
+</Callout>
+
+## Errores frecuentes
+
+- **Calcular sin concluir.** Si el número no cambia ninguna decisión, no lo calcules.
+- **Olvidar el pico.** El promedio diario esconde que la mitad del tráfico llega en pocas horas, y los eventos pueden multiplicarlo por 10.
+- **Olvidar las réplicas y los índices.** Tres réplicas triplican el almacenamiento; los índices de una base relacional pueden ocupar tanto como los datos.
+- **Bits y bytes.** Los enlaces de red se miden en bits por segundo; los discos y archivos, en bytes. Factor 8.
+- **Falsa precisión.** «11.574,07 QPS» comunica que no entendiste el ejercicio. «Unos 12.000» comunica que sí.
+- **Tomar los números de latencia como verdades absolutas.** Un SSD NVMe moderno y un disco de red en la nube difieren por un orden de magnitud. Lo que importa son las proporciones, y decir de dónde sacas tu supuesto.
+
+<Quiz
+  question="Tu API recibe 3.000 peticiones por segundo y cada una mantiene una conexión a Postgres durante 50 ms en promedio. ¿Cuántas conexiones simultáneas necesita, como mínimo, en promedio?"
+  options={[
+    { text: '50', why: 'Confundiste la latencia con la concurrencia. La ley de Little multiplica throughput por tiempo de permanencia.' },
+    { text: '150', correct: true, why: 'Ley de Little: 3.000/s × 0,05 s = 150 conexiones en uso en promedio. Como los picos y la variabilidad empujan hacia arriba, dimensionarías el pool con margen, y si son muchas instancias pequeñas, pondrías un pooler delante de la base.' },
+    { text: '3.000', why: 'Eso sería si cada petición durara un segundo completo.' },
+    { text: '60.000', why: 'Multiplicaste por la latencia en milisegundos en vez de segundos. Cuida las unidades.' },
+  ]}
+/>
+
+<Takeaways>
+
+- Estimas para conocer el **orden de magnitud** y tomar una decisión, no para acertar decimales.
+- Memoriza: **1 día ≈ 10⁵ s**, 1 M/día ≈ 12/s, 2¹⁰ ≈ 10³, y la tabla de nueves.
+- Memoria ≪ red local ≪ red intercontinental. Las llamadas en serie se suman; lo secuencial gana a lo aleatorio.
+- La receta: **QPS promedio → pico → almacenamiento (× años × copias) → ancho de banda → servidores**.
+- La **ley de Little** (concurrencia = throughput × latencia) dimensiona pools, hilos y conexiones.
+- Presenta siempre **supuestos → cálculo → conclusión de diseño**.
+
+</Takeaways>
+
+## Fuentes y lecturas
+
+- Jonas Bonér, [*Latency numbers every programmer should know*](https://gist.github.com/jboner/2841832): la recopilación de los números de Jeff Dean y Peter Norvig.
+- Simon Eskildsen, [*napkin-math*](https://github.com/sirupsen/napkin-math): números actualizados de latencia, throughput y costos en la nube, con la metodología para medirlos.
+- Colin Scott, [*Latency numbers every programmer should know* (interactivo)](https://colin-scott.github.io/personal_website/research/interactive_latency.html): cómo evolucionaron los números año a año.
+- Jeff Dean, [*Designs, Lessons and Advice from Building Large Distributed Systems*](https://www.cs.cornell.edu/projects/ladis2009/talks/dean-keynote-ladis2009.pdf) (LADIS 2009): la charla que popularizó los números y los cálculos de servilleta.
+- Alex Xu, *System Design Interview*, cap. 2: [*Back-of-the-envelope estimation*](https://bytebytego.com/courses/system-design-interview/back-of-the-envelope-estimation).
+- Google SRE, [*Availability table*](https://sre.google/sre-book/availability-table/): tiempo de caída permitido por nivel de disponibilidad.
+- Wikipedia, [*Little's law*](https://en.wikipedia.org/wiki/Little%27s_law).

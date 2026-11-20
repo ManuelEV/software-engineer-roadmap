@@ -1,0 +1,132 @@
+.bh-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-2);
+  margin-bottom: var(--s-4);
+}
+.bh-clock {
+  margin-left: auto;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-3);
+}
+.bh-slow-on {
+  border-color: var(--warn);
+  color: var(--warn);
+}
+.bh-pools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-4);
+  justify-content: center;
+}
+.bh-pool {
+  display: grid;
+  gap: var(--s-2);
+  padding: var(--s-3);
+  border: 1.5px dashed var(--rule-strong);
+  border-radius: var(--radius-lg);
+  background: var(--card);
+}
+.bh-pool__label {
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.bh-pool__slots {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-width: calc(5 * 40px + 4 * 6px);
+}
+.bh-slot {
+  display: inline-grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 8px;
+  border: 3px solid var(--rule);
+  background: var(--paper);
+  font-weight: 700;
+  font-size: 0.95rem;
+  color: var(--ink);
+  transition:
+    background-color 160ms var(--ease-out),
+    border-color 160ms var(--ease-out);
+}
+.bh-slot--pagos {
+  border-color: var(--l4);
+  background: color-mix(in oklab, var(--l4) 22%, var(--paper));
+}
+.bh-slot--catalogo {
+  border-color: var(--l3);
+  background: color-mix(in oklab, var(--l3) 22%, var(--paper));
+}
+.bh-slot--recos {
+  border-color: var(--l2);
+  background: color-mix(in oklab, var(--l2) 30%, var(--paper));
+}
+.bh-slot--mini {
+  width: 26px;
+  height: 26px;
+  border-width: 2px;
+  font-size: 0.75rem;
+}
+.bh-key {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--s-2) var(--s-4);
+  margin-top: var(--s-3);
+  font-size: 0.85rem;
+  color: var(--ink-2);
+}
+.bh-key__item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.bh-avail {
+  display: grid;
+  gap: var(--s-2);
+}
+.bh-avail__row {
+  display: grid;
+  grid-template-columns: minmax(7.5rem, auto) 1fr 3.2rem;
+  align-items: center;
+  gap: var(--s-3);
+}
+.bh-avail__label {
+  font-weight: 600;
+  color: var(--ink);
+}
+.bh-avail__track {
+  height: 10px;
+  border-radius: 999px;
+  background: var(--paper-3);
+  overflow: hidden;
+}
+.bh-avail__fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--ok);
+}
+.bh-avail__fill.is-warn {
+  background: var(--warn);
+}
+.bh-avail__fill.is-bad {
+  background: var(--bad);
+}
+.bh-avail__pct {
+  font-weight: 700;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.bh-avail__note {
+  font-size: 0.82rem;
+  color: var(--ink-3);
+}

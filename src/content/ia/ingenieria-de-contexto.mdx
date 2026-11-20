@@ -1,0 +1,213 @@
+import { ContextBudget } from '../../components/widgets/ia/ContextBudget'
+
+Un modelo de lenguaje no sabe nada de tu proyecto salvo lo que hay en su ventana de contexto en ese preciso momento. No recuerda la sesión de ayer, no vio la reunión donde decidieron no usar `float` para el dinero y no sabe que `src/legacy/` es intocable. Todo lo que el agente "sabe" es lo que alguien (tú, el harness o el propio agente) puso en el contexto.
+
+Por eso, a mediados de 2025, el término *prompt engineering* empezó a quedarse corto. Andrej Karpathy y Tobi Lütke popularizaron **context engineering**: el arte y la ciencia de llenar la ventana de contexto con justo la información necesaria para el siguiente paso. Anthropic lo define como el conjunto de estrategias para curar y mantener el conjunto óptimo de tokens durante la inferencia. En este tema vas a aprender a pensar el contexto como un presupuesto, a escribir un buen `CLAUDE.md` o `AGENTS.md`, y a usar las técnicas que mantienen a un agente lúcido en sesiones largas.
+
+## La ventana como presupuesto de atención
+
+La intuición ingenua es "más contexto = mejor". Es falsa por tres razones.
+
+**Cuesta dinero y tiempo.** Cada vuelta del loop reenvía la conversación completa. El *prompt caching* abarata la parte repetida, pero cada token nuevo se paga y se procesa.
+
+**Diluye la atención.** Anthropic habla de un *attention budget*: cada token compite por la atención del modelo. El reporte técnico *Context Rot* de Chroma (julio de 2025) evaluó 18 modelos y encontró que el rendimiento se vuelve menos confiable a medida que crece la entrada, incluso en tareas triviales, y que empeora más cuando hay información parecida pero incorrecta (distractores). A ese deterioro se lo llama **context rot**.
+
+**El ruido no es neutro.** Un log de 800 líneas con 2 relevantes no solo ocupa espacio: entrena la atención del modelo en la dirección equivocada.
+
+La meta, en palabras de Anthropic, es encontrar **el conjunto más pequeño posible de tokens de alta señal** que maximice la probabilidad del resultado que buscas.
+
+<Callout type="note" title="¿Y las ventanas de 1 millón de tokens?">
+
+Con los modelos actuales, quedarse literalmente sin contexto es raro: las ventanas son enormes y herramientas como Claude Code compactan solas antes de llenarse. La propia guía de buenas prácticas de Claude Code ya no trata la ventana como "la restricción principal". Pero el argumento de calidad sigue en pie: un contexto enfocado da mejores respuestas y cuesta menos. Por eso `/clear` entre tareas distintas sigue siendo un buen hábito.
+
+</Callout>
+
+Prueba el presupuesto tú mismo. Agrega lecturas, logs y turnos; compara explorar en el hilo principal con delegar en un subagente; compacta.
+
+<ContextBudget />
+
+Dos cosas para notar. Primero, el contexto **fijo** (system prompt, herramientas, `CLAUDE.md`) se paga en cada vuelta: un `CLAUDE.md` inflado o seis servidores MCP cargados completos son un impuesto permanente. Segundo, lo que más contexto consume no es lo que escribes tú, sino las **salidas de herramientas**. Filtrar la salida de un comando ahorra más que recortar tu prompt.
+
+## Qué entra en cada llamada
+
+Conviene tener presente la anatomía de lo que el modelo recibe, de lo más estable a lo más volátil:
+
+1. **System prompt del agente.** Lo escribe el fabricante del harness: cómo comportarse, cómo usar las herramientas.
+2. **Definiciones de herramientas.** Nombre, descripción y esquema de cada una. Con muchas herramientas MCP, esto crece rápido; por eso existe la *tool search*, que carga definiciones bajo demanda.
+3. **Instrucciones del proyecto.** `CLAUDE.md`, `AGENTS.md`, reglas, metadatos de skills.
+4. **Conversación.** Tus pedidos y las respuestas del modelo.
+5. **Resultados de herramientas.** Archivos leídos, salidas de comandos, respuestas de APIs.
+
+El orden no es casual. El *prompt caching* funciona por prefijo: lo estable va primero para reutilizar la caché, y cualquier cambio en un byte del prefijo invalida todo lo que viene después. Un `CLAUDE.md` que se reescribe a cada rato o una fecha con segundos en el system prompt matan la caché silenciosamente.
+
+## CLAUDE.md y AGENTS.md: la memoria del repositorio
+
+Como el modelo empieza cada sesión en blanco, los agentes leen al arrancar un archivo de instrucciones del proyecto. Claude Code usa `CLAUDE.md`. Codex, Cursor, Gemini CLI, Copilot, Jules, Aider y muchos otros adoptaron **`AGENTS.md`**, un formato abierto que hoy custodia la *Agentic AI Foundation* bajo la Linux Foundation. Ambos son Markdown sin campos obligatorios.<Sidenote>Claude Code lee `AGENTS.md` si en el repo no hay `CLAUDE.md`. Si quieres un único archivo para todas las herramientas, puedes escribir `AGENTS.md` y, en `CLAUDE.md`, importarlo con una línea `@AGENTS.md`.</Sidenote>
+
+En Claude Code los archivos se apilan por alcance: política de la organización, `~/.claude/CLAUDE.md` (tus preferencias en todos los proyectos), `./CLAUDE.md` del repo (compartido por el equipo) y `CLAUDE.local.md` (tus preferencias en este repo, fuera de git). Los `CLAUDE.md` de subdirectorios se cargan recién cuando el agente trabaja en esa carpeta. `AGENTS.md` sigue una regla parecida: en un monorepo, el archivo más cercano al código que se edita tiene precedencia.
+
+### Qué poner (y qué no)
+
+La prueba es simple: **¿el agente podría deducir esto leyendo el código?** Si la respuesta es sí, no lo escribas. La guía oficial de Claude Code propone guardar solo:
+
+- Cómo confirmar el trabajo: los comandos exactos de test, typecheck y lint, y cómo correr **un solo** archivo de test.
+- Lugares donde el código engaña: un patrón viejo que está por todos lados pero que el código nuevo no debe copiar.
+- Decisiones que no están en el repo: qué helper de errores eligió el equipo, cómo se despliega.
+- Cualquier cosa que ya tuviste que corregir dos veces.
+
+Y deja afuera: la descripción de la arquitectura que el agente puede leer, guías de estilo que el linter ya impone, procedimientos largos que solo importan a veces (eso es un *skill*) y reglas que no pueden tener excepciones (eso es un *hook* o una regla de permisos).
+
+```markdown title="CLAUDE.md (servicio de pagos)"
+# Comandos
+- Instalar: pnpm install
+- Un test: pnpm vitest run src/payments/refunds/refund.test.ts
+- Suite completa: pnpm test   (requiere pnpm db:up para levantar Postgres)
+- Tipos: pnpm tsc --noEmit
+- Lint con autofix: pnpm lint --fix
+
+# Convenciones que no se ven en el código
+- Montos siempre en centavos (entero). Nunca float.
+- Errores de dominio con DomainError (src/lib/errors.ts); no lances strings.
+- src/legacy/ sigue en producción, pero no copies sus patrones (callbacks, any).
+- Toda llamada al proveedor de pagos pasa por PaymentGateway.
+
+# Trampas
+- Los tests de integración usan el sandbox del proveedor: sin PSP_SANDBOX_KEY
+  fallan con 401 (ver .env.example).
+- Las migraciones aplicadas son inmutables: crea una nueva con pnpm db:new.
+
+# Para profundizar (léelos cuando la tarea lo pida)
+- Arquitectura y ADRs: docs/architecture.md, docs/adr/
+- Flujo de reembolsos: docs/flows/refunds.md
+```
+
+Fíjate en el último bloque: son **rutas, no contenido**. El agente las abre si las necesita. Si en cambio escribieras `@docs/flows/refunds.md`, Claude Code importaría ese archivo completo en cada sesión. Los imports sirven para organizar, pero no ahorran contexto.
+
+Tres reglas de mantenimiento que vale la pena adoptar:
+
+- **Corto.** La documentación de Claude Code recomienda menos de 200 líneas por archivo; las instrucciones que solo aplican a una parte del código van en reglas con alcance por ruta (`.claude/rules/` con `paths:` en el frontmatter), que se cargan solo al tocar esos archivos.
+- **Concreto y verificable.** "Usa 2 espacios" en vez de "formatea bien"; "corre `pnpm test` antes de commitear" en vez de "testea tus cambios".
+- **Sin gritos.** Si una línea no se cumple y tu reflejo es agregarle IMPORTANTE en mayúsculas, la guía de Claude Code lo dice sin rodeos: o el archivo está tan largo que la línea se pierde, o es una regla sin excepciones y debería ser un hook. Con los modelos actuales, el énfasis excesivo suele hacer que la regla se aplique de más.
+
+<Callout type="idea" title="Un mapa, no una enciclopedia">
+
+El equipo de OpenAI que construyó un producto entero con Codex (lo cuenta en *Harness engineering*, febrero de 2026) llegó a la misma conclusión: su `AGENTS.md` es un índice corto que apunta a fuentes de verdad más profundas, como un `ARCHITECTURE.md` y un directorio `docs/`. Un archivo de instrucciones gigante compite con la tarea por la atención del modelo y se pudre rápido.
+
+</Callout>
+
+<Quiz
+  question="¿Cuál de estas líneas tiene más sentido en el CLAUDE.md de un repo?"
+  options={[
+    { text: '“El proyecto usa React con componentes funcionales y hooks.”', why: 'El agente lo deduce en segundos leyendo cualquier componente. Ocupa contexto en cada turno sin aportar nada.' },
+    { text: '“Los tests de integración necesitan pnpm db:up antes; sin eso fallan con ECONNREFUSED.”', correct: true, why: 'Exacto: es información que el código no revela, que evita una vuelta perdida y que hace falta en casi toda sesión.' },
+    { text: '“IMPORTANTE: NUNCA modifiques archivos de src/gen/ BAJO NINGUNA CIRCUNSTANCIA.”', why: 'Si es una regla sin excepciones, no debe depender de que el modelo la recuerde: va en un hook PreToolUse o una regla deny de Edit.' },
+  ]}
+/>
+
+## Precargar o traer justo a tiempo
+
+Hay dos estrategias para darle información al agente, y los buenos harness combinan ambas.
+
+**Precargar** (*upfront*): poner la información en el contexto desde el principio. Es lo que hace `CLAUDE.md`. Ventaja: el agente la tiene siempre. Costo: se paga en cada vuelta, sea relevante o no.
+
+**Recuperar justo a tiempo** (*just-in-time*): el agente guarda identificadores livianos (rutas de archivos, consultas, URLs) y carga los datos con herramientas cuando los necesita. Es lo que hace un agente de código cuando usa `grep` y `glob` para encontrar el archivo correcto en lugar de recibir el repo entero. Anthropic describe el enfoque de Claude Code como **híbrido**: `CLAUDE.md` va al contexto de entrada, y el resto se navega con herramientas.
+
+<Compare>
+<Option title="Precargar" verdict="Para lo pequeño, estable y siempre útil">
+
+- Comandos de build y test.
+- Convenciones no deducibles.
+- Trampas conocidas.
+
+</Option>
+<Option title="Justo a tiempo" verdict="Para lo grande, cambiante u ocasional">
+
+- El código mismo (búsqueda con grep/glob).
+- Documentación de flujos específicos.
+- Datos externos vía MCP.
+- Procedimientos largos (skills).
+
+</Option>
+</Compare>
+
+### Divulgación progresiva
+
+Los **skills** llevan el "justo a tiempo" un paso más allá con lo que Anthropic llama *progressive disclosure*. En el nivel 1, solo el nombre y la descripción de cada skill van al contexto al arrancar: lo justo para que el modelo sepa cuándo usarlo. En el nivel 2, si el skill parece relevante, el modelo lee el `SKILL.md` completo. En el nivel 3, el skill puede apuntar a archivos adicionales (referencias, scripts) que se leen solo si hacen falta. Un skill puede contener mucha más información de la que cabría en el contexto, y costar casi nada mientras no se use. Lo vemos en detalle en [Skills, MCP, subagentes y hooks](/ia/herramientas).
+
+## Cuando el contexto se llena
+
+En sesiones largas, el contexto crece inevitablemente. Hay cuatro herramientas para manejarlo, de la más suave a la más drástica.
+
+### Limpiar resultados viejos
+
+Un archivo leído hace 30 vueltas probablemente ya no importa. La forma más liviana de compactación es **borrar resultados de herramientas antiguos** y dejar solo la constancia de que la llamada existió. La API de Anthropic lo ofrece como *context editing*.
+
+### Compactar
+
+La **compactación** toma una conversación cerca del límite, la resume y continúa con el resumen. Claude Code lo hace automáticamente antes de que se llene la ventana, y puedes forzarlo con `/compact` (opcionalmente con instrucciones: `/compact conserva los nombres de archivos tocados y los tests pendientes`). La API también ofrece compactación del lado del servidor. El riesgo es perder un detalle que resultaba importante; por eso Anthropic recomienda afinar los prompts de compactación priorizando primero no perder nada (*recall*) y después recortar (*precisión*).
+
+### Tomar notas fuera del contexto
+
+El agente escribe notas persistentes fuera de la ventana (un `NOTES.md`, una lista de tareas, un archivo de progreso) y las vuelve a leer después. Así sobrevive a la compactación y hasta a cambiar de sesión. Es la base de los agentes de larga duración que vemos en [Harness engineering](/ia/harness): un archivo de progreso más el historial de git permiten que una sesión nueva retome el trabajo de la anterior.
+
+```markdown title="progress.md (escrito por el agente)"
+## 2026-11-18 sesión 3
+- Hecho: T1–T4 de specs/014-reembolsos-parciales/tasks.md (commits a1f3c2e..d91b7f3)
+- En curso: T5, PaymentGateway.refund acepta monto parcial. Falta el caso de error 402.
+- Ojo: el sandbox del proveedor rechaza reembolsos menores a 50 centavos (no documentado).
+- Siguiente: terminar T5, luego T6 (endpoint).
+```
+
+### Empezar de nuevo
+
+`/clear` y una sesión limpia con un buen prompt suelen ganarle a una conversación de 200 vueltas con tres intentos fallidos adentro. La guía de Claude Code lo resume así: si corregiste lo mismo dos veces y sigue mal, una tercera corrección solo agrega otro intento fallido que el modelo tiene que releer.
+
+<Callout type="tip" title="Memoria automática">
+
+Además del `CLAUDE.md` que escribes tú, algunas herramientas mantienen una memoria que escribe el propio agente a partir de tus correcciones (Claude Code la llama *auto memory* y carga solo su comienzo en cada sesión). Revísala de vez en cuando: es contexto que se paga en cada turno y puede acumular cosas desactualizadas.
+
+</Callout>
+
+## Subagentes para aislar contexto
+
+Un **subagente** es otra instancia del modelo con su propia ventana de contexto, limpia. El agente principal le delega una tarea ("encuentra dónde se calcula el envío y cómo se testea"), el subagente lee veinte archivos en *su* contexto y devuelve un resumen condensado. Anthropic describe que estos resúmenes suelen ocupar del orden de 1.000 a 2.000 tokens, mientras la exploración completa queda fuera del hilo principal.
+
+Los subagentes sirven para tres cosas distintas, y conviene no confundirlas:
+
+- **Mantener el ruido fuera.** Exploraciones, búsquedas amplias o logs largos que no quieres en tu conversación principal.
+- **Paralelizar.** Varias investigaciones independientes a la vez.
+- **Revisión independiente.** Un revisor que no vio el razonamiento que produjo el código no hereda sus sesgos.
+
+Y un costo que no hay que olvidar: cada subagente consume sus propios tokens. En su sistema multiagente de investigación, Anthropic midió que los agentes usan unas 4 veces los tokens de un chat, y los sistemas multiagente unas 15 veces. La guía actual de Claude Code es explícita: delegar la misma tarea a un subagente no la hace mejor; lo que mejora resultados es el contexto limpio cuando hay ruido o cuando quieres una mirada independiente.
+
+<Quiz
+  question="Necesitas que el agente entienda cómo funciona el módulo de facturación (40 archivos) antes de hacer un cambio de 10 líneas. ¿Qué estrategia de contexto conviene?"
+  options={[
+    { text: 'Pegar los 40 archivos en el prompt para que tenga todo.', why: 'Llena el contexto de detalle que no hará falta, con distractores incluidos. Es exactamente el escenario de context rot.' },
+    { text: 'Que un subagente explore y devuelva un resumen de cómo funciona y qué archivos tocar; luego el agente principal lee solo esos.', correct: true, why: 'Exacto: la exploración ruidosa queda en otro contexto y al hilo principal llega solo lo relevante, más los archivos que realmente va a editar.' },
+    { text: 'Escribir un CLAUDE.md con la documentación completa del módulo de facturación.', why: 'Se pagaría en cada sesión, incluidas las que no tocan facturación. Si la documentación es útil, mejor como archivo enlazado o skill que se lee bajo demanda.' },
+  ]}
+/>
+
+<Takeaways>
+
+- El contexto es un **presupuesto de atención**: busca el conjunto más pequeño de tokens de alta señal, no el más grande.
+- El *context rot* es real: más contexto, y sobre todo más distractores, degradan el rendimiento.
+- `CLAUDE.md` / `AGENTS.md`: corto, concreto, solo lo que el código no revela. Rutas en lugar de contenido; reglas sin excepciones van a hooks.
+- Combina precarga (lo pequeño y siempre útil) con recuperación justo a tiempo (el código, docs, datos externos) y divulgación progresiva (skills).
+- Lo que más contexto consume son las salidas de herramientas: fíltralas.
+- Para sesiones largas: limpiar resultados viejos, compactar, notas fuera del contexto y, cuando hace falta, `/clear`.
+- Los subagentes aíslan ruido, paralelizan y dan revisión independiente, pero cuestan tokens propios.
+
+</Takeaways>
+
+## Fuentes y lecturas
+
+- Anthropic, [Effective context engineering for AI agents](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents) (septiembre de 2025).
+- Chroma, [Context Rot: How Increasing Input Tokens Impacts LLM Performance](https://research.trychroma.com/context-rot) (julio de 2025).
+- Anthropic, [How Claude remembers your project](https://code.claude.com/docs/en/memory): CLAUDE.md, AGENTS.md, reglas y auto memory.
+- Anthropic, [Best practices for Claude Code](https://code.claude.com/docs/en/best-practices): sección *Keep CLAUDE.md short*.
+- [AGENTS.md](https://agents.md/): el estándar abierto y sus ejemplos.
+- OpenAI, [Harness engineering: leveraging Codex in an agent-first world](https://openai.com/index/harness-engineering/) (febrero de 2026).
+- Anthropic, [How we built our multi-agent research system](https://www.anthropic.com/engineering/multi-agent-research-system) (junio de 2025).
+- Drew Breunig, [Prompts vs. Context](https://www.dbreunig.com/2025/06/25/prompts-vs-context.html) (junio de 2025): el contexto del cambio de nombre.

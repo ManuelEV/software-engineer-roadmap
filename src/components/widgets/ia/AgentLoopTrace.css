@@ -1,0 +1,154 @@
+.alt-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-2);
+  width: 100%;
+}
+.alt-controls .icon-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+.alt-count {
+  margin-left: auto;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+}
+.alt-grid {
+  display: grid;
+  grid-template-columns: minmax(220px, 300px) minmax(0, 1fr);
+  gap: var(--s-4);
+  align-items: start;
+}
+@media (max-width: 700px) {
+  .alt-grid {
+    grid-template-columns: 1fr;
+  }
+}
+.alt-map {
+  width: 100%;
+  max-width: 340px;
+  height: auto;
+  margin-inline: auto;
+  display: block;
+}
+.alt-map__loop {
+  fill: none;
+  stroke: var(--line);
+  stroke-width: 5;
+}
+.alt-map__spur {
+  fill: none;
+  stroke: var(--rule-strong);
+  stroke-width: 5;
+  stroke-linecap: round;
+  transition: stroke 240ms var(--ease-out);
+}
+.alt-map__spur.is-on {
+  stroke: var(--line);
+}
+.alt-map__arrow {
+  fill: none;
+  stroke: var(--line-on);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.alt-map__stop {
+  fill: var(--paper);
+  stroke: var(--line);
+  stroke-width: 3;
+  transition: fill 240ms var(--ease-out);
+}
+.alt-map__stop.is-terminus {
+  stroke: var(--rule-strong);
+}
+.alt-map__stop.is-on {
+  fill: var(--line);
+  stroke: var(--line);
+}
+.alt-map__halo {
+  fill: none;
+  stroke: var(--line);
+  stroke-width: 2;
+}
+.alt-map__label {
+  font-size: 14px;
+  font-weight: 600;
+  fill: var(--ink-3);
+}
+.alt-map__label.is-on {
+  fill: var(--ink);
+  font-weight: 700;
+}
+.alt-map__center {
+  font-size: 13px;
+  fill: var(--ink-3);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+.alt-map__lap {
+  font-size: 24px;
+  font-weight: 700;
+  fill: var(--line-ink);
+}
+.alt-panes {
+  display: grid;
+  gap: var(--s-3);
+  min-width: 0;
+}
+.alt-pane {
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--card);
+  overflow: hidden;
+}
+.alt-pane--ok {
+  border-color: color-mix(in oklab, var(--ok) 55%, var(--rule));
+}
+.alt-pane--bad {
+  border-color: color-mix(in oklab, var(--bad) 55%, var(--rule));
+}
+.alt-pane__head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--rule);
+  background: var(--paper-2);
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--ink-2);
+}
+.alt-pane--ok .alt-pane__head {
+  color: var(--ok);
+}
+.alt-pane--bad .alt-pane__head {
+  color: var(--bad);
+}
+.alt-pane__head code {
+  font-family: var(--font-code);
+  font-size: 0.78rem;
+}
+.alt-thought {
+  margin: 0;
+  padding: 10px 12px;
+  font-family: var(--font-read);
+  font-style: italic;
+  font-size: 0.95rem;
+  line-height: 1.45;
+  color: var(--ink-2);
+}
+.alt-code {
+  margin: 0;
+  padding: 10px 12px;
+  font-family: var(--font-code);
+  font-size: 0.78rem;
+  line-height: 1.55;
+  color: var(--code-ink);
+  background: var(--code-bg);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

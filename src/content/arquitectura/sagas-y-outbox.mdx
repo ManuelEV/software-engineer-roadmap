@@ -1,0 +1,296 @@
+import { SagaSimulator } from '../../components/widgets/arquitectura/SagaSimulator'
+import { OutboxDemo } from '../../components/widgets/arquitectura/OutboxDemo'
+
+En un monolito con una sola base, crear un pedido, reservar stock y registrar el pago es un `BEGIN … COMMIT`: o pasa todo o no pasa nada. Cuando cada servicio tiene su propia base (como exige el despliegue independiente), esa transacción desaparece. Pedidos, Inventario y Pagos confirman cada uno en su base, en momentos distintos, y cualquiera puede fallar en el medio.
+
+Este tema cubre las herramientas para vivir sin transacciones distribuidas: por qué el *two-phase commit* casi nunca es la respuesta, cómo las **sagas** reemplazan la atomicidad con compensaciones, cómo el **outbox transaccional** resuelve el problema de guardar y publicar a la vez, y por qué todo esto descansa sobre **consumidores idempotentes**. Son las preguntas que aparecen en cualquier entrevista de sistemas distribuidos en cuanto dices "microservicios".
+
+## Por qué no two-phase commit
+
+El protocolo clásico para transacciones distribuidas es el *two-phase commit* (2PC). Un coordinador pregunta a todos los participantes si pueden confirmar (fase de preparación); si todos dicen que sí, les ordena confirmar (fase de commit). Si alguno dice que no, todos abortan.
+
+<FlowDiagram
+  caption="Two-phase commit y su punto débil: si el coordinador cae después de la preparación, los participantes quedan bloqueados con recursos tomados."
+  nodes={[
+    { id: 'c', label: 'Coordinador', kind: 'decision', x: 0, y: 1, mx: 0.5, my: 0 },
+    { id: 'o', label: 'Pedidos', kind: 'db', x: 2, y: 0, mx: 0, my: 1.5 },
+    { id: 'i', label: 'Inventario', kind: 'db', x: 2, y: 1, mx: 1, my: 1.5 },
+    { id: 'p', label: 'Pagos', kind: 'db', x: 2, y: 2, mx: 0.5, my: 2.6 },
+  ]}
+  edges={[
+    { from: 'c', to: 'o', bidir: true },
+    { from: 'c', to: 'i', bidir: true },
+    { from: 'c', to: 'p', bidir: true },
+  ]}
+  steps={[
+    { title: 'Fase 1: preparar', body: '¿Puedes confirmar? Cada participante escribe en su log, toma los locks necesarios y responde "sí".', active: ['c', 'o', 'i', 'p'], flow: ['c-o', 'c-i', 'c-p'] },
+    { title: 'Fase 2: confirmar', body: 'Con tres "sí", el coordinador ordena COMMIT. Si alguno hubiera dicho "no", ordena ROLLBACK a todos.', active: ['c', 'o', 'i', 'p'], flow: ['c-o', 'c-i', 'c-p'] },
+    { title: 'El problema', body: 'Si el coordinador cae entre las dos fases, los participantes preparados no pueden decidir solos: mantienen sus locks hasta que vuelva. El stock queda bloqueado y la disponibilidad del conjunto es el producto de la de todos.', active: ['c'] },
+  ]}
+/>
+
+Por eso 2PC casi no se usa entre microservicios:
+
+- **Es bloqueante.** Un participante preparado espera al coordinador con recursos tomados.
+- **Acopla la disponibilidad.** La transacción solo avanza si todos los participantes y el coordinador están vivos.
+- **Muchas tecnologías no lo soportan.** La mayoría de los brokers modernos, muchas bases NoSQL y casi todas las APIs de terceros (no puedes "preparar" un cobro de Stripe en una transacción XA).
+- **Latencia y throughput.** Dos rondas de red y locks retenidos durante ambas.
+
+2PC sigue existiendo dentro de sistemas que lo controlan todo (bases distribuidas como Spanner o CockroachDB lo usan internamente, con consenso para que el coordinador no sea un punto único de falla). Entre servicios independientes, la respuesta de la industria es otra.
+
+## Sagas: atomicidad con compensaciones
+
+El término viene de un paper de bases de datos de 1987, *Sagas*, de Hector Garcia-Molina y Kenneth Salem, pensado para transacciones de larga duración. Una **saga** es una secuencia de transacciones locales, cada una en un servicio y con su propia base. Si un paso falla, la saga ejecuta **transacciones compensatorias** para deshacer semánticamente los pasos que ya se confirmaron.
+
+"Semánticamente" es la palabra clave. Una compensación no es un rollback: el cobro ya ocurrió y es visible. Compensar un cobro es **emitir un reembolso**. Compensar un correo enviado es enviar otro que se disculpa. Por eso las compensaciones se diseñan con el negocio.
+
+### Tipos de pasos
+
+Chris Richardson, en *Microservices Patterns*, clasifica los pasos de una saga en tres tipos, y entenderlos evita la mayoría de los diseños rotos:
+
+- **Compensables**: pueden deshacerse con una compensación. Crear el pedido en estado pendiente, reservar stock.
+- **Pivote**: el punto de no retorno. Si tiene éxito, la saga va a completarse; si falla, se compensa todo lo anterior. Típicamente es el paso más propenso a fallar por reglas de negocio, como autorizar el pago.
+- **Reintentables**: los pasos después del pivote. No se compensan: se reintentan hasta que funcionen, así que deben ser idempotentes. Programar el envío, aprobar el pedido.
+
+Conviene ordenar los pasos para que lo más probable de fallar ocurra lo antes posible, y lo difícil de compensar, después del pivote.
+
+<SagaSimulator />
+
+### La falta de aislamiento
+
+Las sagas son ACD, sin la I. Mientras una saga está a medio camino, otras transacciones pueden ver sus efectos parciales: un pedido que existe pero cuyo pago aún no se autorizó, stock reservado para un pedido que se va a cancelar. Richardson documenta contramedidas tomadas de la literatura de bases de datos; las más usadas son:
+
+- **Bloqueo semántico**: un estado explícito que marca el registro como "en proceso" (`PENDING`, `APPROVAL_PENDING`). Los demás saben que no es definitivo y actúan en consecuencia.
+- **Actualizaciones conmutativas**: diseñar operaciones que se pueden aplicar en cualquier orden (sumar y restar a un saldo, en vez de sobrescribirlo).
+- **Vista pesimista**: reordenar los pasos para que lo que otros leen sea lo más conservador posible (por ejemplo, descontar crédito antes y devolverlo si falla).
+- **Releer el valor**: antes de actualizar, verificar que el dato no cambió (concurrencia optimista).
+
+<Quiz
+  question="En una saga de pedido: (1) crear pedido, (2) reservar stock, (3) cobrar, (4) enviar correo de confirmación. El cobro falla. ¿Qué debe pasar?"
+  options={[
+    { text: 'Hacer rollback de las tres bases de datos.', why: 'No hay rollback entre servicios: cada paso ya confirmó su transacción local. Solo se puede compensar.' },
+    { text: 'Ejecutar compensaciones en orden inverso: liberar stock y luego cancelar el pedido. El correo no se envió porque iba después.', correct: true, why: 'Exacto. El cobro es el pivote: falló, así que se compensan los pasos previos en orden inverso. Ubicar el correo después del pivote evita tener que "compensarlo" con una disculpa.' },
+    { text: 'Reintentar el cobro indefinidamente.', why: 'Un rechazo de tarjeta es un fallo de negocio, no transitorio. Los reintentos son para pasos reintentables después del pivote.' },
+    { text: 'Dejar el pedido pendiente para que un humano lo revise.', why: 'Puede ser parte del diseño en casos especiales, pero el flujo normal de una saga resuelve el fallo con compensaciones automáticas.' },
+  ]}
+/>
+
+## Orquestación vs coreografía
+
+Hay dos formas de coordinar los pasos, y el simulador de arriba muestra ambas.
+
+**Coreografía**: no hay coordinador. Cada servicio escucha eventos, hace su parte y publica el resultado. Pedidos publica `PedidoCreado`, Inventario reacciona y publica `StockReservado`, Pagos reacciona…
+
+**Orquestación**: un orquestador (un objeto con estado, normalmente dentro del servicio dueño del proceso) envía comandos a cada participante, espera sus respuestas y decide el siguiente paso o las compensaciones.
+
+<Compare>
+<Option title="Coreografía" verdict="Pocos pasos, equipos muy independientes">
+
+**Ganas**: sin punto central, servicios muy desacoplados, simple para flujos de 2 o 3 pasos.
+
+**Pagas**: el flujo no existe en ningún lugar del código; hay que reconstruirlo leyendo suscriptores. Riesgo de dependencias cíclicas entre servicios. Agregar un paso toca varios servicios. Difícil responder "¿en qué estado está la saga del pedido o-981?".
+
+</Option>
+<Option title="Orquestación" verdict="Flujos de negocio con varios pasos y compensaciones">
+
+**Ganas**: el flujo es explícito y testeable en un solo lugar; el estado de cada saga es consultable; los participantes no se conocen entre sí.
+
+**Pagas**: el orquestador es una pieza más, y existe el riesgo de que acumule lógica de negocio que pertenece a los participantes. Debe limitarse a coordinar.
+
+</Option>
+</Compare>
+
+La recomendación más común, compartida por Richardson y por la guía de Azure, es usar coreografía para flujos simples y **orquestación para procesos de negocio con varios pasos y compensaciones**. En la práctica, muchos equipos usan motores de workflows durables (Temporal, AWS Step Functions, Camunda) como orquestadores, que resuelven la persistencia del estado y los reintentos.
+
+Un orquestador mínimo es una máquina de estados persistida:
+
+```ts title="src/orders/application/create-order-saga.ts"
+type SagaState = 'RESERVING_STOCK' | 'AUTHORIZING_PAYMENT' | 'SCHEDULING_SHIPMENT' | 'APPROVED' | 'REJECTED'
+
+type Reply = { type: 'StockReserved' | 'StockUnavailable' | 'PaymentAuthorized' | 'PaymentRejected' | 'ShipmentScheduled' }
+type Command = { type: 'AuthorizePayment' | 'ScheduleShipment' | 'ApproveOrder' | 'ReleaseStock' | 'RejectOrder'; orderId: string }
+
+interface Saga {
+  id: string
+  orderId: string
+  state: SagaState
+  completed: ('ORDER_CREATED' | 'STOCK_RESERVED')[] // la saga arranca con ORDER_CREATED
+}
+
+// Cada respuesta de un participante hace avanzar la máquina de estados.
+// El estado se guarda en la misma transacción que los comandos que emite (outbox).
+export function onReply(saga: Saga, reply: Reply): { next: Saga; commands: Command[] } {
+  switch (saga.state) {
+    case 'RESERVING_STOCK':
+      if (reply.type === 'StockReserved')
+        return { next: { ...saga, state: 'AUTHORIZING_PAYMENT', completed: [...saga.completed, 'STOCK_RESERVED'] }, commands: [{ type: 'AuthorizePayment', orderId: saga.orderId }] }
+      return compensate(saga)
+    case 'AUTHORIZING_PAYMENT': // pivote
+      if (reply.type === 'PaymentAuthorized')
+        return { next: { ...saga, state: 'SCHEDULING_SHIPMENT' }, commands: [{ type: 'ScheduleShipment', orderId: saga.orderId }] }
+      return compensate(saga)
+    case 'SCHEDULING_SHIPMENT': // reintentable: el transporte reintenta hasta tener éxito
+      return { next: { ...saga, state: 'APPROVED' }, commands: [{ type: 'ApproveOrder', orderId: saga.orderId }] }
+    default:
+      return { next: saga, commands: [] } // respuesta duplicada o tardía: se ignora
+  }
+}
+
+function compensate(saga: Saga): { next: Saga; commands: Command[] } {
+  const undo: Record<string, Command> = {
+    STOCK_RESERVED: { type: 'ReleaseStock', orderId: saga.orderId },
+    ORDER_CREATED: { type: 'RejectOrder', orderId: saga.orderId },
+  }
+  // En orden inverso a como se completaron
+  const commands = [...saga.completed].reverse().map((step) => undo[step])
+  return { next: { ...saga, state: 'REJECTED' }, commands }
+}
+```
+
+Fíjate en el `default`: con entrega al menos una vez, el orquestador recibirá respuestas duplicadas o fuera de tiempo, y debe ignorarlas en lugar de avanzar dos veces.
+
+## El problema de la doble escritura
+
+Cada paso de una saga tiene que hacer dos cosas: **guardar** su cambio en la base y **publicar** un evento o comando para el siguiente paso. Y aquí aparece el problema más subestimado de los sistemas distribuidos: la base y el broker son dos sistemas distintos, y no hay transacción que cubra ambos.
+
+- Si **guardas y luego publicas**, y el proceso muere entre ambos, el cambio existe pero nadie se entera. La saga queda colgada para siempre.
+- Si **publicas y luego guardas**, y la transacción falla, otros reaccionan a algo que nunca ocurrió.
+
+Esto no es teórico: un deploy, un *OOM kill* o una partición de red en el momento equivocado bastan. A escala, el momento equivocado ocurre todos los días. Pruébalo:
+
+<OutboxDemo />
+
+## Outbox transaccional
+
+La solución es dejar de escribir en dos sistemas. El servicio escribe el evento en una tabla `outbox` **de su propia base**, en la **misma transacción** que el cambio de negocio. Como es una sola transacción local, ambos se guardan o ninguno. Luego, un proceso separado (el *relay*) lee las filas pendientes y las publica en el broker.
+
+```sql title="migrations/0007_outbox.sql"
+CREATE TABLE outbox (
+  id            uuid PRIMARY KEY,           -- eventId: sirve para deduplicar en el consumidor
+  aggregate_type text NOT NULL,              -- 'order'
+  aggregate_id  text NOT NULL,               -- clave de partición: mantiene el orden por pedido
+  type          text NOT NULL,               -- 'OrderPlaced'
+  payload       jsonb NOT NULL,
+  created_at    timestamptz NOT NULL DEFAULT now(),
+  published_at  timestamptz                  -- NULL = pendiente
+);
+CREATE INDEX outbox_pending ON outbox (created_at) WHERE published_at IS NULL;
+```
+
+```ts title="src/orders/application/place-order.ts"
+await db.transaction(async (tx) => {
+  await tx.query('INSERT INTO orders (id, customer_id, status, total_cents) VALUES ($1, $2, $3, $4)', [order.id, order.customerId, 'PENDING', order.totalCents])
+  await tx.query(
+    'INSERT INTO outbox (id, aggregate_type, aggregate_id, type, payload) VALUES ($1, $2, $3, $4, $5)',
+    [randomUUID(), 'order', order.id, 'OrderPlaced', JSON.stringify({ orderId: order.id, totalCents: order.totalCents })],
+  )
+}) // un solo COMMIT: el pedido y su evento existen juntos o no existen
+```
+
+El relay más simple hace *polling*:
+
+```ts title="src/infra/outbox-relay.ts"
+export async function relayOnce(db: Db, producer: Producer) {
+  await db.transaction(async (tx) => {
+    // SKIP LOCKED permite varias instancias del relay sin procesar la misma fila
+    const { rows } = await tx.query(
+      `SELECT id, aggregate_id, type, payload FROM outbox
+       WHERE published_at IS NULL ORDER BY created_at LIMIT 100 FOR UPDATE SKIP LOCKED`,
+    )
+    for (const r of rows) {
+      await producer.send({ topic: 'orders.events', key: r.aggregate_id, headers: { eventId: r.id, type: r.type }, value: JSON.stringify(r.payload) })
+      await tx.query('UPDATE outbox SET published_at = now() WHERE id = $1', [r.id])
+    }
+  })
+}
+```
+
+Fíjate en la garantía que esto da: **al menos una vez**, no exactamente una vez. Si el relay publica y muere antes de marcar la fila, la volverá a publicar al reiniciar. Por eso el outbox siempre va de la mano con consumidores idempotentes. Y un detalle sobre el orden: con varias instancias del relay y `SKIP LOCKED`, dos eventos del mismo pedido pueden publicarse fuera de orden; si el orden importa, particiona el trabajo del relay por `aggregate_id` o usa CDC.
+
+### CDC: leer el log de la base
+
+La alternativa al polling es **Change Data Capture** (CDC): en lugar de consultar la tabla, una herramienta lee el log de transacciones de la base (el WAL de Postgres, el binlog de MySQL) y publica cada fila insertada en `outbox`. **Debezium** es la opción de código abierto más usada, y trae un componente específico, el *Outbox Event Router*, que espera columnas como `id`, `aggregatetype`, `aggregateid`, `type` y `payload`, usa `aggregateid` como clave del mensaje para preservar el orden por partición y enruta a un tópico según `aggregatetype`.
+
+| | Polling | CDC (Debezium) |
+| --- | --- | --- |
+| Latencia | La del intervalo de polling | Casi tiempo real |
+| Carga sobre la base | Consultas periódicas | Lee el log, no consulta tablas |
+| Orden | Hay que cuidarlo con varias instancias | Sigue el orden del log de transacciones |
+| Operación | Un proceso más en tu servicio | Kafka Connect, conectores, slots de replicación que vigilar |
+| Cuándo | Volumen moderado, quieres pocas piezas | Volumen alto o ya tienes Kafka Connect |
+
+Con CDC puedes incluso borrar las filas del outbox inmediatamente después de insertarlas: el evento ya quedó en el log de transacciones, que es lo que Debezium lee.
+
+<Quiz
+  question="Tu servicio guarda el pedido y luego publica OrderPlaced en Kafka. Una vez por semana, aproximadamente, un pedido queda sin envío. ¿Cuál es la causa más probable y la solución?"
+  options={[
+    { text: 'Kafka pierde mensajes; hay que aumentar el factor de replicación.', why: 'Con una configuración razonable Kafka no pierde mensajes confirmados. El problema está antes: el mensaje nunca se envió.' },
+    { text: 'Doble escritura: el proceso a veces muere entre el COMMIT y el publish. Solución: outbox transaccional, con el evento guardado en la misma transacción.', correct: true, why: 'Exacto. Es el síntoma clásico de la doble escritura. El outbox convierte dos escrituras en una sola transacción local, y el relay garantiza que el evento se publique al menos una vez.' },
+    { text: 'Publicar primero y guardar después.', why: 'Cambia un problema por otro: ahora, cuando falle el guardado, Envíos creará envíos para pedidos que no existen.' },
+    { text: 'Usar una transacción distribuida XA entre Postgres y Kafka.', why: 'Kafka no participa en transacciones XA con tu base. Y aunque pudiera, tendrías todos los problemas de 2PC.' },
+  ]}
+/>
+
+## Consumidores idempotentes e inbox
+
+Todo lo anterior entrega mensajes **al menos una vez**. El último eslabón es que procesar el mismo mensaje dos veces tenga el mismo efecto que procesarlo una. Un consumidor así se llama **idempotente**, y hay tres formas de lograrlo.
+
+**Idempotencia natural.** Algunas operaciones ya lo son: `UPDATE orders SET status = 'SHIPPED' WHERE id = $1` deja el mismo resultado si se ejecuta dos veces. Un `UPSERT` por clave natural también. Siempre que puedas, diseña las operaciones así.
+
+**Inbox (tabla de mensajes procesados).** Para operaciones que no son naturalmente idempotentes (crear un envío, sumar puntos), guarda el `eventId` de cada mensaje procesado **en la misma transacción** que su efecto. Si llega de nuevo, la restricción de unicidad lo detecta.
+
+```ts title="src/shipping/application/on-order-placed.ts"
+export async function onOrderPlaced(db: Db, msg: { eventId: string; orderId: string; address: Address }) {
+  await db.transaction(async (tx) => {
+    const inserted = await tx.query(
+      'INSERT INTO inbox (event_id, handler) VALUES ($1, $2) ON CONFLICT DO NOTHING',
+      [msg.eventId, 'create-shipment'],
+    )
+    if (inserted.rowCount === 0) return // ya procesado: duplicado, no hacer nada
+
+    await tx.query('INSERT INTO shipments (id, order_id, address) VALUES ($1, $2, $3)', [randomUUID(), msg.orderId, msg.address])
+  }) // inbox y envío se confirman juntos: no hay ventana para duplicar
+}
+```
+
+La clave es que el registro en el inbox y el efecto estén en **la misma transacción**. Si registras el `eventId` en Redis y creas el envío en Postgres, vuelves a tener una doble escritura.
+
+**Claves de idempotencia hacia afuera.** Cuando el efecto es una llamada a una API externa (cobrar con Stripe), envía una clave de idempotencia derivada del mensaje (`order-${orderId}-charge`). El proveedor deduplica por ti. La AWS Builders' Library tiene un artículo excelente sobre cómo diseñar APIs así.
+
+<Callout type="interview" title="La frase que demuestra que entiendes">
+
+"Nada en un sistema distribuido entrega exactamente una vez de punta a punta. Lo que construyo es entrega al menos una vez (outbox o CDC del lado del productor) más procesamiento idempotente (inbox o idempotencia natural del lado del consumidor). El resultado observable es *efectivamente una vez*".
+
+</Callout>
+
+<Quiz
+  question="Un consumidor recibe PaymentCaptured y suma puntos de fidelidad al cliente: UPDATE customers SET points = points + 50. ¿Qué problema tiene y cómo lo arreglas?"
+  options={[
+    { text: 'Ninguno; un UPDATE es idempotente.', why: 'Este no: sumar 50 dos veces da 100. Asignar un valor fijo es idempotente; incrementar no lo es.' },
+    { text: 'Con entrega al menos una vez puede sumar puntos dos veces. Se arregla registrando el eventId en una tabla inbox en la misma transacción que el UPDATE.', correct: true, why: 'Exacto. El inbox con restricción de unicidad convierte una operación no idempotente en idempotente. Otra opción es guardar los puntos como movimientos con el eventId como clave única.' },
+    { text: 'Hay que pedirle al broker exactly-once y listo.', why: 'Las garantías del broker terminan en el broker. En cuanto escribes en tu base, necesitas idempotencia propia.' },
+    { text: 'Usar un lock distribuido en Redis por cliente.', why: 'Evita procesamiento concurrente, pero no evita procesar el mismo mensaje dos veces en momentos distintos.' },
+  ]}
+/>
+
+<Takeaways>
+
+- Sin base compartida no hay ACID entre servicios; 2PC es bloqueante, acopla la disponibilidad y casi nadie lo soporta fuera de una misma base distribuida.
+- Una saga es una secuencia de transacciones locales con compensaciones semánticas (reembolsar, no borrar) en orden inverso.
+- Ordena los pasos en compensables, pivote y reintentables; lo propenso a fallar va antes del pivote y lo difícil de deshacer, después.
+- Las sagas no tienen aislamiento: usa bloqueos semánticos (estados PENDING), actualizaciones conmutativas y relecturas.
+- Coreografía para flujos cortos; orquestación (o un motor de workflows) para procesos con varios pasos y compensaciones.
+- Nunca escribas en la base y en el broker por separado: outbox transaccional con relay por polling o CDC (Debezium).
+- El outbox entrega al menos una vez; los consumidores deben ser idempotentes, con inbox en la misma transacción o idempotencia natural.
+
+</Takeaways>
+
+## Fuentes y lecturas
+
+- Hector Garcia-Molina y Kenneth Salem, [*Sagas*](https://www.cs.cornell.edu/andru/cs711/2002fa/reading/sagas.pdf) (SIGMOD, 1987).
+- Chris Richardson, *Microservices Patterns* (Manning, 2018), capítulo 4; y en microservices.io: [Saga](https://microservices.io/patterns/data/saga.html), [Transactional outbox](https://microservices.io/patterns/data/transactional-outbox.html) e [Idempotent consumer](https://microservices.io/patterns/communication-style/idempotent-consumer.html).
+- Microsoft Azure Architecture Center, [Saga distributed transactions pattern](https://learn.microsoft.com/en-us/azure/architecture/patterns/saga).
+- AWS Prescriptive Guidance, [Saga pattern](https://docs.aws.amazon.com/prescriptive-guidance/latest/cloud-design-patterns/saga.html) y [Transactional outbox pattern](https://docs.aws.amazon.com/prescriptive-guidance/latest/cloud-design-patterns/transactional-outbox.html).
+- Debezium, [Outbox Event Router](https://debezium.io/documentation/reference/stable/transformations/outbox-event-router.html).
+- Gregor Hohpe y Bobby Woolf, [Idempotent Receiver](https://www.enterpriseintegrationpatterns.com/patterns/messaging/IdempotentReceiver.html) (*Enterprise Integration Patterns*).
+- AWS Builders' Library, [*Making retries safe with idempotent APIs*](https://aws.amazon.com/builders-library/making-retries-safe-with-idempotent-APIs/).

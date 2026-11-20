@@ -1,0 +1,117 @@
+.cb-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  margin-bottom: var(--s-3);
+}
+.cb-svg {
+  display: block;
+  width: 100%;
+  max-width: 520px;
+  height: auto;
+  margin: 0 auto;
+}
+.cb-edge path {
+  fill: none;
+  stroke: var(--rule-strong);
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: stroke 260ms var(--ease-out);
+}
+.cb-edge text {
+  font-size: 13px;
+  font-weight: 600;
+  fill: var(--ink-3);
+  paint-order: stroke;
+  stroke: var(--card);
+  stroke-width: 5px;
+  stroke-linejoin: round;
+}
+.cb-edge.is-on path {
+  stroke: var(--line);
+  stroke-width: 4.5;
+}
+.cb-edge.is-on text {
+  fill: var(--ink);
+}
+.cb-node circle {
+  fill: var(--paper);
+  stroke: var(--rule-strong);
+  stroke-width: 4;
+  transition:
+    fill 260ms var(--ease-out),
+    stroke 260ms var(--ease-out);
+}
+.cb-node__label {
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  fill: var(--ink-3);
+}
+.cb-node.is-on .cb-node__label {
+  fill: var(--ink);
+}
+.cb-node--closed.is-on circle {
+  stroke: var(--ok);
+  fill: color-mix(in oklab, var(--ok) 18%, var(--paper));
+}
+.cb-node--open.is-on circle {
+  stroke: var(--bad);
+  fill: color-mix(in oklab, var(--bad) 18%, var(--paper));
+}
+.cb-node--half.is-on circle {
+  stroke: var(--warn);
+  fill: color-mix(in oklab, var(--warn) 20%, var(--paper));
+}
+.cb-timer {
+  font-size: 14px;
+  font-weight: 700;
+  fill: var(--bad);
+  font-variant-numeric: tabular-nums;
+}
+.cb-window {
+  display: grid;
+  gap: var(--s-2);
+  justify-items: center;
+  margin-top: var(--s-3);
+}
+.cb-window__label {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--ink-3);
+  text-align: center;
+}
+.cb-window__dots {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+.cb-dot {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 3px solid var(--rule-strong);
+  background: var(--paper);
+  transition:
+    background-color 200ms var(--ease-out),
+    border-color 200ms var(--ease-out);
+}
+.cb-dot.is-ok {
+  border-color: var(--ok);
+  background: color-mix(in oklab, var(--ok) 30%, var(--paper));
+}
+.cb-dot.is-bad {
+  border-color: var(--bad);
+  background: color-mix(in oklab, var(--bad) 35%, var(--paper));
+}
+.cb-readout {
+  display: grid;
+  gap: var(--s-3);
+}
+.cb-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-3) var(--s-5);
+}

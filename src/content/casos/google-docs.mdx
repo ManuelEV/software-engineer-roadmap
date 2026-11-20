@@ -1,0 +1,388 @@
+import { CollabEditing } from '../../components/widgets/casos-b/CollabEditing'
+
+"Diseña Google Docs" parece una pregunta de CRUD con WebSockets: guardar texto, avisar a los demás cuando cambia. Hasta que dos personas escriben en el mismo párrafo en el mismo segundo. Ana inserta una palabra al inicio y Beto corrige una letra al final; cuando cada edición llega a la otra pantalla, las posiciones que la describían ya no apuntan al mismo lugar. Si no haces nada, las copias del documento **divergen** en silencio, y nadie se entera hasta que es tarde.
+
+Es un clásico porque es la puerta de entrada a uno de los problemas más bonitos de los sistemas distribuidos: cómo hacer que varias réplicas que aceptan escrituras concurrentes **converjan** al mismo estado, respetando lo que cada persona quiso hacer. Hay dos familias de respuestas, *Operational Transformation* (OT) y *CRDTs*, y el entrevistador quiere ver que entiendes ambas y que eliges con criterio.
+
+Lo difícil no es la cantidad de datos (los documentos son pequeños), sino la **latencia percibida** (cada tecla debe verse al instante, sin esperar al servidor), la **corrección bajo concurrencia** y el diseño de un tier de servidores **con estado** que mantenga millones de conexiones abiertas.
+
+<Sketch
+  width={640}
+  height={310}
+  caption="Dos inserciones concurrentes sobre hola: si Ana aplica la de Beto sin transformarla, la posición 4 ya no apunta al mismo lugar."
+  items={[
+    { type: 'text', x: 24, y: 34, text: 'las posiciones se mueven', size: 20, tone: 'pencil' },
+    { type: 'cells', x: 230, y: 62, values: ['h', 'o', 'l', 'a'], size: 44, index: true },
+    { type: 'text', x: 24, y: 140, text: 'Ana: ins(0, "¡")', size: 20, font: 'code' },
+    { type: 'text', x: 400, y: 140, text: 'Beto: ins(4, "!")', size: 20, font: 'code' },
+    { type: 'cells', x: 40, y: 172, values: ['¡', 'h', 'o', 'l', '!', 'a'], size: 40, states: ['line', null, null, null, 'bad', null] },
+    { type: 'cross', x: 300, y: 192, size: 20 },
+    { type: 'text', x: 40, y: 244, text: 'sin transformar: ¡hol!a', size: 19, tone: 'bad' },
+    { type: 'cells', x: 360, y: 172, values: ['¡', 'h', 'o', 'l', 'a', '!'], size: 40, states: ['line', null, null, null, null, 'ok'] },
+    { type: 'check', x: 618, y: 192, size: 20 },
+    { type: 'text', x: 360, y: 244, text: 'con OT: ins(5, "!")', size: 19, tone: 'ok' },
+    { type: 'text', x: 24, y: 292, text: 'la inserción de Beto se corre un lugar', size: 19, tone: 'line' },
+  ]}
+/>
+
+## Requisitos
+
+### Funcionales
+
+1. Crear un documento y abrirlo.
+2. Varios usuarios **editan el mismo documento a la vez**.
+3. Cada usuario ve los cambios de los demás **en tiempo real** (menos de un segundo).
+4. Cada usuario ve los **cursores y la presencia** (quién está conectado y dónde escribe).
+5. **Historial de versiones**: ver y restaurar versiones anteriores.
+
+### No funcionales
+
+- **Latencia local cero**: tus propias teclas se aplican inmediatamente en tu pantalla; la red nunca está en el camino de escribir.
+- **Convergencia**: cuando todos dejan de escribir, todas las copias son idénticas. Siempre.
+- **Preservación de intención**: si Ana borró una palabra y Beto insertó otra, el resultado contiene la de Beto y no la de Ana.
+- **Durabilidad**: un cambio confirmado no se pierde aunque se caiga un servidor.
+- **Escala**: millones de documentos abiertos a la vez; la mayoría con uno o dos editores, unos pocos con decenas.
+
+### Fuera de alcance
+
+Formato enriquecido complejo (tablas, imágenes; asumimos texto plano o con estilos simples), permisos detallados (asumimos un servicio de permisos que responde "puede editar sí/no"), comentarios, sugerencias, búsqueda dentro de Drive y modo sin conexión prolongado (lo mencionamos como extensión al final).
+
+<Callout type="interview" title="Acota el tipo de documento">
+
+Pregunta: *¿texto plano o documento estructurado?* Un editor de texto lineal se modela como una secuencia de caracteres. Un documento con tablas, listas anidadas y estilos es un árbol, y las transformaciones se complican mucho. Casi siempre te dirán "texto, con estilos simples". Eso te deja concentrarte en lo interesante.
+
+</Callout>
+
+## Estimaciones
+
+Todos son supuestos para dimensionar:
+
+- 10 M de usuarios con un documento abierto en el pico (cada uno con una conexión WebSocket).
+- El 10 % está escribiendo activamente en un momento dado; el cliente agrupa teclas y envía como máximo unos 2 mensajes por segundo.
+- Un mensaje de operación pesa unos 100 bytes.
+- Documento promedio: 50 KB de texto.
+
+**Conexiones y servidores:**
+
+```text
+10.000.000 conexiones / ~100.000 conexiones por servidor ≈ 100 servidores de sesión
+(con margen para picos y fallas: 150–200)
+```
+
+**Operaciones:**
+
+```text
+10.000.000 × 10 % × 2 msg/s = 2.000.000 operaciones/s
+2.000.000 × 100 B           = 200 MB/s de entrada
+```
+
+**Log de operaciones (si guardas todo):**
+
+```text
+2.000.000/s × 100 B × 86.400 s ≈ 17 TB/día
+```
+
+**Tamaño del estado "vivo":** los documentos abiertos caben de sobra en memoria. Un millón de documentos abiertos × 50 KB = 50 GB repartidos entre 100 servidores: 500 MB por servidor.
+
+Las conclusiones:
+
+1. **El cuello de botella es la cantidad de conexiones con estado**, no los bytes. Necesitas un tier de servidores de sesión con enrutamiento por documento.
+2. **El log de operaciones crece muchísimo más rápido que los documentos**: 17 TB/día de operaciones para documentos que, en total, ocupan una fracción de eso. Sin *snapshots* y compactación, abrir un documento viejo significaría reproducir millones de operaciones.
+3. **Por documento, la carga es pequeña**: incluso con 100 editores tecleando, son unos cientos de operaciones por segundo. Un solo proceso puede ser dueño de un documento.<Sidenote>Google Docs limita a 100 las personas que pueden trabajar simultáneamente en un archivo; por encima de eso, solo el dueño y algunos editores pueden editar, y el resto ve. Es una decisión de producto que acota el peor caso de un documento "viral".</Sidenote> Esa observación habilita todo el diseño.
+
+## Entidades y API
+
+Entidades: **Documento** (metadatos: dueño, título, revisión actual), **Operación** (un cambio atómico con número de revisión), **Snapshot** (el contenido completo en una revisión dada), **Sesión** (un usuario conectado a un documento, con su cursor).
+
+La API tiene dos partes: REST para lo que no es tiempo real y un WebSocket por documento abierto.
+
+```http title="REST"
+POST /v1/docs                         → 201 { "docId": "doc_7Hk2", "rev": 0 }
+
+GET  /v1/docs/doc_7Hk2                → 200 { "docId": "doc_7Hk2", "title": "Plan Q1",
+                                              "rev": 1842, "content": "...",
+                                              "session": "wss://collab.example.com/docs/doc_7Hk2" }
+
+GET  /v1/docs/doc_7Hk2/revisions?before=1842&limit=50
+                                      → 200 [ { "rev": 1800, "author": "ana", "at": "..." }, ... ]
+POST /v1/docs/doc_7Hk2/restore        { "rev": 1200 }  → 200 { "rev": 1843 }
+```
+
+```json title="Mensajes del WebSocket"
+// cliente → servidor: "apliqué esto sobre la revisión 1842"
+{ "type": "op", "clientId": "c_ana_91", "seq": 17, "baseRev": 1842,
+  "ops": [{ "ins": "hola ", "at": 120 }] }
+
+// servidor → autor: confirmación con la revisión asignada
+{ "type": "ack", "seq": 17, "rev": 1843 }
+
+// servidor → los demás: la operación ya transformada y ordenada
+{ "type": "op", "rev": 1843, "author": "ana", "ops": [{ "ins": "hola ", "at": 120 }] }
+
+// presencia: efímera, no se guarda
+{ "type": "cursor", "user": "beto", "anchor": 310, "head": 318 }
+```
+
+Fíjate en tres campos:
+
+- **`baseRev`**: la revisión sobre la que el cliente hizo el cambio. Si el servidor ya va por la 1845, sabe que debe transformar la operación contra las revisiones 1843–1845 antes de aplicarla.
+- **`clientId` + `seq`**: hacen la operación **idempotente**. Si la conexión se cae después de enviar y el cliente reenvía al reconectar, el servidor reconoce el duplicado y responde con el mismo `ack`.
+- **`restore`** no "rebobina" el log: crea una **nueva** revisión cuyo contenido es el de la 1200. El historial nunca se reescribe.
+
+## Modelo de datos
+
+| Dato | Almacén | Por qué |
+| --- | --- | --- |
+| Metadatos y permisos | Postgres / Spanner | Relacional, consultas por usuario ("mis documentos"), transacciones. |
+| Log de operaciones | Bigtable / Cassandra / DynamoDB | Solo anexar, clave `(doc_id, rev)`, lectura por rango. Volumen enorme. |
+| Snapshots | Almacenamiento de objetos (GCS / S3) | Blobs de decenas de KB, baratos, inmutables. |
+| Presencia y cursores | Memoria del servidor de sesión | Efímeros. Si se pierden, el próximo latido los repone. |
+| Asignación documento → servidor | etcd / ZooKeeper | Pequeño, necesita consenso para evitar dos dueños. |
+
+```sql title="Esquema lógico"
+-- Metadatos (relacional)
+documents (doc_id PK, owner_id, title, head_rev, snapshot_rev, created_at)
+
+-- Log de operaciones (wide-column): partición = doc_id, orden = rev
+doc_ops (
+  doc_id     text,
+  rev        bigint,      -- 1, 2, 3... sin huecos, asignado por el dueño del doc
+  author_id  text,
+  client_id  text,
+  client_seq int,         -- para deduplicar reintentos
+  ops        blob,        -- operaciones serializadas
+  created_at timestamp,
+  PRIMARY KEY ((doc_id), rev)
+)
+
+-- Índice de snapshots
+doc_snapshots (doc_id, rev, uri, PRIMARY KEY ((doc_id), rev))
+```
+
+La pieza clave: **`rev` es un contador por documento, sin huecos, asignado por un único escritor**. Eso es lo que da un orden total a las operaciones de cada documento. Si dos procesos pudieran asignar revisiones al mismo documento, perderías esa garantía; por eso la escritura al log es condicional ("anexa la revisión 1843 solo si no existe"), y funciona como protección contra dos dueños simultáneos.
+
+## Diseño de alto nivel
+
+<FlowDiagram
+  caption="Abrir un documento, editar y propagar: todos los editores de un documento hablan con el mismo servidor de sesión."
+  nodes={[
+    { id: 'ana', label: 'Ana', kind: 'client', x: 0, y: 0 },
+    { id: 'beto', label: 'Beto', kind: 'client', x: 0, y: 2 },
+    { id: 'api', label: 'Docs API', kind: 'service', x: 2, y: 0, sub: 'abrir, permisos' },
+    { id: 'meta', label: 'Postgres', kind: 'db', x: 3, y: 0, sub: 'metadatos' },
+    { id: 'gw', label: 'Gateway WS', kind: 'lb', x: 1, y: 1, sub: 'enruta por docId' },
+    { id: 'sess', label: 'Sesión doc', kind: 'server', x: 2, y: 1, sub: 'dueño de doc_7Hk2', tone: 'line' },
+    { id: 'log', label: 'Log de ops', kind: 'db', x: 3, y: 1, sub: 'Bigtable (doc, rev)' },
+    { id: 'events', label: 'Eventos', kind: 'stream', x: 4, y: 1, sub: 'búsqueda, avisos' },
+    { id: 'reg', label: 'Registro', kind: 'layers', x: 2, y: 2.3, sub: 'doc → servidor (etcd)' },
+    { id: 'comp', label: 'Compactador', kind: 'worker', x: 3, y: 2.3, sub: 'snapshot cada N ops' },
+    { id: 'blob', label: 'Snapshots', kind: 'storage', x: 4, y: 2.3, sub: 'GCS / S3' },
+  ]}
+  edges={[
+    { from: 'ana', to: 'api', label: 'GET /docs/:id' },
+    { from: 'api', to: 'meta' },
+    { from: 'ana', to: 'gw', bidir: true, label: 'WebSocket' },
+    { from: 'beto', to: 'gw', bidir: true },
+    { from: 'gw', to: 'sess' },
+    { from: 'gw', to: 'reg', label: '¿quién es dueño?' },
+    { from: 'sess', to: 'log', label: 'append rev' },
+    { from: 'log', to: 'events', dashed: true },
+    { from: 'log', to: 'comp' },
+    { from: 'comp', to: 'blob' },
+    { from: 'sess', to: 'blob', dashed: true, label: 'carga' },
+  ]}
+  steps={[
+    { title: 'Abrir el documento', body: <>Ana pide el documento por REST. La Docs API verifica permisos en la base de metadatos y responde con la revisión actual y la URL del WebSocket de colaboración.</>, active: ['ana', 'api', 'meta'], flow: ['ana-api', 'api-meta'] },
+    { title: 'Conectarse al dueño del documento', body: <>El gateway consulta el registro (un anillo de <i>consistent hashing</i> cuya membresía vive en etcd o ZooKeeper) para saber qué servidor de sesión es dueño de <code>doc_7Hk2</code>, y conecta el socket ahí. Beto, que abrió el mismo documento, termina en el mismo servidor.</>, active: ['ana', 'beto', 'gw', 'reg', 'sess'], flow: ['ana-gw', 'beto-gw', 'gw-reg', 'gw-sess'] },
+    { title: 'Cargar el estado', body: <>Si el documento no estaba abierto, el servidor de sesión carga el último snapshot desde el almacenamiento de objetos y le aplica las operaciones posteriores del log. A partir de ahí lo mantiene en memoria.</>, active: ['sess', 'blob', 'log'], flow: ['sess-blob', 'sess-log'] },
+    { title: 'Ana escribe', body: <>La edición se aplica al instante en la pantalla de Ana y viaja como <code>{'{ baseRev: 1842, ops }'}</code>. El servidor la transforma contra lo que haya entrado después de la 1842, le asigna la revisión 1843 y la <b>anexa al log antes de confirmar</b>.</>, active: ['ana', 'gw', 'sess', 'log'], flow: ['ana-gw', 'gw-sess', 'sess-log'] },
+    { title: 'Confirmar y difundir', body: <>Con la escritura durable, el servidor envía <code>ack(1843)</code> a Ana y la operación a Beto. El cliente de Beto la transforma contra sus propios cambios aún no confirmados y la aplica.</>, active: ['sess', 'gw', 'ana', 'beto'], flow: ['gw-sess', 'ana-gw', 'beto-gw'] },
+    { title: 'Consumidores asíncronos', body: <>El log alimenta, de forma asíncrona, el índice de búsqueda, las notificaciones y la analítica. Nada de eso está en el camino crítico de escribir.</>, active: ['log', 'events'], flow: ['log-events'] },
+    { title: 'Compactar', body: <>Un proceso de fondo genera un snapshot cada N operaciones (digamos 1.000) o cada pocos minutos de actividad. Abrir el documento pasa a costar "un snapshot + unas cuantas operaciones", no "toda la historia".</>, active: ['log', 'comp', 'blob'], flow: ['log-comp', 'comp-blob'] },
+  ]}
+/>
+
+La decisión estructural: **un documento, un servidor**. Mientras todos los editores de `doc_7Hk2` estén conectados al mismo proceso, ese proceso es el único que asigna revisiones, y el problema distribuido se convierte en uno casi local. El precio es tener un tier con estado, con enrutamiento y *failover* propios.
+
+<Quiz
+  question="¿Por qué conviene que todos los editores de un mismo documento estén conectados al mismo servidor de sesión?"
+  options={[
+    { text: 'Para ahorrar memoria: así el documento se carga una sola vez.', why: 'Es un beneficio secundario. La razón de fondo es de corrección, no de eficiencia.' },
+    { text: 'Porque un único proceso puede asignar un orden total (revisiones 1, 2, 3...) a las operaciones del documento, y así OT solo tiene que transformar contra una secuencia lineal.', correct: true, why: 'Exacto. Con un solo escritor por documento, cada operación recibe una revisión y el cliente solo transforma contra "lo que pasó en el servidor desde mi baseRev". Es la idea del sistema Jupiter (1995) que usa Google Docs.' },
+    { text: 'Porque los WebSockets no pueden atravesar más de un balanceador de carga.', why: 'Los WebSockets atraviesan balanceadores sin problema. La restricción la pone el algoritmo de consistencia, no el transporte.' },
+  ]}
+/>
+
+## Profundizaciones
+
+### 1. OT vs. CRDT: cómo converger
+
+Empieza por el problema concreto. Las ediciones viajan como **posiciones**: "inserta `la ` en la posición 0", "inserta `s` en la posición 4". Cuando dos ediciones concurrentes se cruzan, la posición de una deja de significar lo mismo después de aplicar la otra. Prueba los cuatro escenarios con las tres estrategias:
+
+<CollabEditing />
+
+**Operational Transformation (OT).** Antes de aplicar una operación remota, la *transformas* contra las operaciones concurrentes que ya aplicaste. Si Beto insertó 3 caracteres antes de la posición donde Ana escribió, la operación de Ana se corre 3 lugares. Hay una función `transform(a, b)` para cada par de tipos (inserción/inserción, inserción/borrado, borrado/borrado), y debe cumplir una propiedad: aplicar `a` y luego `b'` da lo mismo que aplicar `b` y luego `a'`.
+
+<CodeTabs>
+
+```java title="Java"
+record Insert(int pos, String text, String site) {}
+
+// Transforma `op` para aplicarla DESPUÉS de `other` (concurrente).
+static Insert transformInsert(Insert op, Insert other) {
+    boolean otherGoesFirst = other.pos() < op.pos()
+            || (other.pos() == op.pos() && other.site().compareTo(op.site()) < 0); // desempate determinista
+    return otherGoesFirst ? new Insert(op.pos() + other.text().length(), op.text(), op.site()) : op;
+}
+```
+
+```ts title="TypeScript"
+type Insert = { pos: number; text: string; site: string }
+
+// Transforma `op` para aplicarla DESPUÉS de `other` (concurrente).
+function transformInsert(op: Insert, other: Insert): Insert {
+  const otherGoesFirst =
+    other.pos < op.pos || (other.pos === op.pos && other.site < op.site) // desempate determinista
+  return otherGoesFirst ? { ...op, pos: op.pos + other.text.length } : op
+}
+```
+
+</CodeTabs>
+
+Parece fácil, y para dos participantes lo es. El problema es que con **N participantes y sin servidor central**, las transformaciones tienen que cumplir propiedades adicionales que resultaron muy difíciles de garantizar; varios algoritmos publicados con pruebas de corrección resultaron tener contraejemplos. La salida práctica fue la del sistema **Jupiter** (Xerox PARC, 1995): un **servidor central** que ordena todo, de modo que cada cliente solo necesita transformar contra *una* secuencia, la del servidor. Google Docs se basa en esa idea.<Sidenote>Joseph Gentle, que trabajó en Google Wave y escribió ShareJS, lo resume en "I was wrong. CRDTs are the future": OT es, en el fondo, "un bucle for glorificado", pero necesita un servidor central que ordene las operaciones de cada documento.</Sidenote>
+
+<Callout type="tip" title="En Java">
+
+El desempate compara los `site` con `compareTo`, no con `<` (que no existe para `String`) ni con `==` (que compara referencias, no contenido). Que el desempate sea **determinista** es lo que importa: todas las réplicas tienen que decidir igual quién va primero cuando dos inserciones caen en la misma posición.
+
+</Callout>
+
+El protocolo del cliente, tal como Google lo describió en 2010, tiene dos colas:
+
+1. **Pendientes**: cambios locales que todavía no envió.
+2. **Enviados**: el lote en vuelo, esperando `ack`. Hay como máximo uno a la vez.
+
+Cuando llega el `ack`, el cliente vacía "enviados" y manda las pendientes (ya sobre la nueva revisión). Cuando llega una operación de otro, la transforma contra "enviados" y "pendientes" antes de aplicarla. Enviar un solo lote a la vez simplifica muchísimo al servidor: cada operación que recibe está basada en una revisión que él conoce, y solo la transforma contra las revisiones que entraron desde entonces.
+
+**CRDT (Conflict-free Replicated Data Type).** En vez de arreglar posiciones, **elimínalas**. Cada carácter recibe un **ID único e inmutable** (por ejemplo, `(contador, sitio)`), y una inserción dice "pon `s` después del carácter con ID `#4`", no "en la posición 4". Como los IDs no cambian cuando otros insertan o borran, las operaciones conmutan: se pueden aplicar en cualquier orden y todas las réplicas convergen, **sin servidor central**. Los borrados no eliminan el carácter: lo marcan como *tombstone*, porque otra réplica podría todavía referirse a él como ancla. Algoritmos conocidos: RGA, YATA (el de Yjs), el de Automerge y, más reciente, Fugue.
+
+El coste de los CRDT es **metadatos**: cada carácter carga su ID, su ancla y su estado de borrado. Las primeras implementaciones eran escandalosamente pesadas: Gentle midió que un documento de 100 KB ocupaba unos 83 MB en disco con una versión antigua de Automerge, mientras que Yjs, con codificación columnar, lo dejaba en unos 160 KB. Hoy las buenas implementaciones son competitivas, pero la complejidad interna sigue siendo mayor.
+
+<Compare>
+<Option title="OT + servidor central" verdict="La respuesta clásica">
+
+Operaciones pequeñas (solo posiciones), documento sin metadatos extra, modelo mental claro con revisiones. Exige un servidor que ordene cada documento: offline prolongado y P2P son difíciles. Es lo que usa Google Docs.
+
+</Option>
+<Option title="CRDT (Yjs, Automerge)" verdict="Si offline o P2P importan">
+
+Converge sin coordinador: ideal para offline-first, sincronización entre dispositivos y P2P. A cambio: metadatos por carácter, tombstones que hay que recolectar, y anomalías sutiles (como intercalar letras de dos inserciones concurrentes) según el algoritmo.
+
+</Option>
+<Option title="Servidor autoritativo + LWW" verdict="Para objetos, no para texto">
+
+Lo que hace Figma: el servidor decide, y para cada propiedad de cada objeto gana el último valor que recibió. Simple y suficiente cuando los conflictos son sobre propiedades ("color de este rectángulo"), no sobre secuencias de caracteres.
+
+</Option>
+</Compare>
+
+Ninguna estrategia garantiza que el resultado sea **semánticamente** lo que ambos querían. El escenario "misma posición" del widget lo muestra: `sol` + `a` + `o` termina en `solao` o `soloa`. OT y CRDT garantizan *convergencia* y preservan la intención a nivel de caracteres, no a nivel de idioma. Por eso los editores muestran los cursores de los demás: la mejor resolución de conflictos es que los humanos los eviten.
+
+<Callout type="tip" title="Qué decir en la entrevista">
+
+"Uso OT con un servidor de sesión por documento, como Google Docs: las operaciones son baratas y el servidor ya existe por los WebSockets. Si el producto pidiera edición offline de horas o sincronización P2P, me iría a un CRDT como Yjs, y el servidor pasaría a ser un relay que persiste actualizaciones." Esa frase demuestra que conoces ambos y que eliges por requisitos.
+
+</Callout>
+
+### 2. El tier de sesión: millones de conexiones con estado
+
+Los servidores de sesión no son *stateless*: tienen en memoria el documento, la cola de revisiones recientes y las conexiones de sus editores. Tres problemas:
+
+**Enrutamiento.** Todos los sockets de un documento deben llegar al mismo proceso. Un anillo de *consistent hashing* sobre `doc_id` decide el dueño; la membresía del anillo (qué servidores están vivos) vive en etcd o ZooKeeper. El gateway (o un balanceador L7 con afinidad por clave) consulta el anillo al abrir la conexión. Con consistent hashing, agregar o quitar un servidor solo mueve una fracción de los documentos. Ver [replicación y sharding](/system-design/replicacion-y-sharding).
+
+**Failover.** Si el servidor dueño muere, sus documentos pasan al siguiente en el anillo. El nuevo dueño carga snapshot + log, y los clientes reconectan diciendo "mi última revisión es la 1842 y tengo estas operaciones sin confirmar (con su `clientId` y `seq`)". El servidor les manda lo que se perdieron y deduplica los reenvíos. Como el `ack` solo se envía *después* de anexar al log, nada confirmado se pierde. El riesgo es el *split brain*: el viejo dueño no murió, solo quedó aislado, y sigue aceptando escrituras. La escritura condicional al log (la revisión 1843 solo puede existir una vez) hace que uno de los dos falle y se entere de que perdió la propiedad.
+
+**Documentos calientes.** La mayoría de documentos tiene uno o dos editores, pero un documento compartido en una reunión de 300 personas concentra todo en un proceso. Un límite de editores simultáneos (como hace Google con 100) acota el problema; los lectores adicionales pueden recibir las operaciones por un tier de difusión aparte, sin pasar por la lógica de transformación.
+
+<Callout type="warn" title="Despliegues">
+
+Un despliegue que reinicia los servidores de sesión corta millones de sockets y provoca una avalancha de reconexiones y cargas de snapshots. Haz despliegues graduales, drena documentos antes de apagar un nodo (transfiere la propiedad en orden) y usa reconexión con *backoff* y *jitter* en el cliente.
+
+</Callout>
+
+### 3. Log de operaciones, snapshots y versiones
+
+El documento **es** su log: la secuencia de operaciones desde la revisión 0. Ese modelo (*event sourcing*) da el historial gratis, pero tiene un problema obvio: un documento con dos años de vida puede acumular millones de operaciones, y nadie quiere reproducirlas todas para abrirlo.
+
+La solución estándar combina tres mecanismos:
+
+1. **Snapshots periódicos.** Cada N operaciones (por ejemplo, 1.000) o cada pocos minutos de actividad, un compactador lee el último snapshot, le aplica las operaciones nuevas y guarda el resultado en almacenamiento de objetos. Abrir el documento = último snapshot + cola corta de operaciones.
+2. **Historial de versiones a granularidad humana.** Nadie quiere navegar 2 millones de revisiones de a una letra. La vista de "historial" agrupa operaciones por autor y por ventanas de tiempo (sesiones de edición), y la restauración crea una revisión nueva con el contenido viejo.
+3. **Compactación del log antiguo.** Pasado cierto tiempo, puedes descartar las operaciones individuales entre snapshots y quedarte solo con los snapshots como puntos de restauración. Pierdes granularidad en versiones muy viejas; ganas órdenes de magnitud de almacenamiento. Con los números de las estimaciones (17 TB/día de operaciones), esto no es opcional.
+
+```text title="Abrir doc_7Hk2"
+1. documents.snapshot_rev = 1800 → leer gs://snapshots/doc_7Hk2/1800
+2. leer doc_ops WHERE doc_id = 'doc_7Hk2' AND rev > 1800   (42 operaciones)
+3. aplicar en memoria → estado en la revisión 1842
+```
+
+<Quiz
+  question="Llega una operación de Ana. ¿En qué orden debe hacer las cosas el servidor de sesión?"
+  options={[
+    { text: 'Difundir a los demás editores, enviar ack a Ana y luego guardar en el log de forma asíncrona.', why: 'Si el servidor muere entre el ack y la escritura, Ana cree que su cambio está guardado y se pierde. Peor: Beto lo vio, así que las réplicas quedan inconsistentes con lo persistido.' },
+    { text: 'Transformar, asignar revisión, anexar al log de forma durable y solo entonces enviar ack a Ana y difundir a los demás.', correct: true, why: 'Exacto. El ack es una promesa de durabilidad. Persistir primero cuesta unos milisegundos de latencia en el ack, pero no en la pantalla de Ana, que ya aplicó su cambio localmente.' },
+    { text: 'Guardar un snapshot completo del documento en cada operación, para no depender del log.', why: 'Con 2 M de operaciones/s y documentos de 50 KB serían 100 GB/s de escritura. El log de operaciones existe justamente para escribir solo la diferencia.' },
+  ]}
+/>
+
+### 4. Cursores y presencia
+
+Los cursores parecen un detalle, pero tienen dos trampas:
+
+- **También son posiciones**, así que también hay que transformarlos. Si Beto tiene el cursor en la posición 300 y Ana inserta 10 caracteres en la 50, el cursor de Beto debe pasar a 310 en la pantalla de Ana. Con OT, transformas el cursor como si fuera una inserción vacía; con CRDT, lo anclas al ID de un carácter y se mueve solo.
+- **No van al log.** La presencia es efímera: se difunde por el servidor de sesión con *throttling* (no más de 10–20 actualizaciones por segundo por usuario), y cada cliente manda un latido periódico. Si el latido deja de llegar durante unos segundos, desaparece de la lista de presentes. Guardar cursores en el log de operaciones multiplicaría su tamaño sin aportar nada al historial.
+
+## Cuellos de botella y trade-offs
+
+- **Servidores con estado vs. simplicidad.** Un tier stateful necesita registro, failover, drenado y despliegues cuidadosos. La alternativa (servidores sin estado que leen y escriben todo en una base compartida con bloqueos por documento) evita eso pero añade latencia y contención en cada tecla. Para edición en tiempo real, el tier con estado gana.
+- **OT vs. CRDT.** OT es más simple de almacenar pero exige el servidor central; CRDT habilita offline y P2P pero añade metadatos y complejidad. No hay ganador universal; hay requisitos.
+- **Latencia del ack vs. durabilidad.** Persistir antes de confirmar suma unos milisegundos al ack. Es invisible para el usuario (su pantalla ya cambió), pero limita cuántas operaciones por segundo puede confirmar un documento. Agrupar operaciones en lotes de 50–100 ms es el compromiso habitual.
+- **Granularidad del historial vs. almacenamiento.** Guardar cada operación para siempre es caro; compactar pierde detalle en versiones viejas. Decide una política (por ejemplo, detalle completo 30 días, luego solo snapshots).
+- **Documentos grandes.** Un documento de cientos de páginas hace caros los snapshots y la carga inicial. Se puede dividir el documento en bloques o páginas con logs independientes, a cambio de transformaciones entre bloques.
+- **Offline.** Con OT, un cliente que estuvo offline una hora vuelve con cientos de operaciones basadas en una revisión vieja; transformarlas contra todo lo ocurrido es costoso y el resultado puede sorprender al usuario. Si offline largo es requisito, es el argumento más fuerte a favor de CRDT.
+
+## Qué espera el entrevistador
+
+<Callout type="interview" title="Por nivel">
+
+**Mid-level.** Identifica el problema de las ediciones concurrentes y propone *alguna* solución razonable (OT o CRDT explicados a alto nivel), usa WebSockets, persiste operaciones y entiende que los cursores son efímeros. Es aceptable que el entrevistador guíe hacia el enrutamiento por documento.
+
+**Senior.** Explica OT con un ejemplo concreto (posiciones que se corren) y sabe por qué el servidor central lo simplifica. Diseña el enrutamiento por `doc_id` con consistent hashing, el orden "persistir y luego confirmar", la idempotencia de los reenvíos con `clientId` + `seq`, y snapshots + log para cargar rápido. Compara OT y CRDT con trade-offs reales.
+
+**Staff.** Además, razona sobre la operación del tier con estado (failover, split brain y escritura condicional como *fencing*, drenado en despliegues, avalanchas de reconexión), sobre documentos calientes y límites de producto, sobre la política de retención del log con números, y sobre cuándo cambiaría a CRDT (offline-first, multi-región activo-activo) y qué costaría la migración.
+
+</Callout>
+
+<Takeaways>
+
+- Las ediciones concurrentes basadas en posiciones divergen; necesitas OT (transformar posiciones) o CRDT (reemplazar posiciones por IDs únicos).
+- OT se vuelve manejable con un **servidor central por documento** que asigna revisiones consecutivas: el enfoque de Jupiter y Google Docs.
+- Los CRDT convergen sin coordinador (offline, P2P) a cambio de metadatos por carácter y tombstones.
+- Enruta todos los editores de un documento al mismo servidor de sesión con consistent hashing; la escritura condicional al log protege contra dos dueños.
+- Confirma una operación solo después de anexarla al log; la latencia del usuario no sufre porque su cambio ya se aplicó localmente.
+- El log crece mucho más rápido que el documento: snapshots periódicos y compactación no son opcionales.
+- Cursores y presencia son efímeros: se transforman, se limitan en frecuencia y nunca van al log.
+
+</Takeaways>
+
+## Fuentes y lecturas
+
+- [What's different about the new Google Docs: Conflict resolution](https://drive.googleblog.com/2010/09/whats-different-about-new-google-docs_22.html) y [Making collaboration fast](https://drive.googleblog.com/2010/09/whats-different-about-new-google-docs.html) — Google Drive Blog, 2010. OT y el protocolo de cambios pendientes y enviados.
+- Nichols, Curtis, Dixon y Lamping, [High-latency, low-bandwidth windowing in the Jupiter collaboration system](https://dl.acm.org/doi/10.1145/215585.215706) — UIST 1995. El origen del OT cliente-servidor.
+- [I was wrong. CRDTs are the future](https://josephg.com/blog/crdts-are-the-future/) — Joseph Gentle (Google Wave, ShareJS). OT vs. CRDT desde la experiencia.
+- [How Figma's multiplayer technology works](https://www.figma.com/blog/how-figmas-multiplayer-technology-works/) — Evan Wallace, Figma. Servidor autoritativo y last-writer-wins por propiedad.
+- [Interleaving anomalies in collaborative text editors](https://martin.kleppmann.com/2019/03/25/papoc-interleaving-anomalies.html) — Kleppmann et al., PaPoC 2019, y su sucesor [The Art of the Fugue](https://arxiv.org/abs/2305.00583) (Weidner y Kleppmann).
+- [crdt.tech](https://crdt.tech/) — recursos y papers sobre CRDTs, mantenido por Martin Kleppmann.
+- [Documentación de Yjs](https://docs.yjs.dev/) y [Automerge](https://automerge.org/) — las dos librerías CRDT más usadas.
+- [Google Docs: límite de 100 personas simultáneas](https://support.google.com/a/users/answer/9305685) — ayuda oficial de Google Workspace.
+- [Design Google Docs — Hello Interview](https://www.hellointerview.com/learn/system-design/problem-breakdowns/google-docs) — desglose de entrevista (escala de WebSockets y control del almacenamiento).

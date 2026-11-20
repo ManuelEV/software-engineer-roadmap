@@ -1,0 +1,283 @@
+import { ReplicationLag } from '../../components/widgets/system-design/ReplicationLag'
+import { ConsistentHashRing } from '../../components/widgets/system-design/ConsistentHashRing'
+
+Cuando una sola base de datos ya no alcanza, tienes dos herramientas, y resuelven problemas distintos. **Replicar** es tener *copias* de los mismos datos en varias máquinas: sirve para sobrevivir a la caída de un nodo, para repartir lecturas y para tener los datos cerca del usuario. **Particionar** (*sharding*) es *dividir* los datos para que cada máquina guarde solo una parte: sirve cuando el volumen de escrituras o el tamaño total supera lo que aguanta un servidor.
+
+En la práctica se combinan: cada partición tiene varias réplicas. Pero conviene pensarlas por separado, porque cada una trae su propio tipo de problema. La replicación te obliga a decidir qué pasa cuando las copias no coinciden. El particionado te obliga a decidir qué dato vive dónde, y qué pasa cuando eso tiene que cambiar.
+
+En este tema vas a ver los tres esquemas de replicación, las anomalías que produce el retraso entre réplicas, las formas de partir los datos, el hashing consistente y el problema que más se ignora en las entrevistas: las particiones calientes.
+
+## Líder-seguidor: el esquema por defecto
+
+Casi todas las bases relacionales (PostgreSQL, MySQL, SQL Server) y muchas NoSQL (MongoDB, Redis) usan replicación con **un solo líder**. Una réplica es el <Term def="También llamado primary o master. Es la única réplica que acepta escrituras.">líder</Term>; las demás son seguidores (*followers*, réplicas de lectura). Todas las escrituras van al líder, que las aplica y las envía a los seguidores como un flujo de cambios (el *write-ahead log*, el binlog o un log lógico). Los seguidores aplican esos cambios en el mismo orden. Las lecturas pueden ir al líder o a cualquier seguidor.
+
+La pregunta de diseño es **cuándo le respondes OK al cliente**:
+
+- **Síncrona**: el líder espera a que el seguidor confirme. Si el líder muere, el seguidor tiene todo. A cambio, un seguidor lento o caído bloquea todas las escrituras.
+- **Asíncrona**: el líder confirma apenas escribe localmente. Es rápida y tolera seguidores lentos, pero si el líder muere antes de replicar, **esas escrituras confirmadas se pierden**.
+- **Semi-síncrona**: un seguidor es síncrono y el resto asíncronos. Siempre hay al menos dos copias al día. Si el síncrono falla, otro asíncrono toma su lugar. Es lo que suele configurarse en producción cuando la durabilidad importa.
+
+<Callout type="idea">
+
+Replicación asíncrona significa que una escritura **confirmada** puede desaparecer. No es un bug: es el trade-off que aceptas a cambio de latencia baja y disponibilidad. Si tu dominio no lo tolera (pagos, inventario), necesitas al menos una réplica síncrona o un protocolo de consenso.
+
+</Callout>
+
+### Failover: el momento peligroso
+
+Agregar un seguidor es fácil: copias un snapshot y luego aplicas el log desde la posición del snapshot. Lo difícil es reemplazar al líder cuando muere. Recorre el proceso:
+
+<FlowDiagram
+  caption="Failover en replicación líder-seguidor. Cada paso tiene su propia forma de salir mal."
+  nodes={[
+    { id: 'app', label: 'Servicio', kind: 'service', x: 0, y: 1, sub: 'escribe y lee' },
+    { id: 'L', label: 'Líder', kind: 'db', x: 2, y: 0, sub: 'acepta escrituras' },
+    { id: 'A', label: 'Seguidor A', kind: 'db', x: 2, y: 1, sub: 'semi-síncrono' },
+    { id: 'B', label: 'Seguidor B', kind: 'db', x: 2, y: 2, sub: 'asíncrono' },
+    { id: 'orq', label: 'Orquestador', kind: 'monitor', x: 4, y: 1, sub: 'Patroni, Orchestrator…' },
+  ]}
+  edges={[
+    { from: 'app', to: 'L', label: 'escrituras' },
+    { from: 'L', to: 'A', label: 'log' },
+    { from: 'L', to: 'B', label: 'log', dashed: true },
+    { from: 'orq', to: 'L', dashed: true },
+    { from: 'orq', to: 'A', dashed: true },
+    { from: 'app', to: 'A', id: 'app-A2', label: 'nuevo líder', route: 'straight' },
+  ]}
+  steps={[
+    { title: 'Operación normal', body: 'Las escrituras van al líder, que envía su log a los seguidores. El orquestador vigila a todos con health checks.', active: ['app', 'L', 'A', 'B'], flow: ['app-L', 'L-A', 'L-B'] },
+    { title: '1. Detectar la falla', body: 'No hay forma perfecta de saber si un nodo murió o solo está lento. Se usa un timeout: muy corto provoca failovers innecesarios ante una pausa; muy largo alarga la caída.', active: ['orq', 'L'], flow: ['orq-L'] },
+    { title: '2. Elegir un nuevo líder', body: 'Se promueve la réplica más actualizada (aquí A, la semi-síncrona). Elegir bien es un problema de consenso: todos deben coincidir en quién es el líder.', active: ['orq', 'A'], flow: ['orq-A'] },
+    { title: '3. Reconfigurar a los clientes', body: 'El servicio empieza a escribir en A (vía DNS, un proxy o el cliente consultando al orquestador). B pasa a seguir a A.', active: ['app', 'A', 'B'], flow: ['app-A2'] },
+    { title: '4. El viejo líder vuelve', body: <>Si el antiguo líder regresa creyendo que sigue a cargo, tienes <b>split brain</b>: dos nodos aceptando escrituras. Hay que degradarlo a seguidor o aislarlo (<i>fencing</i>, STONITH) y descartar las escrituras que nunca replicó.</>, active: ['L', 'A'] },
+  ]}
+/>
+
+Kleppmann cuenta en *Designing Data-Intensive Applications* un incidente de GitHub: se promovió un seguidor MySQL desactualizado, el nuevo líder reutilizó claves primarias autoincrementales que el viejo ya había asignado, y como esas claves también se usaban en Redis, datos privados se mostraron a los usuarios equivocados. El failover descartó escrituras "confirmadas" y el daño se propagó a otro sistema.
+
+## El lag de replicación y sus anomalías
+
+Con replicación asíncrona, los seguidores van por detrás del líder. Normalmente son milisegundos, pero bajo carga, con una red lenta o mientras un seguidor se recupera, pueden ser segundos o minutos. Mientras tanto, leer de un seguidor te puede devolver datos viejos. Esto es **consistencia eventual**: si dejas de escribir, en algún momento todas las réplicas convergen. El problema es que "en algún momento" no tiene límite.
+
+Tres anomalías concretas aparecen en cualquier sistema con réplicas de lectura:
+
+1. **No ves tu propia escritura.** Cambias tu foto de perfil, recargas, y aparece la vieja: la escritura fue al líder y la lectura a un seguidor atrasado.
+2. **Lecturas que retroceden en el tiempo.** Recargas dos veces y ves un comentario nuevo que luego desaparece: la primera lectura fue a un seguidor al día y la segunda a uno más atrasado.
+3. **Prefijo inconsistente.** Ves una respuesta antes que la pregunta que la originó, porque se leyeron de particiones distintas con retrasos distintos.
+
+Pruébalo. Escribe un valor y léelo varias veces con el lag alto:
+
+<ReplicationLag />
+
+Las garantías que arreglan cada caso tienen nombre propio:
+
+- **Read-your-writes** (leer tus escrituras): después de escribir, ese usuario ve su escritura. Técnicas: leer del líder lo que el usuario puede haber modificado (su propio perfil), leer del líder durante unos segundos tras cada escritura, o recordar la posición del log de tu última escritura y leer solo de réplicas que ya la aplicaron.
+- **Lecturas monótonas**: nunca ves un estado más viejo que uno que ya viste. Técnica típica: fijar cada usuario a una misma réplica (por hash del user id). Si esa réplica cae, hay que reasignar con cuidado.
+- **Prefijo consistente**: si las escrituras ocurrieron en un orden, se leen en ese orden. Técnica: que las escrituras causalmente relacionadas vayan a la misma partición.
+
+<Callout type="interview" title="Cómo mencionarlo sin perder tiempo">
+
+Cuando propongas réplicas de lectura, agrega en una frase: *"Las réplicas son asíncronas, así que hay lag; para el flujo de editar perfil necesito read-your-writes, así que esas lecturas van al líder durante unos segundos o comparo la posición del log"*. Eso demuestra que conoces el costo de lo que propones. No hace falta implementarlo en detalle salvo que el entrevistador pregunte.
+
+</Callout>
+
+<Quiz
+  question="Un usuario publica un comentario, la app lo redirige a la página del post y el comentario no aparece. Tienes un líder y 4 réplicas de lectura asíncronas. ¿Qué cambio es el más acotado?"
+  options={[
+    { text: 'Hacer síncronas las 4 réplicas.', why: 'Resolvería el síntoma, pero cualquier réplica lenta frenaría todas las escrituras del sistema. Es un martillo enorme para un problema de un usuario y una página.' },
+    { text: 'Leer los comentarios del post desde el líder durante unos segundos después de que ese usuario escribe, o leer de una réplica que ya aplicó su posición en el log.', correct: true, why: 'Es read-your-writes: la garantía solo aplica a quien escribió, el resto sigue leyendo de réplicas. El costo es poco tráfico extra al líder.' },
+    { text: 'Agregar una caché delante de las réplicas.', why: 'Una caché agrega otra fuente de datos viejos; si no se invalida con la escritura, empeora el problema.' },
+    { text: 'Fijar al usuario siempre a la misma réplica.', why: 'Eso da lecturas monótonas (no retroceder), pero no garantiza que esa réplica ya tenga tu escritura.' },
+  ]}
+/>
+
+## Multi-líder y sin líder
+
+### Multi-líder
+
+Con varios líderes, cada uno acepta escrituras y las replica a los demás. Tiene sentido en tres casos: **varias regiones** (cada región escribe en su líder local y no paga latencia transoceánica), **clientes offline** (cada dispositivo es en la práctica un líder: una app de calendario o notas que funciona sin conexión) y **edición colaborativa** en tiempo real.
+
+El precio es enorme: **conflictos de escritura**. Si dos personas cambian el título del mismo documento en dos regiones, ambas escrituras tienen éxito localmente y chocan al replicarse. Opciones para resolverlos:
+
+- **Last-write-wins (LWW)**: gana la marca de tiempo más alta. Es simple y **pierde datos en silencio**; además los relojes de distintas máquinas no están sincronizados con precisión.
+- **Fusionar**: guardar ambas versiones y que la aplicación o el usuario decida (lo que hacían los carritos de Dynamo: unir los ítems).
+- **CRDTs**: estructuras de datos diseñadas para que las fusiones converjan automáticamente (contadores, conjuntos, texto colaborativo).
+
+Si no tienes una de esas tres razones, evita multi-líder. La mayoría de los sistemas multi-región usan un líder por partición, ubicado en la región que más escribe esos datos.
+
+### Sin líder (estilo Dynamo)
+
+El paper de Dynamo de Amazon (2007) popularizó la replicación **sin líder**: el cliente (o un nodo coordinador) envía cada escritura a varias réplicas a la vez y lee de varias a la vez. Cassandra, ScyllaDB y Riak siguen este modelo. Con N réplicas, una escritura se considera exitosa cuando W confirman, y una lectura consulta R réplicas y se queda con la versión más nueva. Si `R + W > N`, los conjuntos se cruzan. Lo vemos a fondo, con un simulador, en *Consistencia, CAP y consenso*.
+
+Como no hay líder, las réplicas se ponen al día con tres mecanismos: **read repair** (al leer, si una réplica devolvió un valor viejo, se le escribe el nuevo), **hinted handoff** (si una réplica está caída, otro nodo guarda la escritura y se la entrega cuando vuelve) y **anti-entropía** (un proceso en segundo plano compara réplicas con árboles de Merkle y copia lo que falta).
+
+<Compare>
+<Option title="Un líder" verdict="Por defecto">
+
+Simple de razonar. Sin conflictos de escritura. Permite transacciones y lecturas fuertes en el líder.
+
+El líder limita las escrituras y el failover es delicado.
+
+</Option>
+<Option title="Multi-líder" verdict="Solo con motivo">
+
+Escrituras locales en cada región y soporte offline.
+
+Conflictos inevitables. LWW pierde datos. Difícil de razonar y de depurar.
+
+</Option>
+<Option title="Sin líder" verdict="Alta disponibilidad">
+
+Sin failover: tolera nodos caídos y lentos ajustando N, R y W. Escala escrituras.
+
+Consistencia eventual por defecto. Necesitas versiones (relojes vectoriales o LWW) y reparación.
+
+</Option>
+</Compare>
+
+## Particionado: partir los datos
+
+La replicación no te ayuda si el problema son las **escrituras** o el **tamaño**: todas las réplicas reciben todas las escrituras y guardan todo. Para eso partes los datos en particiones (*shards*), cada una en un nodo distinto (con sus propias réplicas). El objetivo es que la carga se reparta parejo. Si una partición recibe mucho más que las demás, tienes un **hot spot** y perdiste el beneficio.
+
+### Por rango de clave
+
+Cada partición guarda un rango contiguo de claves: A–F, G–M, etc., como los tomos de una enciclopedia. Las claves están ordenadas dentro de cada partición, así que las **consultas por rango son eficientes** ("pedidos del cliente 42 entre marzo y junio"). Bigtable, HBase, y bases como CockroachDB o Spanner usan rangos que se dividen automáticamente cuando crecen.
+
+El riesgo es el patrón de acceso. Si la clave es una marca de tiempo, **todas las escrituras de hoy caen en la última partición**, mientras las demás están ociosas. La solución clásica es anteponer otra dimensión: `sensor_id + timestamp` en vez de solo `timestamp`.
+
+### Por hash de la clave
+
+Aplicas una función de hash a la clave y repartes por el hash. Las claves consecutivas quedan dispersas, así que la carga se reparte bien. A cambio, **pierdes las consultas por rango**: "pedidos entre 100 y 200" tiene que preguntar a todas las particiones.
+
+El término medio que usan Cassandra y DynamoDB es la **clave compuesta**: la primera parte (*partition key*) se hashea para elegir la partición, y el resto (*clustering/sort key*) ordena las filas dentro de ella. Discord, por ejemplo, particiona los mensajes por canal y por una ventana de tiempo: los mensajes de un canal en un periodo viven juntos y ordenados, y leer "los últimos 50 mensajes del canal" toca una sola partición.
+
+### Elegir la clave de partición
+
+La decisión más importante del sharding, y la más difícil de cambiar. Criterios:
+
+- **Cardinalidad alta y reparto parejo.** `pais` es mala clave (pocos valores, muy desbalanceados); `user_id` suele ser buena.
+- **Que las consultas frecuentes toquen una sola partición.** Si casi todo se consulta por tenant, particiona por `tenant_id`. Notion particionó su Postgres por espacio de trabajo: todo lo de un workspace vive en el mismo shard.
+- **Evitar transacciones y joins entre particiones.** Son lentos y complejos (requieren coordinación entre nodos). Diseña para que no hagan falta en el camino crítico.
+
+Los **índices secundarios** complican todo. Con índices *locales*, cada partición indexa sus propios datos y una búsqueda por un campo secundario consulta a todas (*scatter-gather*, la latencia la marca la partición más lenta). Con índices *globales*, el índice está particionado por el término buscado: lecturas rápidas, pero cada escritura toca varias particiones y el índice suele actualizarse de forma asíncrona.
+
+### ¿Quién sabe qué partición tiene cada clave?
+
+Alguien tiene que traducir "clave → nodo". Hay tres formas:
+
+<FlowDiagram
+  caption="Tres formas de enrutar una petición a la partición correcta."
+  nodes={[
+    { id: 'c', label: 'Cliente', kind: 'client', x: 0, y: 1 },
+    { id: 'r', label: 'Router', kind: 'gateway', x: 1.5, y: 1, sub: 'mongos, VTGate' },
+    { id: 'cfg', label: 'Mapa de shards', kind: 'file', x: 1.5, y: 2.3, sub: 'etcd, ZooKeeper' },
+    { id: 's1', label: 'Shard 1', kind: 'db', x: 3, y: 0, sub: 'usuarios 0–999' },
+    { id: 's2', label: 'Shard 2', kind: 'db', x: 3, y: 1, sub: 'usuarios 1000–1999' },
+    { id: 's3', label: 'Shard 3', kind: 'db', x: 3, y: 2, sub: 'usuarios 2000–2999' },
+  ]}
+  edges={[
+    { from: 'c', to: 'r', label: 'user 1500' },
+    { from: 'r', to: 's2' },
+    { from: 'cfg', to: 'r', dashed: true, label: 'cambios' },
+    { from: 'c', to: 's1', id: 'c-s1', dashed: true },
+    { from: 's1', to: 's2', id: 's1-s2', label: 'reenvía' },
+    { from: 'c', to: 's3', id: 'c-s3', dashed: true },
+  ]}
+  steps={[
+    { title: 'Capa de enrutamiento', body: 'Un router conoce el mapa de particiones y reenvía cada petición. Es lo que hacen mongos en MongoDB y VTGate en Vitess. Los clientes no saben nada del sharding.', active: ['c', 'r', 's2'], flow: ['c-r', 'r-s2'] },
+    { title: 'El mapa vive en un servicio de coordinación', body: 'El mapa autoritativo se guarda en un sistema con consenso (etcd, ZooKeeper o servidores de configuración). Cuando una partición se mueve, los routers reciben la actualización.', active: ['cfg', 'r'], flow: ['cfg-r'] },
+    { title: 'Cualquier nodo reenvía', body: 'El cliente habla con cualquier nodo, que reenvía al dueño si no es él. Cassandra lo hace así: los nodos conocen el anillo vía gossip y el que recibe la petición actúa como coordinador.', active: ['c', 's1', 's2'], flow: ['c-s1', 's1-s2'] },
+    { title: 'Cliente consciente de las particiones', body: 'El driver del cliente conoce el mapa y va directo al nodo correcto: un salto menos, pero cada cliente debe mantener el mapa al día.', active: ['c', 's3'], flow: ['c-s3'] },
+  ]}
+/>
+
+## Hashing consistente y rebalanceo
+
+Con el tiempo agregas nodos (más datos, más carga) o pierdes alguno. Mover particiones tiene que ser posible sin mover medio clúster.
+
+La forma ingenua, `nodo = hash(clave) % N`, es una trampa. Cuando N cambia, el resultado del módulo cambia para casi todas las claves: al pasar de N a N+1 nodos, solo se queda en su lugar ~1/(N+1) de las claves. Pasar de 4 a 5 servidores movería ~80 % de los datos (o invalidaría ~80 % de una caché distribuida, lo que manda toda esa carga a la base).
+
+El **hashing consistente** (Karger et al., 1997, pensado para cachés web) resuelve eso. Imagina el espacio de hashes como un anillo. Cada servidor ocupa una posición en el anillo (el hash de su nombre). Una clave pertenece al primer servidor que encuentras girando en sentido horario desde su hash. Si agregas un servidor, solo se lleva las claves del tramo entre él y su predecesor: se mueve ~1/N de las claves, todas hacia el nodo nuevo.
+
+Con un solo punto por servidor, los tramos quedan muy desparejos: un servidor puede quedarse con el doble de claves que otro. La solución son los **nodos virtuales**: cada servidor ocupa muchos puntos del anillo. Los tramos se promedian, la carga se empareja, y cuando un servidor sale, sus claves se reparten entre muchos servidores en vez de caerle todas al vecino. Además permiten capacidad heterogénea: un servidor el doble de grande recibe el doble de puntos.
+
+<ConsistentHashRing />
+
+Prueba con 1 nodo virtual y luego con 64: mira cómo cambia la barra del servidor más cargado.<Sidenote>Cassandra asigna varios *tokens* por nodo. En la versión 4.0 el valor por defecto de `num_tokens` bajó de 256 a 16, con un algoritmo de asignación que reparte mejor con menos tokens.</Sidenote> En la práctica, el hashing consistente lo usan Cassandra, Dynamo, cachés distribuidas como clientes de Memcached y balanceadores que necesitan afinidad.
+
+### Otras estrategias de rebalanceo
+
+- **Número fijo de particiones**: creas muchas más particiones que nodos (por ejemplo 1.000 para 10 nodos) y asignas varias a cada nodo. Al agregar un nodo, le pasas particiones enteras. La clave → partición nunca cambia; solo cambia partición → nodo. Lo usan Elasticsearch, Couchbase (sus *vBuckets*) y Riak. El número de particiones se elige al principio, así que hay que estimar bien.
+- **Particionado dinámico**: cuando una partición supera cierto tamaño se divide en dos, y cuando se achica se fusiona. Lo usan HBase y las bases con rangos (MongoDB con sus *chunks*, CockroachDB, Spanner). Se adapta solo al volumen de datos.
+
+<Callout type="warn" title="Rebalanceo automático, con cuidado">
+
+Mover particiones es caro: copia datos por la red y carga a los nodos involucrados. Si el rebalanceo se dispara automáticamente porque un nodo está lento, puede sobrecargar a los demás, hacer que también parezcan lentos y producir una cascada. Muchos equipos dejan que el sistema proponga el plan y lo aprueba una persona.
+
+</Callout>
+
+<Quiz
+  question="Tienes una caché distribuida con 10 nodos usando hash(clave) % 10 y agregas un nodo. ¿Qué pasa y cómo lo evitas?"
+  options={[
+    { text: 'Cambia de nodo cerca del 10 % de las claves; es aceptable.', why: 'Eso es lo que lograrías con hashing consistente. Con módulo, al pasar de 10 a 11 solo una de cada 11 claves queda en su lugar.' },
+    { text: 'Cerca del 91 % de las claves cambia de nodo: masivos cache misses que van a la base. Con hashing consistente (y nodos virtuales) se mueve ~1/11 de las claves.', correct: true, why: 'Exacto: casi toda la caché queda invalidada de golpe, que es como un arranque en frío. El anillo limita el movimiento a las claves que ahora le tocan al nodo nuevo.' },
+    { text: 'No pasa nada porque las claves se recalculan perezosamente.', why: 'Recalcular perezosamente significa precisamente que cada lectura va al nodo nuevo, no encuentra la clave y cae en la base.' },
+    { text: 'Se mueven solo las claves del nodo 10.', why: 'Así funciona el anillo, no el módulo: con módulo cambia el resultado para casi todas las claves.' },
+  ]}
+/>
+
+## Particiones calientes
+
+Aunque el hash reparta las claves parejo, **no reparte las peticiones parejo** si unas pocas claves concentran el tráfico. El ejemplo clásico: una celebridad con 100 millones de seguidores publica algo y todas las lecturas y likes golpean la misma clave, que vive en una sola partición. Ningún esquema de particionado lo resuelve solo.
+
+Mitigaciones, de la más simple a la más invasiva:
+
+1. **Caché delante** para lecturas calientes (incluso caché local en cada servidor de aplicación para las claves más calientes). Lo vemos en *Caché y CDN*.
+2. **Salar la clave** para escrituras calientes: en vez de `post:123`, escribes en `post:123#0` … `post:123#9` elegido al azar. Diez particiones absorben la carga. El costo: leer requiere consultar las diez y agregar. Hazlo solo para las claves que de verdad están calientes, y lleva registro de cuáles son.
+3. **Agregar en memoria y escribir en lote**: un contador de likes no necesita una escritura por like; acumula unos segundos y escribe la suma.
+4. **Dividir la partición caliente** o aislar ese tenant en un nodo propio. Útil en sistemas multi-tenant donde un cliente grande domina.
+
+<Callout type="interview" title="La pregunta que viene después del sharding">
+
+Cuando digas "particiono por `user_id`", anticipa: *"El riesgo son las claves calientes, como cuentas con millones de seguidores. Para lecturas pongo caché; para escrituras como likes, uso contadores agregados o salo la clave en N sub-claves y sumo al leer"*. Y menciona el costo: las consultas que no incluyen la clave de partición se vuelven scatter-gather.
+
+</Callout>
+
+<Quiz
+  question="Particionas una tabla de eventos de telemetría por rango de timestamp. ¿Qué problema vas a ver primero?"
+  options={[
+    { text: 'Las consultas por rango de fechas serán lentas.', why: 'Al contrario: particionar por rango de timestamp hace eficientes las consultas por rango de fechas.' },
+    { text: 'Todas las escrituras actuales caen en la partición del rango más reciente, que se vuelve un hot spot.', correct: true, why: 'Los timestamps crecen monótonamente, así que todas las escrituras de ahora van al mismo rango. La solución es anteponer otra dimensión, como sensor_id + timestamp, o hashear.' },
+    { text: 'No se podrán agregar nodos.', why: 'Los rangos se pueden dividir y mover; el problema es el desbalance de escrituras, no la elasticidad.' },
+    { text: 'Los datos quedarán inconsistentes entre réplicas.', why: 'Particionar y replicar son ejes distintos; el esquema de particionado no cambia la consistencia de las réplicas.' },
+  ]}
+/>
+
+## Cuándo no hacer sharding
+
+El sharding es una de las decisiones más caras de revertir. Antes, agota lo más barato: índices correctos, consultas revisadas, escalar verticalmente (un servidor actual puede tener cientos de núcleos y varios TB de RAM), réplicas de lectura para descargar lecturas, caché, y archivar datos viejos. Figma escaló un solo Postgres durante años con escalado vertical, réplicas y particionado vertical (tablas distintas en bases distintas) antes de hacer sharding horizontal.
+
+Cuando sí lo necesitas, considera primero una base que lo haga por ti (CockroachDB, Spanner, Vitess para MySQL, Citus para Postgres) antes de escribir tu propia capa. En la entrevista, el sharding se justifica con números: si tu estimación da 50.000 escrituras por segundo sostenidas y varios TB por año, dilo y entonces particiona.
+
+<Takeaways>
+
+- Replicar copia los datos (disponibilidad, lecturas, latencia); particionar los divide (escrituras, tamaño). Se combinan: cada partición tiene réplicas.
+- Líder-seguidor es el default. La replicación asíncrona puede perder escrituras confirmadas en un failover; semi-síncrona garantiza dos copias.
+- El lag de réplicas produce anomalías concretas: no ver tu escritura, retroceder en el tiempo, prefijo inconsistente. Cada una tiene su garantía y su técnica.
+- Multi-líder solo con una razón fuerte (multi-región, offline, colaborativo), porque los conflictos son inevitables. Sin líder (Dynamo) cambia failover por quórums y reparación.
+- Rango permite consultas por rango pero crea hot spots con claves monótonas; hash reparte parejo pero pierde los rangos. La clave de partición se elige por patrones de acceso.
+- `hash % N` mueve casi todo al cambiar N; el hashing consistente con nodos virtuales mueve ~1/N y empareja la carga.
+- Ningún particionado arregla una clave caliente: caché, salado de claves y agregación.
+
+</Takeaways>
+
+## Fuentes y lecturas
+
+- Martin Kleppmann y Chris Riccomini, [*Designing Data-Intensive Applications*, 2.ª ed.](https://www.oreilly.com/library/view/designing-data-intensive-applications/9781098119058/) (O'Reilly, 2026). Los capítulos de replicación y particionado son la referencia de este tema.
+- DeCandia et al., [Dynamo: Amazon's Highly Available Key-value Store](https://www.allthingsdistributed.com/2007/10/amazons_dynamo.html) (SOSP 2007), presentado por Werner Vogels.
+- Karger et al., [Consistent Hashing and Random Trees](https://dl.acm.org/doi/10.1145/258533.258660) (STOC 1997).
+- Apache Cassandra, [Dynamo (arquitectura)](https://cassandra.apache.org/doc/latest/cassandra/architecture/dynamo.html): anillo, tokens, nodos virtuales y replicación.
+- The Last Pickle, [The Impacts of Changing the Number of VNodes in Apache Cassandra](https://thelastpickle.com/blog/2021/01/29/impacts-of-changing-the-number-of-vnodes.html).
+- Notion, [Herding elephants: lessons learned from sharding Postgres at Notion](https://www.notion.com/blog/sharding-postgres-at-notion) y [The Great Re-shard](https://www.notion.com/blog/the-great-re-shard).
+- Figma, [How Figma's databases team lived to tell the scale](https://www.figma.com/blog/how-figmas-databases-team-lived-to-tell-the-scale/).
+- Discord, [How Discord Stores Trillions of Messages](https://discord.com/blog/how-discord-stores-trillions-of-messages).

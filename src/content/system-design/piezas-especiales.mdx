@@ -1,0 +1,224 @@
+import { SnowflakeExplorer } from '../../components/widgets/system-design/SnowflakeExplorer'
+import { InvertedIndex } from '../../components/widgets/system-design/InvertedIndex'
+import { GeohashGrid } from '../../components/widgets/system-design/GeohashGrid'
+
+Hay piezas que reaparecen en casi todos los diseños, y cada una tiene un truco. Generar IDs únicos sin un contador central. Buscar texto sin recorrer toda la tabla. Encontrar "lo que está cerca de mí" cuando una base de datos solo sabe ordenar en una dimensión. Guardar fotos y videos sin que pasen por tus servidores.
+
+Ninguna es difícil si conoces la idea central, y todas te hacen tropezar en una entrevista si no la conoces. En este tema vemos las cuatro con el detalle suficiente para defenderlas en la pizarra. Los casos completos (Twitter, Uber, YouTube, Dropbox) las combinan en la unidad *Casos*.
+
+## IDs únicos a escala
+
+Un `AUTO_INCREMENT` funciona perfecto con una base de datos. Con 20 shards o con escrituras en varias regiones deja de servir: ya no hay un único contador, y coordinar uno global en cada inserción convierte esa coordinación en el cuello de botella y en un punto único de falla. Antes de elegir una alternativa, aclara qué necesitas del ID:
+
+- **Unicidad** sin coordinar en cada generación.
+- **Orden aproximado por tiempo** (*k-sortable*), para paginar con cursor y para que los índices B-tree inserten al final.
+- **Tamaño**: 64 bits caben en un `BIGINT` y en una clave compacta; 128 bits ocupan el doble en cada índice que los referencia.
+- **Opacidad**: un ID secuencial filtra información (cuántos pedidos tienes por día) y permite enumerar recursos.
+
+### Las opciones
+
+**UUIDv4**: 122 bits aleatorios. Cero coordinación y prácticamente cero probabilidad de colisión. El problema es el orden: como son aleatorios, cada inserción cae en un lugar cualquiera del índice B-tree, lo que fragmenta páginas y hace que el conjunto de trabajo del índice no quepa en memoria. El RFC 9562 menciona esa diferencia de localidad como de "un orden de magnitud o más" en casos reales.
+
+**UUIDv7** (RFC 9562, 2024): 48 bits con el timestamp Unix en milisegundos al principio, seguidos de bits aleatorios. Sigue siendo un UUID de 128 bits compatible con todo lo que ya acepta UUIDs, pero ordenado por tiempo. El RFC recomienda preferirlo a v1 y v6. Si hoy necesitas un UUID nuevo, es la opción por defecto.
+
+**ULID**: la misma idea antes de que existiera v7. 48 bits de tiempo y 80 aleatorios, codificados en 26 caracteres Base32 de Crockford que se ordenan lexicográficamente. Dentro del mismo milisegundo, la especificación incrementa la parte aleatoria para mantener el orden.
+
+**Snowflake** (Twitter, 2010): 64 bits divididos en campos. Twitter lo creó al migrar de MySQL a Cassandra, que no tiene generador de IDs. El layout original:
+
+- **1 bit** de signo, siempre 0.
+- **41 bits** de milisegundos desde una época propia: unos 69 años.
+- **10 bits** de identificador de máquina: hasta 1.024 generadores.
+- **12 bits** de secuencia: 4.096 IDs por milisegundo por máquina.
+
+Cada máquina genera IDs localmente, sin hablar con nadie, y los IDs quedan ordenados por tiempo. Discord, Instagram y muchos otros usan variantes del mismo esquema (Discord parte de una época en 2015). Explóralo:
+
+<SnowflakeExplorer />
+
+Snowflake tiene dos letras chicas que conviene decir en voz alta:
+
+1. **Hay que asignar el ID de máquina** sin repetirlo: con configuración, con ZooKeeper o etcd al arrancar, o derivándolo del pod. Dos procesos con el mismo ID de máquina pueden generar el mismo ID.
+2. **Depende del reloj.** Si NTP mueve el reloj hacia atrás, el generador podría repetir timestamps. La implementación de referencia se niega a generar (o espera) hasta que el reloj supere el último timestamp emitido. Por eso el orden entre máquinas es solo aproximado: dos IDs generados en máquinas distintas con pocos milisegundos de diferencia pueden quedar invertidos.
+
+| | Bits | Orden por tiempo | Coordinación | Ojo con |
+| --- | --- | --- | --- | --- |
+| Auto-increment | 64 | Estricto | Una base central | Punto único, filtra volumen |
+| UUIDv4 | 128 | No | Ninguna | Inserciones aleatorias en el índice |
+| UUIDv7 | 128 | Por milisegundo | Ninguna | Expone el instante de creación |
+| ULID | 128 | Por milisegundo | Ninguna | No es un UUID estándar |
+| Snowflake | 64 | Aproximado | Asignar ID de máquina | Reloj, más de 2⁵³ en JavaScript |
+
+<Callout type="warn" title="JavaScript y los 64 bits">
+
+Un `Number` de JavaScript solo representa enteros exactos hasta 2⁵³. Un ID Snowflake actual es mayor, así que `JSON.parse` lo corrompe en silencio. Twitter terminó devolviendo cada ID también como string (`id_str`). Si tu API expone IDs de 64 bits, serialízalos como strings.
+
+</Callout>
+
+<Callout type="interview" title="Qué decir cuando piden IDs únicos">
+
+"Necesito IDs únicos sin coordinación, ordenables por tiempo para paginar con cursor y compactos porque van en índices grandes. Usaría un esquema tipo Snowflake de 64 bits: 41 de timestamp, 10 de máquina, 12 de secuencia, con los IDs de máquina asignados al arrancar. Si 128 bits no son problema, UUIDv7 me da lo mismo sin asignar IDs de máquina. Evitaría UUIDv4 como clave primaria por la localidad del índice". Un minuto, y cerraste el tema.
+
+</Callout>
+
+<Quiz
+  question="Usas UUIDv4 como clave primaria de una tabla de pedidos con un índice B-tree y miles de inserciones por segundo. Las escrituras se vuelven lentas a medida que la tabla crece. ¿Cuál es la causa más probable y el arreglo?"
+  options={[
+    { text: 'Las claves aleatorias insertan en páginas dispersas del índice. Cambiar a un ID ordenado por tiempo (UUIDv7, ULID o Snowflake).', correct: true, why: 'Con claves crecientes, las inserciones caen al final del índice: las mismas pocas páginas calientes en memoria. Con claves aleatorias, cada inserción toca una página distinta, que muchas veces hay que leer del disco y partir.' },
+    { text: 'Los UUIDv4 colisionan con frecuencia y la base tiene que reintentar.', why: 'Con 122 bits aleatorios, la probabilidad de colisión es despreciable incluso con billones de IDs.' },
+    { text: 'Los UUID son strings y comparar strings es lento.', why: 'Guardados como tipo UUID nativo o como 16 bytes binarios no son strings. El problema es dónde caen las inserciones, no la comparación.' },
+    { text: 'Hay que pasar a auto-increment con un contador global.', why: 'Resolvería la localidad, pero vuelve a crear un punto central de coordinación, justo lo que querías evitar al distribuir.' },
+  ]}
+/>
+
+## Búsqueda de texto: el índice invertido
+
+`SELECT * FROM productos WHERE titulo LIKE '%zapatilla%'` no escala. Un índice B-tree solo ayuda con prefijos (`LIKE 'zapa%'`), así que un comodín al inicio obliga a leer todas las filas. Tampoco entiende que "Zapatillas", "zapatilla" y "ZAPATILLA" son lo mismo, ni sabe ordenar por relevancia.
+
+Los motores de búsqueda (Lucene, y encima de él Elasticsearch y OpenSearch) invierten el problema. En lugar de "documento → palabras", guardan **"término → lista de documentos que lo contienen"** (la *posting list*). Construir el índice pasa por un **analizador**:
+
+1. **Tokenizar**: partir el texto en palabras.
+2. **Normalizar**: minúsculas, quitar tildes.
+3. **Quitar stopwords**: "de", "para", "la".
+4. **Stemming**: llevar cada palabra a una raíz común ("zapatillas" → "zapatilla"). Los stemmers reales, como Snowball, producen raíces que a veces no son palabras, y no importa: el mismo analizador corre al indexar y al buscar.
+
+Buscar "running impermeables" se reduce a analizar la consulta igual, traer dos posting lists e **intersectarlas** (AND) o unirlas (OR). Como las listas están ordenadas por ID de documento, la intersección es un recorrido lineal tipo *merge*, sin tocar los documentos que no coinciden.
+
+<InvertedIndex />
+
+### Relevancia
+
+Encontrar documentos es la mitad del trabajo; la otra mitad es ordenarlos. La intuición de **TF-IDF**: un término pesa más si aparece mucho en el documento (*term frequency*) y si es raro en la colección (*inverse document frequency*). "Running" en un catálogo deportivo aparece en todos lados y discrimina poco; "impermeable" discrimina mucho. Lucene usa por defecto **BM25**, un refinamiento que satura la frecuencia (repetir una palabra 50 veces no hace al documento 50 veces más relevante) y normaliza por la longitud del documento.
+
+### Dónde va en la arquitectura
+
+El motor de búsqueda casi nunca es la fuente de verdad. El patrón típico:
+
+- La base de datos principal (Postgres, DynamoDB) guarda los datos.
+- Los cambios llegan al índice de forma **asíncrona**: con *change data capture* (CDC) o un *outbox* que publica eventos en Kafka y un indexador que los consume. Lo vemos en *Colas y streaming*.
+- La búsqueda es **casi en tiempo real**: Elasticsearch hace visibles los documentos nuevos al refrescar el índice, por defecto cada segundo. Tu diseño debe tolerar que un producto recién creado tarde un momento en aparecer.
+- El índice se particiona por documento en shards; cada consulta va a todos los shards en paralelo y se combinan los mejores resultados de cada uno (*scatter-gather*). Por eso la latencia de cola de un solo shard lento afecta a todas las consultas.
+
+<Callout type="tip">
+
+Si el volumen es moderado, no agregues Elasticsearch. Postgres trae búsqueda de texto completo (`tsvector` con índice GIN) y trigramas (`pg_trgm`) para búsquedas difusas. Un clúster de búsqueda es otro sistema distribuido que operar, sincronizar y monitorear. Justifícalo con números.
+
+</Callout>
+
+## Búsqueda geoespacial
+
+"Conductores a menos de 2 km", "restaurantes en esta zona del mapa": el problema es que un índice B-tree ordena en **una** dimensión. Con un índice en latitud obtienes una franja horizontal que cruza el planeta entero; con uno en longitud, una vertical. Necesitas ordenar puntos 2D de forma que lo cercano en el mapa quede cerca en el índice.
+
+### Geohash
+
+Geohash divide el mundo en una grilla recursiva. Cada bit parte la celda a la mitad, alternando longitud y latitud, y cada 5 bits forman un carácter Base32. El resultado tiene una propiedad muy útil: **todos los puntos dentro de una celda comparten el prefijo**. Buscar "todo lo que está en `9g3w8`" es una consulta por prefijo, y eso sí lo resuelve un B-tree, un sorted set de Redis o un `LIKE '9g3w8%'`.
+
+| Caracteres | Tamaño aproximado de la celda |
+| --- | --- |
+| 4 | ±20 km |
+| 5 | ±2,4 km |
+| 6 | ±0,61 km |
+| 7 | ±76 m |
+| 8 | ±19 m |
+
+La trampa es el **borde**. Dos puntos a un metro de distancia, uno a cada lado de una frontera de celda, pueden no compartir ni un carácter. Por eso una búsqueda de cercanía nunca consulta una sola celda: consulta la celda del punto **y sus 8 vecinas**, y después filtra por distancia real. Redis lo hace exactamente así en `GEOSEARCH`: guarda un geohash de 52 bits como score de un sorted set y revisa "1 + 8" áreas. Mira el caso de Greenwich en el modo *Vecinos*:
+
+<GeohashGrid />
+
+### Quadtree
+
+Un **quadtree** divide el espacio en cuatro cuadrantes, pero solo subdivide un nodo cuando contiene demasiados puntos (por ejemplo, más de 100). Así se adapta a la densidad: en Manhattan las celdas son diminutas y en el desierto enormes. Una consulta baja por el árbol hasta las hojas que intersectan el área buscada. Suele vivir en memoria y se reconstruye o actualiza periódicamente, así que encaja muy bien con datos que cambian poco (locales en un mapa tipo Yelp) y peor con millones de puntos que se mueven cada pocos segundos.
+
+### S2 y H3
+
+Las librerías de producción resuelven los defectos de la grilla latitud/longitud, cuyas celdas se deforman hacia los polos:
+
+- **S2** (Google) proyecta la esfera sobre las 6 caras de un cubo y recorre cada cara con una curva de Hilbert, que preserva mejor la cercanía que el zig-zag del geohash. Cada celda tiene un ID de 64 bits y hay 31 niveles, desde las caras del cubo hasta celdas de alrededor de un centímetro. Una región se representa como un conjunto de celdas (*covering*) que se traduce en rangos de IDs.
+- **H3** (Uber) usa hexágonos en 16 resoluciones. Su ventaja es que los 6 vecinos de un hexágono están todos a la misma distancia del centro, lo que simplifica agregaciones como la demanda por zona o los anillos de búsqueda alrededor de un punto. Para cubrir la esfera necesita 12 pentágonos por resolución, un detalle que la librería maneja por ti.
+
+En la práctica rara vez implementas esto a mano: PostGIS (índices GiST), Redis GEO, Elasticsearch (`geo_point`) o DynamoDB con una clave de geohash. Lo que se evalúa es que expliques **por qué** funcionan y qué pasa en los bordes. Para objetos en movimiento, como conductores que reportan su posición cada pocos segundos, el cuello de botella es la tasa de actualización, no la consulta: suele resolverse con un índice en memoria por celda, como en el caso de *Uber* de la unidad *Casos*.
+
+<Quiz
+  question="Indexas restaurantes por geohash de 6 caracteres y para buscar cercanos consultas solo la celda del usuario. ¿Qué problema vas a ver?"
+  options={[
+    { text: 'Si el usuario está cerca del borde de su celda, faltan restaurantes muy cercanos que caen en la celda vecina.', correct: true, why: 'Los puntos cercanos no siempre comparten prefijo. Consulta la celda y sus 8 vecinas, y filtra por distancia real.' },
+    { text: 'Los resultados son lentos, porque una consulta por prefijo no usa índices.', why: 'Una consulta por prefijo es justamente lo que un B-tree o un sorted set resuelve bien. Esa es la gracia del geohash.' },
+    { text: 'Aparecen restaurantes de otro continente.', why: 'Todo lo que comparte un prefijo de 6 caracteres está dentro de la misma celda de unos cientos de metros.' },
+    { text: 'Ninguno: el geohash garantiza que los puntos cercanos tengan el mismo prefijo.', why: 'La garantía va al revés: mismo prefijo implica cercanía, pero cercanía no implica mismo prefijo.' },
+  ]}
+/>
+
+## Blobs: fotos, videos y archivos
+
+Las imágenes, los videos, los PDFs y los backups van a un **almacenamiento de objetos** (S3, Google Cloud Storage, Azure Blob, Cloudflare R2), no a la base de datos ni al disco de tus servidores. Un object store es un mapa plano de clave → bytes + metadatos, prácticamente ilimitado, muy barato por GB y altamente durable (S3 está diseñado para 11 nueves de durabilidad). En la base de datos guardas solo los metadatos y la clave del objeto: dueño, tamaño, tipo, estado.
+
+Por qué no en la base de datos: los blobs inflan backups y réplicas, ocupan el buffer pool que necesitan tus consultas y cada byte servido pasa por la máquina más cara y difícil de escalar de tu sistema.
+
+### Subidas directas con URLs prefirmadas
+
+El error clásico es subir el archivo a tu API y que la API lo reenvíe a S3. Cada video de 2 GB atraviesa tus servidores, retiene una conexión durante minutos y duplica el ancho de banda. Con una **URL prefirmada** el cliente sube directo al object store, y tu API solo autoriza:
+
+<FlowDiagram
+  caption="Subir un video sin que los bytes pasen por tus servidores."
+  nodes={[
+    { id: 'app', label: 'App', kind: 'mobile', x: 0, y: 1 },
+    { id: 'api', label: 'API de medios', kind: 'service', x: 1.5, y: 0 },
+    { id: 'db', label: 'Metadatos', kind: 'db', x: 3, y: 0, sub: 'estado: pendiente' },
+    { id: 's3', label: 'Object storage', kind: 'storage', x: 1.5, y: 2 },
+    { id: 'w', label: 'Procesador', kind: 'worker', x: 3, y: 2, sub: 'thumbnails, transcode' },
+    { id: 'cdn', label: 'CDN', kind: 'cdn', x: 4, y: 1 },
+  ]}
+  edges={[
+    { from: 'app', to: 'api', label: 'pedir URL' },
+    { from: 'api', to: 'db' },
+    { from: 'app', to: 's3', label: 'PUT directo' },
+    { from: 's3', to: 'w', label: 'evento' },
+    { from: 'w', to: 'db', dashed: true },
+    { from: 's3', to: 'cdn', dashed: true },
+  ]}
+  steps={[
+    { title: '1. Pedir permiso', body: <>La app llama a <code>POST /videos</code> con el tamaño y el tipo. La API valida al usuario y la cuota, y crea la fila de metadatos en estado <code>pendiente</code>.</>, active: ['app', 'api', 'db'], flow: ['app-api', 'api-db'] },
+    { title: '2. URL prefirmada', body: 'La API firma con sus credenciales una URL para un PUT sobre una clave concreta, válida por unos minutos, y se la devuelve a la app. La app nunca recibe credenciales.', active: ['api', 'app'] },
+    { title: '3. Subida directa', body: 'La app sube los bytes directo al object storage. Para archivos grandes usa multipart: partes en paralelo y reanudables.', active: ['app', 's3'], flow: ['app-s3'] },
+    { title: '4. Procesar', body: 'El object storage emite un evento al terminar la subida. Un worker genera thumbnails o transcodifica y marca el video como listo.', active: ['s3', 'w', 'db'], flow: ['s3-w', 'w-db'] },
+    { title: '5. Servir', body: 'Las descargas salen por la CDN, con URLs firmadas si el contenido es privado. Tus servidores no tocaron un solo byte del video.', active: ['s3', 'cdn'], flow: ['s3-cdn'] },
+  ]}
+/>
+
+Detalles que suman puntos:
+
+- **Expiración y alcance.** La URL vale para una operación, una clave y un tiempo acotado (con los SDKs de AWS, hasta 7 días; en la práctica, minutos). Puedes fijar el `Content-Type` en la firma para que no suban otra cosa.
+- **Archivos grandes: multipart upload.** S3 recomienda considerarlo a partir de unos 100 MB. El archivo se parte en hasta 10.000 partes de 5 MiB a 5 GiB que se suben en paralelo y se reintentan por separado, y al final se ensamblan. Es lo que hace reanudable una subida en una red móvil inestable.
+- **No confíes en el cliente.** La fila queda `pendiente` hasta que el evento de subida confirma que el objeto existe. Valida tamaño y tipo real en el procesamiento, y limpia lo que quedó a medias con una regla de ciclo de vida.
+- **Claves bien elegidas.** Una clave con un ID único (`videos/{videoId}/original.mp4`) evita colisiones y sobrescrituras. Si la clave es el hash del contenido, obtienes deduplicación gratis, como hace Dropbox con los bloques de archivos.
+
+<Quiz
+  question="Tu app permite subir videos de hasta 4 GB. Hoy pasan por tu API, que los reenvía a S3, y los servidores se saturan en horas pico. ¿Cuál es el mejor rediseño?"
+  options={[
+    { text: 'URLs prefirmadas con multipart upload directo a S3, y procesamiento disparado por el evento de subida.', correct: true, why: 'Los bytes dejan de atravesar tu flota, la subida se paraleliza y se reanuda por partes, y tu API solo hace trabajo barato de autorización y metadatos.' },
+    { text: 'Agregar más instancias de la API detrás del balanceador.', why: 'Alivia el síntoma a un costo alto: sigues pagando el ancho de banda doble y conexiones de minutos por subida, y una subida que falla al 90 % empieza de cero.' },
+    { text: 'Guardar los videos en la base de datos como BLOB.', why: 'Mueve el problema a la pieza más cara y difícil de escalar, e infla backups y réplicas.' },
+    { text: 'Comprimir los videos en el servidor antes de subirlos a S3.', why: 'Agrega CPU justo donde ya hay saturación. La transcodificación se hace de forma asíncrona, después de la subida.' },
+  ]}
+/>
+
+<Takeaways>
+
+- Para IDs distribuidos: Snowflake (64 bits, tiempo + máquina + secuencia) si necesitas compacto y ordenable; UUIDv7 o ULID si 128 bits está bien y no quieres asignar IDs de máquina. Evita UUIDv4 como clave primaria de tablas con muchas escrituras.
+- Los IDs de 64 bits viajan como strings en JSON, y un Snowflake depende de un reloj que no retroceda y de IDs de máquina únicos.
+- La búsqueda de texto usa un índice invertido (término → documentos) con un analizador que corre igual al indexar y al buscar, y ranking BM25. Va como índice secundario, alimentado de forma asíncrona y casi en tiempo real.
+- Para geo, convierte 2D en 1D: geohash (prefijo = celda, consulta la celda y sus 8 vecinas), quadtree para densidad desigual, S2 o H3 en producción.
+- Los blobs van a object storage y los metadatos a la base de datos. El cliente sube directo con URLs prefirmadas (multipart si es grande) y el procesamiento se dispara por eventos.
+
+</Takeaways>
+
+## Fuentes y lecturas
+
+- Twitter, [Snowflake (repositorio original, 2010)](https://github.com/twitter-archive/snowflake/tree/snowflake-2010), con la descripción del layout de 64 bits.
+- K. Davis, B. Peabody y P. Leach, [RFC 9562: Universally Unique IDentifiers (UUIDs)](https://www.rfc-editor.org/rfc/rfc9562.html) (2024), que define UUIDv7.
+- [ULID spec](https://github.com/ulid/spec).
+- Elastic, [Inverted index](https://www.elastic.co/guide/en/elasticsearch/guide/current/inverted-index.html), en *Elasticsearch: The Definitive Guide* (versión 2.x, conceptos vigentes).
+- [Geohash](https://en.wikipedia.org/wiki/Geohash), Wikipedia (tabla de precisión por longitud).
+- Redis, [GEOADD](https://redis.io/docs/latest/commands/geoadd/): cómo Redis implementa índices geográficos sobre sorted sets.
+- Google, [S2 Cell Hierarchy](http://s2geometry.io/devguide/s2cell_hierarchy).
+- Uber, [H3: tabla de resoluciones](https://h3geo.org/docs/core-library/restable/).
+- AWS, [Uploading objects with presigned URLs](https://docs.aws.amazon.com/AmazonS3/latest/userguide/PresignedUrlUploadObject.html) y [Amazon S3 multipart upload limits](https://docs.aws.amazon.com/AmazonS3/latest/userguide/qfacts.html).
+- Alex Xu, *System Design Interview, Vol. 1*, cap. "Design a Unique ID Generator in a Distributed System", y *Vol. 2*, cap. "Proximity Service".

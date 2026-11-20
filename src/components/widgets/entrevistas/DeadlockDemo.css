@@ -1,0 +1,197 @@
+.dl {
+  display: grid;
+  gap: var(--s-4);
+  grid-template-columns: minmax(0, 1fr);
+}
+@media (min-width: 860px) {
+  .dl {
+    grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+    align-items: start;
+  }
+}
+.dl-graph {
+  width: 100%;
+  height: auto;
+}
+.dl-edge line {
+  stroke: var(--ink-2);
+  stroke-width: 2;
+  transition: stroke 250ms var(--ease-out);
+}
+.dl-edge.is-wait line {
+  stroke-dasharray: 6 5;
+}
+.dl-edge text {
+  font-size: 13px;
+  fill: var(--ink-2);
+  paint-order: stroke;
+  stroke: var(--card);
+  stroke-width: 4px;
+}
+.dl-edge.is-cycle line {
+  stroke: var(--bad);
+  stroke-width: 2.5;
+}
+.dl-edge.is-cycle text {
+  fill: var(--bad);
+  font-weight: 700;
+}
+.dl-head {
+  fill: var(--ink-2);
+}
+.dl-head.is-bad {
+  fill: var(--bad);
+}
+.dl-lock circle {
+  fill: var(--card);
+  stroke: var(--rule-strong);
+  stroke-width: 2;
+  transition:
+    fill 250ms var(--ease-out),
+    stroke 250ms var(--ease-out);
+}
+.dl-lock.is-held circle {
+  fill: var(--line-tint-2);
+  stroke: var(--line);
+}
+.dl-lock__t {
+  font-family: var(--font-code);
+  font-size: 18px;
+  font-weight: 700;
+  fill: var(--ink);
+}
+.dl-lock__s {
+  font-size: 13px;
+  fill: var(--ink-3);
+}
+.dl-thread {
+  --dl-c: var(--l4);
+}
+.dl-thread--T2 {
+  --dl-c: var(--l3);
+}
+.dl-thread rect {
+  fill: color-mix(in oklab, var(--dl-c) 14%, var(--card));
+  stroke: var(--dl-c);
+  stroke-width: 2;
+  transition: stroke-width 200ms var(--ease-out);
+}
+.dl-thread.is-acting rect {
+  stroke-width: 3.5;
+}
+.dl-thread.is-wait rect {
+  stroke-dasharray: 5 4;
+}
+.dl-thread text {
+  font-size: 16px;
+  font-weight: 700;
+  fill: var(--ink);
+}
+.dl-side {
+  display: grid;
+  gap: var(--s-3);
+  min-width: 0;
+}
+.dl-progs {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--s-2);
+}
+.dl-prog {
+  --dl-c: var(--l4);
+  min-width: 0;
+  border: 1.5px solid var(--dl-c);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--code-bg);
+}
+.dl-prog--T2 {
+  --dl-c: var(--l3);
+}
+.dl-prog__t {
+  padding: 3px 8px;
+  background: color-mix(in oklab, var(--dl-c) 16%, var(--card));
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--ink);
+}
+.dl-prog ol {
+  list-style: none;
+  margin: 0;
+  padding: 4px 0;
+  font-family: var(--font-code);
+  font-size: 0.72rem;
+  line-height: 1.6;
+  color: var(--code-ink);
+  overflow-x: auto;
+}
+.dl-prog li {
+  padding: 0 6px;
+  border-left: 3px solid transparent;
+  white-space: nowrap;
+  transition:
+    background-color 220ms var(--ease-out),
+    opacity 220ms var(--ease-out);
+}
+.dl-prog li code {
+  font: inherit;
+  background: none;
+  padding: 0;
+  border: 0;
+  color: inherit;
+}
+.dl-prog li.is-past {
+  opacity: 0.45;
+}
+.dl-prog li.is-wait {
+  background: color-mix(in oklab, var(--warn) 18%, transparent);
+}
+.dl-prog li.is-now {
+  opacity: 1;
+  border-left-color: var(--dl-c);
+  background: var(--hl-soft);
+}
+.dl-conds {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+}
+.dl-conds li {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 5px 8px;
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  background: var(--card);
+  font-size: 0.84rem;
+  line-height: 1.4;
+  color: var(--ink-3);
+  transition:
+    background-color 250ms var(--ease-out),
+    border-color 250ms var(--ease-out);
+}
+.dl-conds li svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+}
+.dl-conds li b {
+  color: var(--ink-2);
+}
+.dl-conds li.is-on {
+  border-color: color-mix(in oklab, var(--bad) 50%, var(--rule));
+  background: color-mix(in oklab, var(--bad) 8%, var(--card));
+  color: var(--ink-2);
+}
+.dl-conds li.is-on svg {
+  color: var(--bad);
+}
+.dl-conds li.is-on b {
+  color: var(--ink);
+}
+.dl-hint {
+  display: block;
+  font-size: 0.78rem;
+}

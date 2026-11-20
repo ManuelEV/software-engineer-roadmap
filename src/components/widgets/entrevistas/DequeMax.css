@@ -1,0 +1,124 @@
+.dqm-field {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+.dqm-field--grow {
+  flex: 1 1 13rem;
+}
+.dqm-field--k {
+  width: 5rem;
+}
+.dqm-field select,
+.dqm-field input {
+  width: 100%;
+  min-height: 40px;
+  padding: 0 10px;
+  border: 1.5px solid var(--rule-strong);
+  border-radius: 8px;
+  background: var(--card);
+  color: var(--ink);
+  font-family: var(--font-code);
+  font-size: 0.86rem;
+}
+.dqm-field input[aria-invalid='true'] {
+  border-color: var(--bad);
+}
+.dqm-field select:focus-visible,
+.dqm-field input:focus-visible {
+  outline: 2px solid var(--line-ink);
+  outline-offset: 1px;
+}
+.dqm-cap {
+  display: block;
+  margin-bottom: 4px;
+  font-family: var(--font-code);
+  font-size: 0.8rem;
+  color: var(--ink-3);
+}
+.dqm-dq__row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.dqm-end {
+  font-family: var(--font-hand);
+  font-size: 0.9rem;
+  color: var(--ink-3);
+}
+.dqm-dq__well {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  min-height: 3.4rem;
+  padding: 5px;
+  border-top: 2px solid var(--ink-3);
+  border-bottom: 2px solid var(--ink-3);
+  overflow: hidden;
+}
+.dqm-empty {
+  font-family: var(--font-code);
+  font-size: 0.8rem;
+  font-style: italic;
+  color: var(--ink-3);
+}
+.dqm-box {
+  display: grid;
+  justify-items: center;
+  min-width: 2.6rem;
+  padding: 2px 6px;
+  border: 1.5px solid color-mix(in oklab, var(--line) 60%, var(--rule-strong));
+  border-radius: 5px;
+  background: var(--line-tint);
+  font-family: var(--font-code);
+  line-height: 1.15;
+  transition:
+    background-color 220ms var(--ease-out),
+    border-color 220ms var(--ease-out);
+}
+.dqm-box__v {
+  font-weight: 700;
+  font-size: 0.95rem;
+  color: var(--ink);
+}
+.dqm-box__i {
+  font-family: var(--font-sign);
+  font-size: 0.7rem;
+  color: var(--ink-2);
+}
+.dqm-box.is-ok {
+  border-color: var(--ok);
+  background: color-mix(in oklab, var(--ok) 22%, var(--card));
+}
+.dqm-box.is-bad {
+  border-color: var(--bad);
+  background: color-mix(in oklab, var(--bad) 18%, var(--card));
+}
+.dqm-res__row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-height: 2em;
+}
+.dqm-chip {
+  display: inline-grid;
+  place-items: center;
+  min-width: 2.2rem;
+  height: 2rem;
+  padding: 0 6px;
+  border: 1.5px solid var(--rule-strong);
+  border-radius: 4px;
+  background: var(--card);
+  font-family: var(--font-code);
+  font-weight: 700;
+  color: var(--ink);
+  transition:
+    background-color 220ms var(--ease-out),
+    border-color 220ms var(--ease-out);
+}
+.dqm-chip.is-new {
+  border-color: var(--ok);
+  background: color-mix(in oklab, var(--ok) 22%, var(--card));
+}

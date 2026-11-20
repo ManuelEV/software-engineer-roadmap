@@ -1,0 +1,222 @@
+import { RetryJitter } from '../../components/widgets/system-design/RetryJitter'
+import { CircuitBreaker } from '../../components/widgets/system-design/CircuitBreaker'
+import { RateLimiter } from '../../components/widgets/system-design/RateLimiter'
+
+A escala, que algo falle es lo normal. Un disco se muere, un despliegue sale con un bug, una dependencia empieza a responder en 8 segundos en lugar de 80 ms. La pregunta de diseño nunca es "¿cómo evito que falle?", sino **"cuando falle, ¿cuánto se rompe?"**. Un sistema confiable contiene el daño: la parte enferma se degrada y el resto sigue atendiendo.
+
+El enemigo principal es la **falla en cascada**. Una dependencia lenta retiene hilos y conexiones; los clientes reintentan y la cargan todavía más; las colas crecen, la latencia sube, otros servicios se quedan sin recursos esperando, y en minutos un problema local tumba todo. Casi todas las técnicas de este tema existen para cortar esa cadena.
+
+La vamos a recorrer en tres partes: cómo **medir** la confiabilidad (SLI, SLO, error budgets), cómo **protegerte de tus dependencias** (timeouts, reintentos con backoff y jitter, circuit breakers, bulkheads) y cómo **protegerte de tus clientes** (rate limiting, load shedding, degradación elegante). Cerramos con observabilidad, que es lo que te deja ver todo lo anterior.
+
+## Medir primero: SLI, SLO, SLA y error budget
+
+Sin una definición medible, "confiable" no significa nada. El libro de SRE de Google fija el vocabulario:
+
+- **SLI** (*indicador*): una medición precisa de un aspecto del servicio. Por ejemplo, "proporción de peticiones `GET /feed` que responden con éxito en menos de 300 ms, medida en el balanceador".
+- **SLO** (*objetivo*): el valor que ese SLI debe cumplir en una ventana. "99,9 % de las peticiones en 30 días".
+- **SLA** (*acuerdo*): un contrato con consecuencias (créditos, multas) si no se cumple. La prueba rápida: si incumplirlo no tiene consecuencia, es un SLO. El SLA siempre es más laxo que el SLO interno, para que tengas margen antes de pagar.
+
+Mide la latencia con **percentiles**, no con promedios. Un promedio de 100 ms puede esconder que el 1 % de los usuarios espera 5 segundos, y como una página hace decenas de llamadas, ese 1 % lento termina afectando a casi todos. El p50 cuenta la experiencia típica; el p99 y el p99,9 cuentan lo que vive tu peor cliente.
+
+### Lo que significan los nueves
+
+| Disponibilidad | Caída permitida en 30 días | En un año |
+| --- | --- | --- |
+| 99 % | 7,2 h | 3,65 días |
+| 99,9 % | 43,2 min | 8,76 h |
+| 99,99 % | 4,32 min | 52,6 min |
+| 99,999 % | 26 s | 5,26 min |
+
+Cada nueve extra cuesta mucho más que el anterior, y las dependencias se multiplican: si tu servicio necesita **en serie** tres dependencias de 99,9 %, tu techo es 0,999³ ≈ 99,7 %. La redundancia hace lo contrario: dos réplicas independientes de 99 % en paralelo dan 1 − 0,01² = 99,99 %, siempre que sus fallas no estén correlacionadas, que es lo difícil.
+
+### El error budget
+
+Si el SLO es 99,9 %, tienes un **presupuesto de error** del 0,1 %: la cantidad de falla que el negocio acepta. Google lo usa como mecanismo de gobierno. Mientras quede presupuesto, se despliega rápido. Si se agota, se frenan los lanzamientos y el equipo invierte en estabilidad. Convierte la discusión eterna entre "ir rápido" y "no romper nada" en un número que ambos lados aceptan.<Sidenote>El equipo de Chubby, el servicio de locks de Google, provocaba caídas planificadas cuando un trimestre iba demasiado por encima del SLO, para que nadie construyera dependencias que asumieran disponibilidad perfecta.</Sidenote>
+
+Para alertar, no uses "la tasa de error superó X % durante 5 minutos". Usa la **tasa de quema** (*burn rate*): qué tan rápido consumes el presupuesto. Con un SLO de 99,9 % a 30 días, el SRE Workbook recomienda despertar a alguien si en la última hora quemas a 14,4× (eso consume el 2 % del presupuesto mensual en una hora), y abrir un ticket si quemas a 1× durante tres días.
+
+## Timeouts: nunca esperes para siempre
+
+Cada llamada remota necesita un timeout, tanto para conectar como para la respuesta completa. Sin él, una dependencia colgada retiene un hilo, una conexión y memoria por cada petición, hasta que el *pool* se agota y tu servicio también deja de responder. Es la forma más común de propagar una falla.
+
+¿Qué valor elegir? La regla de AWS: decide qué tasa de timeouts falsos toleras (por ejemplo 0,1 %) y usa el percentil equivalente de la latencia de la dependencia (el p99,9), con algo de margen. Un timeout demasiado ajustado también es un bug. AWS cuenta el caso de un timeout de 20 ms que fallaba después de cada despliegue porque incluía el *handshake* TLS de las conexiones nuevas; la solución fue abrir las conexiones al iniciar el proceso.
+
+En una cadena de servicios, piensa en **deadlines** en lugar de timeouts aislados. Si el usuario espera como máximo 2 s, no tiene sentido que el tercer salto espere 5. gRPC propaga el deadline: cada servicio sabe cuánto tiempo le queda y abandona el trabajo que ya nadie va a usar.
+
+## Reintentos con backoff exponencial y jitter
+
+Muchas fallas son transitorias: un paquete perdido, una instancia que se reinicia, un líder que cambia. Reintentar las resuelve. Pero los reintentos mal hechos son exactamente lo que convierte un tropiezo en una caída total.
+
+**Reintenta solo lo que tiene sentido reintentar:** errores de red, timeouts, `503`, `429` (respetando `Retry-After`). Nunca un `400` o un `403`, que van a fallar igual. Y solo operaciones idempotentes, o protegidas con una clave de idempotencia (lo vimos en *APIs y tiempo real*).
+
+**Reintenta en una sola capa.** Si cinco capas de una cadena reintentan 3 veces cada una, una falla en la base de datos se multiplica por 3⁵ = 243 intentos. Elige un punto (normalmente el más cercano al usuario o el cliente de la dependencia) y que el resto falle rápido.
+
+**Ponle presupuesto.** Google limita a 3 intentos por petición y, por cliente, solo reintenta mientras los reintentos sean menos del 10 % de las peticiones. Así, en el peor caso, el tráfico crece 1,1× en lugar de 3×. El SDK de AWS hace algo equivalente con un *token bucket* de reintentos.
+
+**Espera cada vez más, y no todos al mismo tiempo.** El *backoff* exponencial duplica la espera en cada intento hasta un tope. Pero si mil clientes fallaron en el mismo instante, el backoff solo los mantiene sincronizados: vuelven todos juntos a los 200 ms, a los 400 ms, a los 800 ms, y cada ola vuelve a tumbar al servidor. El **jitter** agrega aleatoriedad para dispersarlos. El análisis de Marc Brooker en AWS compara variantes y concluye que con jitter el trabajo total cae mucho frente al backoff puro; la variante más usada es *full jitter*: espera un tiempo uniforme entre 0 y el backoff exponencial.
+
+<RetryJitter />
+
+Fíjate en tres cosas del simulador. Sin backoff, todos los clientes gastan sus intentos durante la caída y se rinden. Con backoff exponencial puro, las barras forman olas sincronizadas que solo aprovechan la capacidad de un instante. Con jitter, los intentos se reparten y la capacidad se usa de forma continua.
+
+```ts title="src/infra/retry.ts"
+const BASE_MS = 100
+const TOPE_MS = 10_000
+
+export async function conReintentos<T>(fn: () => Promise<T>, intentos = 3): Promise<T> {
+  for (let i = 0; ; i++) {
+    try {
+      return await fn()
+    } catch (err) {
+      if (i + 1 >= intentos || !esTransitorio(err)) throw err
+      // full jitter: uniforme entre 0 y el backoff exponencial con tope
+      const espera = Math.random() * Math.min(TOPE_MS, BASE_MS * 2 ** i)
+      await new Promise((r) => setTimeout(r, espera))
+    }
+  }
+}
+```
+
+<Callout type="tip">
+
+El jitter no es solo para reintentos. Cualquier cosa periódica que muchos procesos hacen "a la hora en punto" (cron jobs, refresco de cachés, reconexión de clientes tras un despliegue) genera picos sincronizados. Desplázala con un offset por host.
+
+</Callout>
+
+<Quiz
+  question="Tu API llama a un servicio de inventario que a su vez llama a una base de datos. Las tres capas (cliente, API e inventario) reintentan 3 veces ante cualquier error. La base de datos se satura. ¿Cuál es el mejor cambio?"
+  options={[
+    { text: 'Reintentar en una sola capa, con backoff exponencial, jitter y un presupuesto de reintentos.', correct: true, why: 'Elimina la amplificación multiplicativa (3 × 3 × 3 = 27 llamadas por petición original), dispersa los intentos en el tiempo y acota cuánto tráfico extra pueden generar los reintentos.' },
+    { text: 'Subir los reintentos a 5 en cada capa para tener más chances de éxito.', why: 'Empeora la amplificación: 5³ = 125 intentos por petición contra una base que ya está saturada. Es la receta de una falla en cascada.' },
+    { text: 'Reintentar inmediatamente, sin espera, para minimizar la latencia.', why: 'Los reintentos inmediatos llegan justo cuando el servidor está peor y se sincronizan entre clientes.' },
+    { text: 'Quitar los timeouts para no cortar peticiones que podrían terminar.', why: 'Sin timeouts, los hilos y conexiones quedan retenidos esperando a una dependencia lenta, y la falla se propaga hacia arriba.' },
+  ]}
+/>
+
+## Circuit breakers y bulkheads
+
+Los reintentos ayudan con fallas breves. Pero si el servicio de pagos está caído por 10 minutos, seguir llamándolo solo gasta recursos tuyos y castiga a un servicio que intenta recuperarse. Un **circuit breaker** envuelve la llamada y deja de hacerla cuando detecta que casi todo falla:
+
+- **Cerrado**: las llamadas pasan normalmente y el breaker cuenta los fallos en una ventana.
+- **Abierto**: superado un umbral (por ejemplo, 50 % de fallos en las últimas N llamadas), falla de inmediato sin llamar. Ese *fail fast* devuelve el hilo al instante en lugar de esperar un timeout.
+- **Semiabierto**: pasado un tiempo de enfriamiento, deja pasar unas pocas llamadas de prueba. Si salen bien, cierra; si alguna falla, vuelve a abrir.
+
+Sube la tasa de fallos, inicia el tráfico y mira cómo el breaker se abre, espera y sondea:
+
+<CircuitBreaker />
+
+Cuando el breaker está abierto, ¿qué devuelves? Esa es la pregunta interesante, y depende del dominio. Para recomendaciones, una lista genérica precalculada. Para el precio de envío, el último valor en caché. Para un pago, no hay *fallback* honesto: devuelves un error claro y, si el negocio lo permite, encolas el pedido para cobrarlo después. El breaker no arregla nada por sí solo; te da el espacio para degradar con elegancia.
+
+Un **bulkhead** (mamparo, como en los barcos) aísla recursos para que una dependencia enferma no se lleve a las demás. Si todas las llamadas salientes comparten un pool de 200 hilos y el servicio de reseñas se cuelga, en segundos los 200 hilos están esperando a reseñas y ni el checkout responde. Con pools separados por dependencia (o límites de concurrencia por destino), reseñas agota su pool y nada más.
+
+<Callout type="note">
+
+En la unidad *Patrones* encontrarás circuit breaker, retry y bulkhead como patrones de código, con implementaciones. Aquí importa dónde van en la arquitectura y qué decir de ellos en la pizarra.
+
+</Callout>
+
+## Rate limiting: protegerte de tus clientes
+
+Un rate limiter decide si una petición se atiende o se rechaza según cuántas hizo ese cliente recientemente. Protege contra abuso y scraping, reparte la capacidad de forma justa entre clientes, evita que un bug en un cliente (un loop de reintentos) tumbe el servicio y controla costos cuando cada petición es cara, como una llamada a un LLM.
+
+Las decisiones de diseño son **qué identificas** (usuario, API key, IP, o una combinación), **dónde lo aplicas** (en el gateway para el límite global, en el servicio para límites finos) y **qué respondes**: `429 Too Many Requests` con `Retry-After` y, si quieres ser amable, headers con el límite y lo que queda.
+
+Los algoritmos clásicos se diferencian en cómo tratan las ráfagas y cuánta memoria gastan:
+
+- **Token bucket**: un balde de capacidad *L* que se recarga a ritmo constante; cada petición gasta un token. Permite ráfagas de hasta *L* y después limita al ritmo de recarga. Es el más usado: Stripe lo implementa en Redis para su limitador principal.
+- **Leaky bucket**: una cola de tamaño fijo que se vacía a ritmo constante. Suaviza el tráfico de salida (útil frente a un sistema que no tolera picos), pero agrega latencia a las peticiones encoladas.
+- **Ventana fija**: un contador por intervalo (por ejemplo, por minuto). Barato y simple, pero en el borde entre dos ventanas deja pasar el doble del límite en un instante.
+- **Sliding window log**: guarda el timestamp de cada petición y cuenta las de los últimos *W* segundos. Exacto, pero la memoria crece con el límite.
+- **Sliding window counter**: dos contadores (ventana actual y anterior) y una estimación ponderada: `anterior × (W − transcurrido)/W + actual`. Cloudflare lo probó sobre 400 millones de peticiones: solo el 0,003 % se permitió o se limitó por error.
+
+<RateLimiter />
+
+Prueba el botón del borde de ventana con **Ventana fija** y luego con **Contador deslizante**: es el ejemplo más claro de por qué existen las variantes deslizantes.
+
+### Rate limiting distribuido
+
+Con 50 instancias detrás de un balanceador, el contador no puede vivir en memoria local, porque cada instancia vería una fracción del tráfico. Lo normal es un almacén compartido y rápido, típicamente Redis, con la operación de "leer, decidir y actualizar" hecha **atómicamente** (un script Lua o `INCR` + `EXPIRE`) para que dos peticiones simultáneas no lean el mismo valor. Eso agrega un salto de red por petición, así que hay variantes: límites locales aproximados (límite global / número de instancias) o sincronización asíncrona con el almacén central, aceptando algo de imprecisión. Y decide qué pasa si Redis cae: casi siempre conviene **fallar abierto** (dejar pasar), porque el limitador no debería ser lo que tumba tu servicio.
+
+<Quiz
+  question="Un cliente tiene un límite de 100 peticiones por minuto con ventana fija. ¿Cuántas peticiones puede llegar a hacer en un intervalo de 2 segundos?"
+  options={[
+    { text: 'Unas 200: 100 al final de un minuto y 100 al comienzo del siguiente.', correct: true, why: 'La ventana fija reinicia el contador en el borde. Una ráfaga a ambos lados del corte duplica el límite efectivo durante ese instante. Las ventanas deslizantes existen justamente para evitarlo.' },
+    { text: 'Como máximo 100, porque el límite es por minuto.', why: 'Eso valdría para una ventana deslizante. Con ventana fija, el contador se reinicia y el cliente vuelve a tener 100 disponibles justo después del borde.' },
+    { text: 'Unas 3, porque el límite se reparte de forma uniforme.', why: 'Ningún algoritmo de ventana reparte el límite por segundo. El que se acerca a ese comportamiento es el leaky bucket, que suaviza la salida.' },
+    { text: 'Infinitas, porque la ventana fija no cuenta las ráfagas.', why: 'Sí las cuenta: dentro de cada ventana nunca pasan más de 100. El problema es solo en el borde.' },
+  ]}
+/>
+
+## Sobrecarga: load shedding y degradación elegante
+
+El rate limiting protege frente a un cliente que abusa. La **sobrecarga** es otra cosa: el tráfico total legítimo supera tu capacidad (un pico, una instancia menos, un *thundering herd* tras un despliegue). Si sigues aceptando todo, la latencia se dispara, las peticiones vencen en el cliente mientras tú todavía las procesas y terminas trabajando al 100 % para producir respuestas que nadie recibe. Tu *throughput* sigue alto pero tu ***goodput***, el trabajo útil, cae a cero.
+
+**Load shedding** es rechazar trabajo a propósito para proteger el que sí puedes completar:
+
+- **Rechaza temprano y barato.** Un `503` en el borde, antes de parsear el body o tocar la base de datos, cuesta casi nada.
+- **Acota las colas.** Una cola sin límite solo convierte la sobrecarga en latencia. Mejor una cola corta y rechazar al llenarse.
+- **Descarta trabajo vencido.** Si la petición lleva en cola más que el timeout del cliente, el cliente ya se fue: no la proceses. En situaciones de backlog, atender primero lo más reciente (LIFO) ayuda a recuperar a los usuarios que todavía esperan.
+- **Prioriza.** Google etiqueta las peticiones por criticidad (de `CRITICAL_PLUS` a `SHEDDABLE`) y descarta primero lo prescindible. Stripe reserva capacidad para operaciones críticas, como crear cobros, y descarta antes el tráfico de prueba.
+- **Que los clientes también se frenen.** En el *throttling* adaptativo de Google, cada cliente compara sus peticiones con las que el backend aceptó en los últimos minutos y empieza a rechazar localmente cuando la proporción supera un factor K (típicamente 2).
+
+**Degradación elegante** es decidir de antemano qué funcionalidad sacrificar: un feed sin ranking personalizado, una página de producto sin reseñas, búsqueda con resultados algo desactualizados desde caché. El usuario recibe algo útil en lugar de un error.
+
+<Callout type="interview" title="Cuando el entrevistador pregunta: ¿y si esto se cae?">
+
+Responde por capas, de adentro hacia afuera:
+
+1. **Detección**: health checks y alertas por tasa de quema del SLO.
+2. **Contención**: timeouts en cada llamada, circuit breaker en las dependencias no críticas y bulkheads para que una no arrastre a las otras.
+3. **Recuperación**: reintentos con backoff, jitter y presupuesto, solo sobre operaciones idempotentes.
+4. **Degradación**: qué devuelves cuando la dependencia no está (caché, valor por defecto, cola para después).
+5. **Protección de entrada**: rate limiting por cliente y load shedding por prioridad.
+
+Nombrar los cinco puntos con un ejemplo del dominio vale más que dibujar diez cajas.
+
+</Callout>
+
+## Observabilidad: logs, métricas y trazas
+
+No puedes operar lo que no ves. Los tres pilares responden preguntas distintas:
+
+- **Métricas**: series numéricas agregadas (peticiones por segundo, p99, % de errores, uso de CPU). Baratas de guardar y de consultar, ideales para dashboards y alertas. Responden *qué* está pasando y *cuándo*.
+- **Logs**: eventos individuales con contexto. Mejor estructurados (JSON) que texto libre, siempre con un *request id*. Responden *qué le pasó a esta petición*. Son caros a escala, así que se muestrean y se rotan.
+- **Trazas distribuidas**: el recorrido de una petición a través de todos los servicios, como un árbol de *spans* con su duración. Responden *dónde* se fue el tiempo. Requieren propagar un *trace id* en cada llamada (el estándar actual es OpenTelemetry con el header `traceparent` de W3C).
+
+Dos marcos para saber qué medir. Las **cuatro señales doradas** del libro de SRE: latencia, tráfico, errores y saturación. El método **RED** para servicios (*Rate, Errors, Duration*) y el **USE** para recursos (*Utilization, Saturation, Errors*). Y una regla de oro para alertar: **alerta por síntomas que ve el usuario** (el SLO se está quemando), no por causas ("la CPU está al 80 %"). Las causas van en los dashboards para diagnosticar.
+
+<Quiz
+  question="Los usuarios reportan que el checkout a veces tarda 6 segundos, pero la latencia promedio del servicio es 120 ms y ninguna alerta saltó. ¿Qué herramienta te dice más rápido dónde se va el tiempo de esas peticiones lentas?"
+  options={[
+    { text: 'Trazas distribuidas de las peticiones lentas.', correct: true, why: 'Una traza muestra cada salto (servicio, base de datos, llamada externa) con su duración. Ves de inmediato qué span consume los 6 segundos. Luego conviene agregar alertas por p99, no por promedio.' },
+    { text: 'La métrica de latencia promedio.', why: 'Es justamente la que esconde el problema: unos pocos casos muy lentos apenas mueven el promedio.' },
+    { text: 'El uso de CPU de las máquinas.', why: 'Es una causa posible entre muchas y no te dice qué dependencia es lenta. Sirve para diagnosticar después, no para localizar.' },
+    { text: 'Buscar "error" en los logs.', why: 'Una petición lenta no necesariamente registra un error. Sin un trace id para correlacionar, reconstruir el recorrido entre servicios con logs es lento.' },
+  ]}
+/>
+
+<Takeaways>
+
+- Define la confiabilidad con SLIs medidos en percentiles y SLOs explícitos. El error budget convierte "velocidad o estabilidad" en un número compartido, y conviene alertar por tasa de quema.
+- Toda llamada remota lleva timeout (derivado del p99,9 de la dependencia) y, en cadenas de servicios, deadlines que se propagan.
+- Reintenta solo lo transitorio e idempotente, en una sola capa, con backoff exponencial, full jitter y presupuesto. Los reintentos mal hechos son el combustible de las fallas en cascada.
+- Circuit breakers para fallar rápido ante una dependencia caída y bulkheads para aislar recursos. Ambos solo sirven si sabes qué devolver en su lugar.
+- Token bucket es el rate limiter por defecto. Las ventanas deslizantes corrigen el problema del borde de la ventana fija. En un sistema distribuido, el contador vive en un almacén compartido con operaciones atómicas.
+- Ante sobrecarga, protege el goodput: rechaza temprano, acota las colas, descarta lo vencido, prioriza por criticidad y degrada funcionalidad prescindible.
+- Métricas para saber qué pasa, logs para entender una petición y trazas para ver dónde se va el tiempo. Alerta por síntomas, diagnostica por causas.
+
+</Takeaways>
+
+## Fuentes y lecturas
+
+- Google, *Site Reliability Engineering*: [Service Level Objectives](https://sre.google/sre-book/service-level-objectives/), [Embracing Risk](https://sre.google/sre-book/embracing-risk/), [Monitoring Distributed Systems](https://sre.google/sre-book/monitoring-distributed-systems/), [Handling Overload](https://sre.google/sre-book/handling-overload/) y [Addressing Cascading Failures](https://sre.google/sre-book/addressing-cascading-failures/).
+- Google, *The Site Reliability Workbook*: [Alerting on SLOs](https://sre.google/workbook/alerting-on-slos/).
+- Marc Brooker, [Timeouts, retries, and backoff with jitter](https://aws.amazon.com/builders-library/timeouts-retries-and-backoff-with-jitter/), Amazon Builders' Library.
+- Marc Brooker, [Exponential Backoff And Jitter](https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter/), AWS Architecture Blog (2015).
+- David Yanacek, [Using load shedding to avoid overload](https://aws.amazon.com/builders-library/using-load-shedding-to-avoid-overload/), Amazon Builders' Library.
+- David Yanacek, [Avoiding insurmountable queue backlogs](https://aws.amazon.com/builders-library/avoiding-insurmountable-queue-backlogs/), Amazon Builders' Library.
+- Paul Tarjan, [Scaling your API with rate limiters](https://stripe.com/blog/rate-limiters), Stripe (2017).
+- Cloudflare, [How we built rate limiting capable of scaling to millions of domains](https://blog.cloudflare.com/counting-things-a-lot-of-different-things/), Cloudflare Blog.
+- Martin Fowler, [CircuitBreaker](https://martinfowler.com/bliki/CircuitBreaker.html) (2014).
+- Brendan Gregg, [The USE Method](https://www.brendangregg.com/usemethod.html).
+- Michael T. Nygard, *Release It!*, 2.ª ed. (Pragmatic Bookshelf, 2018): el libro de referencia sobre estabilidad, circuit breakers y bulkheads.

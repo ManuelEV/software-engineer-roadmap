@@ -1,0 +1,66 @@
+.psm-field {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+.psm-field--grow {
+  flex: 1 1 14rem;
+}
+.psm-field--k {
+  width: 5rem;
+}
+.psm-field select,
+.psm-field input {
+  width: 100%;
+  min-height: 40px;
+  padding: 0 10px;
+  border: 1.5px solid var(--rule-strong);
+  border-radius: 8px;
+  background: var(--card);
+  color: var(--ink);
+  font-family: var(--font-code);
+  font-size: 0.86rem;
+}
+.psm-field select {
+  max-width: 100%;
+}
+.psm-field input[aria-invalid='true'] {
+  border-color: var(--bad);
+}
+.psm-field select:focus-visible,
+.psm-field input:focus-visible {
+  outline: 2px solid var(--line-ink);
+  outline-offset: 1px;
+}
+.psm-map {
+  font-family: var(--font-code);
+  font-size: 0.86rem;
+  color: var(--ink-2);
+}
+.psm-map__rows {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px 0 6px 1.2em;
+  min-height: 2.6em;
+}
+.psm-map__pair {
+  padding: 3px 9px;
+  border: 1.5px solid var(--rule-strong);
+  border-radius: 6px;
+  background: var(--card);
+  transition:
+    background-color 220ms var(--ease-out),
+    border-color 220ms var(--ease-out);
+}
+.psm-map__pair b {
+  color: var(--ink);
+}
+.psm-map__pair.is-new {
+  border-color: var(--line);
+  background: var(--line-tint);
+}
+.psm-map__pair.is-hit {
+  border-color: var(--ok);
+  background: color-mix(in oklab, var(--ok) 22%, var(--card));
+}

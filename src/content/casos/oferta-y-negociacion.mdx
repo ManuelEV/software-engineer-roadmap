@@ -1,0 +1,327 @@
+import { OfferCompare } from '../../components/widgets/entrevistas/OfferCompare'
+import { QuestionDeck } from '../../components/widgets/entrevistas/QuestionDeck'
+
+Pasaste el live coding, el system design y la conductual. Ahora viene la parte que nadie practica: la conversación del dinero. Es incómoda, se hace con poca información y, a diferencia de las otras rondas, se nota durante años: lo que aceptes hoy es la base de tus aumentos, de tus bonos y de tu próxima negociación.
+
+Este tema cubre las tres conversaciones del cierre: la pregunta de las **expectativas de sueldo** (que suele llegar mucho antes de la oferta), cómo **leer y comparar una oferta** (base, bonos, acciones, contrato local o como contractor, dólares o moneda local) y cómo **negociar** sin quemar la relación. Hay guiones en español y en inglés, porque muchas de estas conversaciones con empresas remotas se hacen en inglés.
+
+<Sketch
+  width={640}
+  height={310}
+  caption="Una oferta por dentro: cuanto más arriba en la pila, más incierto el componente. Compara con el equity descontado."
+  items={[
+    { type: 'text', x: 24, y: 34, text: 'una oferta, por dentro', size: 22, tone: 'pencil' },
+    { type: 'box', x: 60, y: 204, w: 260, h: 70, label: 'base', size: 24, tone: 'ok', fill: true },
+    { type: 'text', x: 336, y: 246, text: 'segura', size: 18, tone: 'ok' },
+    { type: 'box', x: 60, y: 152, w: 260, h: 48, label: 'bono', size: 22, tone: 'warn', fill: true },
+    { type: 'text', x: 336, y: 182, text: 'depende', size: 18, tone: 'warn' },
+    { type: 'box', x: 60, y: 82, w: 260, h: 66, label: 'equity', size: 22, tone: 'bad', fill: true },
+    { type: 'text', x: 336, y: 120, text: 'puede valer 0', size: 18, tone: 'bad' },
+    { type: 'box', x: 336, y: 54, w: 150, h: 40, label: '+ beneficios', size: 18 },
+    { type: 'line', points: [[540, 274], [540, 70]], arrow: true, tone: 'pencil' },
+    { type: 'text', x: 552, y: 90, text: ['más', 'riesgo'], size: 18, tone: 'pencil' },
+    { type: 'text', x: 552, y: 252, text: ['más', 'seguro'], size: 18, tone: 'pencil' },
+    { type: 'text', x: 24, y: 300, text: 'antes de comparar: misma moneda, anual y bruto', size: 18, tone: 'line' },
+  ]}
+/>
+
+<Callout type="warn" title="Esto no es asesoría financiera, legal ni tributaria">
+
+Aquí hay principios generales y ejemplos. Los impuestos, la previsión y la legalidad de trabajar como contractor dependen de tu país, de tu situación y de cambios recientes en la ley. Antes de firmar un contrato con implicancias tributarias (sobre todo si es tu primera vez como contractor para el extranjero), consulta a un contador o abogado local.
+
+</Callout>
+
+## La pregunta de las expectativas
+
+"¿Cuáles son tus expectativas salariales?" suele llegar en la primera llamada con recursos humanos, a veces en el formulario de postulación. La empresa la hace para filtrar: si tu número está muy fuera de su presupuesto, prefiere saberlo antes de invertir horas de entrevistas. Tú, en cambio, todavía sabes poco del puesto, del nivel y del paquete.
+
+### Primero, investiga el mercado
+
+No llegues sin un número propio. Fuentes útiles:
+
+- **Levels.fyi**: compensación total reportada por empleados, separada por base, bono y acciones, nivel y empresa. Es muy completa para grandes empresas de tecnología de EE. UU. y otros mercados grandes, y más escasa para empresas locales de Latinoamérica.
+- **Glassdoor**: rangos reportados por cargo y empresa, con más cobertura en empresas medianas, pero con datos más ruidosos y a veces desactualizados.
+- **Encuestas salariales**: la [encuesta anual de Stack Overflow](https://survey.stackoverflow.co/) tiene datos globales de compensación; varios países tienen encuestas propias de la comunidad, como la de Sysarmy y OpenQube en Argentina. Busca la de tu país.
+- **Personas**: colegas que ya trabajan en esa empresa o en empresas parecidas. Preguntar "¿en qué rango pagan un semi senior allá?" es más común de lo que crees, y lo que te digan suele valer más que cualquier sitio.
+
+Ten en cuenta los sesgos: las encuestas son voluntarias, los sitios mezclan niveles y ciudades, y los números de grandes empresas de EE. UU. no aplican a una empresa local. Busca un **rango** para tu nivel, tu ciudad o modalidad (local o remoto para el extranjero) y el tipo de empresa.
+
+### Aclara en qué unidades hablan
+
+Antes de dar o comparar un número, confirma:
+
+- **¿Anual o mensual?** En EE. UU. y Europa se habla de sueldo anual; en buena parte de Latinoamérica, mensual. Un "4.000" puede ser mensual o un malentendido.
+- **¿Bruto o líquido?** El bruto es antes de impuestos y cotizaciones; el líquido (o neto), lo que llega a tu cuenta. La diferencia puede ser grande.
+- **¿Qué moneda?** Dólares, euros o moneda local, y si hay un tipo de cambio fijo o el del día.
+- **¿Qué incluye?** Si el número es solo la base o la compensación total.
+
+### ¿Dar un número o no?
+
+Hay dos estrategias razonables:
+
+1. **Pedir primero el rango de la empresa.** Es lo más cómodo si puedes: "Antes de dar un número, me gustaría entender mejor el puesto y el paquete completo. ¿Cuál es el rango que tienen presupuestado?". Muchas empresas lo dicen, y en algunos lugares están obligadas a publicarlo: varios estados de EE. UU., como Colorado, California o Nueva York, exigen incluir el rango salarial en los avisos.
+2. **Dar un rango investigado** cuando insisten o cuando el formulario lo exige. Pon el límite inferior en un número que aceptarías con gusto, no en tu mínimo absoluto: la empresa casi siempre va a ofrecer cerca del límite inferior del rango que des.
+
+Lo que conviene evitar es **dar tu sueldo actual** como referencia: ancla la conversación a tu situación de hoy en vez de al valor del puesto. Puedes decir que prefieres hablar de las expectativas para este rol. En algunos lugares, preguntar por el historial salarial está incluso prohibido.
+
+> **En español**: "Por lo que investigué para puestos parecidos de este nivel, estoy buscando entre 3.500 y 4.000 dólares mensuales brutos, dependiendo del resto del paquete. ¿Está dentro de lo que tienen pensado?"
+>
+> **In English**: "Based on my research for similar roles at this level, I'm looking for something in the range of 3,500 to 4,000 US dollars a month, gross, depending on the rest of the package. Is that within what you have in mind?"
+
+Los números del guion son un ejemplo: el rango tiene que salir de tu investigación.
+
+## Qué tiene una oferta
+
+Una oferta es más que un sueldo. Antes de compararla o negociarla, desármala en sus componentes y pide por escrito los que no estén claros.
+
+| Componente | Qué es | Preguntas que conviene hacer |
+|---|---|---|
+| Base | Sueldo fijo | ¿Anual o mensual? ¿Bruto? ¿Cada cuánto se revisa? ¿Se ajusta por inflación o tipo de cambio? |
+| Bono anual | Variable según desempeño propio y de la empresa | ¿Cuál es el objetivo (por ejemplo, 10 % de la base)? ¿Cuánto se pagó de verdad los últimos años? |
+| Bono de firma | Pago único al entrar (*signing bonus*) | ¿Hay que devolverlo si te vas antes de un plazo? |
+| Equity | Acciones de la empresa: RSU u opciones | ¿Cuántas, a qué valor, con qué vesting y cliff? ¿Qué pasa si te vas? |
+| Beneficios | Seguro de salud, equipo, cursos, internet, comidas, gimnasio | ¿Te cubren a ti o también a tu familia? ¿Aplican en tu país si eres remoto? |
+| Tiempo libre | Vacaciones, feriados, licencias | ¿Cuántos días? ¿Son pagados si eres contractor? |
+
+### Equity: RSU, opciones, vesting y cliff
+
+El equity es el componente que más confunde y el más incierto.
+
+- **RSU** (*restricted stock units*): la empresa te promete acciones que recibes a medida que pasa el tiempo. Son comunes en empresas que cotizan en bolsa. Tienen valor de mercado, aunque ese valor sube y baja con la acción.
+- **Opciones** (*stock options*): el derecho a **comprar** acciones a un precio fijo (*strike price*). Son comunes en startups. Solo valen algo si la acción llega a valer más que ese precio **y** si existe una forma de venderlas (una salida a bolsa o una adquisición). Revisa también cuánto tiempo tienes para ejercerlas si dejas la empresa: en muchas startups es un plazo corto.
+- **Vesting**: el calendario con que se van liberando. Un esquema común es cuatro años con *cliff* de un año: si te vas antes del primer año, no recibes nada; al cumplirlo recibes el primer 25 %, y el resto se reparte mes a mes o por trimestre.
+- **Refresh**: concesiones nuevas que algunas empresas dan cada año para que el equity no se acabe después del cuarto año.
+
+Para comparar, divide el valor total de la concesión por los años de vesting y obtén un "equity anual estimado". Y después **descuéntalo**: para una startup privada, una opción prudente es compararla como si valiera mucho menos de lo que te dicen, o nada, y considerarla una posibilidad, no un ingreso.
+
+## Empleado, contractor o EOR
+
+Muchos desarrolladores en Latinoamérica trabajan para empresas de EE. UU. o Europa. Hay tres formas típicas de hacerlo, y la diferencia es mucho más que el número:
+
+<Compare>
+<Option title="Empleado local" verdict="Más protección, menos sueldo nominal">
+
+Contrato con una empresa de tu país (o con la filial local de una extranjera). La empresa retiene impuestos y paga las cotizaciones de previsión y salud que exija la ley local. Tienes vacaciones pagadas, licencias y las protecciones laborales del país (indemnización, preaviso). Normalmente en moneda local.
+
+</Option>
+<Option title="Contractor" verdict="Más bruto, más riesgo y trámites">
+
+Facturas como trabajador independiente o con tu propia empresa a una empresa extranjera, a menudo vía plataformas como Deel. Tú pagas tus impuestos y tu previsión, sin vacaciones pagadas salvo que las negocies, y el contrato suele poder terminarse con poco aviso. Para empresas de EE. UU. es común que te pidan el formulario W-8BEN del IRS para acreditar que no eres residente de allá.
+
+</Option>
+<Option title="EOR" verdict="Un punto intermedio">
+
+Un *employer of record* (Deel, Remote y otras plataformas ofrecen este servicio) te contrata como empleado en tu país en nombre de la empresa extranjera. Tienes las protecciones de un empleado local y la empresa paga los costos laborales. A cambio, el sueldo nominal suele ser menor que como contractor, porque la empresa también paga esos costos.
+
+</Option>
+</Compare>
+
+La comparación honesta entre un empleo y un contrato como contractor no es el número bruto. Al bruto del contractor réstale lo que pagarías tú y que un empleador pagaría por ti: cotizaciones de previsión y salud, un seguro privado si lo necesitas, los días de vacaciones sin goce de sueldo, un contador, y un colchón para el riesgo de que el contrato termine de un mes para otro. Ese porcentaje depende de tu país y de tu situación; calcúlalo con alguien que sepa de impuestos donde vives.
+
+### Dólares o moneda local
+
+Cobrar en dólares protege contra la devaluación y la inflación de la moneda local, algo que en varios países de la región pesa mucho. Pero tiene sus propios costos y riesgos:
+
+- **Comisiones y tipo de cambio** al recibir y al convertir. Con algunas plataformas y bancos se pierde una parte en cada transferencia: pregunta y compara.
+- **Controles cambiarios o regulaciones** en algunos países, que cambian con frecuencia.
+- **Ajustes**: un sueldo en dólares fijo durante años pierde poder adquisitivo con la inflación del dólar; uno en moneda local sin ajuste por inflación puede perder mucho más. Pregunta cómo y cada cuánto se revisa.
+
+Para comparar ofertas, pasa todo a una misma moneda y a una misma unidad (anual, bruta) antes de hacer nada más. En el comparador de abajo, los valores de ejemplo son tres ofertas ficticias: A es un empleo local, B un contrato como contractor para una empresa de EE. UU. y C una startup extranjera que contrata vía EOR y ofrece equity.
+
+<OfferCompare />
+
+Fíjate en lo que pasa al cambiar el factor del equity: con los valores de ejemplo, la startup gana con el equity al 100 % y queda prácticamente empatada con la oferta de contractor al 0 %. Esa es la pregunta que tienes que hacerte con cualquier oferta con mucho equity: ¿me sigue conviniendo si las acciones no valen nada?
+
+<Quiz
+  question="Una startup te ofrece 40.000 de base más opciones que, según el reclutador, «valdrán 64.000 en cuatro años». Otra empresa te ofrece 52.000 de base sin equity. ¿Cómo las comparas?"
+  options={[
+    { text: 'La startup paga más: 40.000 + 16.000 al año = 56.000.', why: 'Tomas el valor del equity que dice el reclutador como si fuera seguro. En una startup privada las opciones pueden no valer nada, y además tienes que pagar el precio de ejercicio.' },
+    { text: 'Comparas la parte segura (40.000 contra 52.000) y tratas las opciones como una apuesta: la startup vale la pena solo si aceptas ganar 12.000 menos al año a cambio de esa posibilidad.', correct: true, why: 'Es la forma prudente: el dinero fijo es comparable; el equity de una startup es una opción con resultado incierto. Puedes aceptar esa apuesta, pero sabiendo cuánto te cuesta.' },
+    { text: 'Da igual: lo único que importa es la base.', why: 'El equity puede ser una parte enorme de la compensación en empresas que cotizan en bolsa. No hay que ignorarlo, hay que descontarlo según su riesgo.' },
+  ]}
+/>
+
+## Negociar
+
+Casi siempre es razonable negociar una oferta, y hacerlo con respeto rara vez hace que la retiren. Las empresas suelen dejar un margen previsto para eso. Lo que sí daña la relación es negociar con exigencias, mentir sobre otras ofertas o seguir negociando después de haber dicho que sí.
+
+<Sketch
+  width={640}
+  height={330}
+  caption="El ida y vuelta de una negociación sana: agradecer, pedir tiempo y la oferta por escrito, contraofertar con datos y cerrar por escrito."
+  items={[
+    { type: 'text', x: 110, y: 36, text: 'tú', size: 24, anchor: 'middle', tone: 'line' },
+    { type: 'text', x: 530, y: 36, text: 'empresa', size: 24, anchor: 'middle' },
+    { type: 'line', points: [[110, 52], [110, 316]], dashed: true, tone: 'muted' },
+    { type: 'line', points: [[530, 52], [530, 316]], dashed: true, tone: 'muted', with: true },
+    { type: 'arrow', from: [526, 88], to: [114, 88], label: 'oferta', labelAt: [320, 78] },
+    { type: 'arrow', from: [114, 138], to: [526, 138], tone: 'pencil', label: 'gracias, ¿por escrito? ¿hasta el viernes?', labelAt: [320, 128] },
+    { type: 'arrow', from: [114, 188], to: [526, 188], tone: 'line', label: 'contraoferta con datos', labelAt: [320, 178] },
+    { type: 'arrow', from: [526, 238], to: [114, 238], tone: 'pencil', label: 'ajuste o alternativa', labelAt: [320, 228] },
+    { type: 'arrow', from: [114, 288], to: [526, 288], tone: 'ok', label: 'sí, y todo por escrito', labelAt: [320, 278] },
+    { type: 'check', x: 584, y: 288, size: 26 },
+  ]}
+/>
+
+### Los principios
+
+- **Muestra entusiasmo.** Negocias con alguien que quiere contratarte. "Estoy muy entusiasmado con el equipo" y "¿hay flexibilidad en la base?" caben en la misma frase.
+- **Basado en datos o en otras ofertas**, no en necesidades personales. "Mi alquiler subió" no es un argumento para la empresa; "los datos de mercado para este nivel están en tal rango" sí lo es.
+- **Negocia el paquete completo de una vez**, no un componente por llamada.
+- **No respondas en el momento.** Agradece, pide la oferta por escrito y pide unos días para revisarla.
+- **No mientas.** No inventes ofertas ni cifras: el mundo de la contratación es más pequeño de lo que parece, y una mentira descubierta termina la conversación.
+- **Pide todo por escrito** antes de renunciar a tu trabajo actual.
+
+### Guiones
+
+<Steps>
+<Step title="Cuando recibes la oferta">
+
+**Español**: "Muchas gracias, estoy muy contento con la oferta y con lo que conversamos del equipo. ¿Me la podrían enviar por escrito? Me gustaría revisarla con calma y responderles el viernes."
+
+**English**: "Thank you so much, I'm really excited about this offer and about the team. Could you send it to me in writing? I'd like to review it carefully and get back to you by Friday."
+
+</Step>
+<Step title="Contraoferta basada en datos">
+
+**Español**: "Estoy muy interesado en el puesto. Revisando datos de mercado para este nivel y considerando mi experiencia con sistemas de pagos, esperaba una base más cercana a 60.000. ¿Hay flexibilidad en ese punto?"
+
+**English**: "I'm very interested in the role. Looking at market data for this level and given my experience with payment systems, I was expecting a base closer to 60,000. Is there any flexibility there?"
+
+</Step>
+<Step title="Con otra oferta sobre la mesa">
+
+**Español**: "Quiero ser transparente: tengo otra oferta con una base de 62.000. Ustedes son mi primera opción por el tipo de problemas del equipo, así que si pudieran acercarse a ese número, estaría listo para firmar."
+
+**English**: "I want to be transparent: I have another offer with a base of 62,000. You're my first choice because of the kind of problems the team works on, so if you could get closer to that number, I'd be ready to sign."
+
+</Step>
+<Step title="Si la base no se mueve">
+
+**Español**: "Entiendo que la base tiene un tope para este nivel. ¿Podríamos ver un bono de firma, más equity o una revisión del sueldo a los seis meses?"
+
+**English**: "I understand the base is capped for this level. Could we look at a signing bonus, additional equity, or a salary review after six months?"
+
+</Step>
+</Steps>
+
+Los números de los guiones son un ejemplo. La frase "estaría listo para firmar" es un compromiso: úsala solo si de verdad firmarías con ese número.
+
+### Qué negociar además del sueldo
+
+Cuando la base tiene un tope, hay otras palancas, a veces más fáciles de mover:
+
+- **El nivel o el título.** Entrar como senior en vez de semi senior cambia la banda salarial de hoy y la de todos tus aumentos futuros. Es lo más valioso y lo menos negociado.
+- **Bono de firma**, sobre todo si dejas un bono o equity sin cobrar en tu trabajo actual.
+- **Más equity**, o un vesting sin cliff.
+- **Fecha de inicio**, para descansar entre trabajos o cerrar bien el anterior.
+- **Días libres** extra, sobre todo si eres contractor y no tienes vacaciones pagadas.
+- **Presupuesto de formación**, conferencias, equipo de trabajo.
+- **Una revisión salarial pactada** a los seis meses, por escrito.
+
+### Varias ofertas y plazos
+
+Es normal tener procesos en etapas distintas. Algunas cosas que ayudan:
+
+- **Sé transparente con los plazos.** "Estoy en etapas finales con otra empresa y espero una respuesta la próxima semana" es una frase normal. Las empresas suelen acelerar si les importas.
+- **Pide más tiempo** si una oferta tiene un plazo corto: "¿Podría tener hasta el lunes para responder?". Un plazo de 24 horas para una decisión así es una mala señal (las llamadas *exploding offers*).
+- **No aceptes para luego seguir buscando.** Aceptar y retractarte daña tu reputación y la relación con la persona que te reclutó.
+
+### Rechazar bien
+
+Rechaza rápido una vez que decidiste, por escrito y con agradecimiento. La persona que te entrevistó puede ser tu jefe dentro de unos años, en esa empresa o en otra.
+
+> **Español**: "Muchas gracias por su tiempo y por la oferta. Después de pensarlo, decidí aceptar otra posición que se ajusta mejor a lo que busco en este momento. Disfruté mucho conocer al equipo y espero que nos volvamos a cruzar."
+>
+> **English**: "Thank you so much for your time and for the offer. After thinking it through, I've decided to accept another position that's a better fit for what I'm looking for right now. I really enjoyed meeting the team and I hope our paths cross again."
+
+### La contraoferta del empleador actual
+
+Cuando renuncias, tu empleador actual puede ofrecerte más dinero para que te quedes. Antes de aceptar, vuelve a la lista de por qué empezaste a buscar. Si era solo el sueldo, una contraoferta puede resolverlo. Si era el equipo, el aprendizaje, el manager o el tipo de trabajo, el dinero no cambia nada de eso, y además pasas a ser "la persona que estuvo a punto de irse". Tampoco es elegante usar una oferta solo para conseguir un aumento donde estás: la otra empresa invirtió semanas en ti.
+
+<Quiz
+  question="Te ofrecen el puesto con una base que está en el límite superior de la banda para semi senior. Por tu experiencia, crees que encajas mejor como senior. ¿Qué es lo más efectivo?"
+  options={[
+    { text: 'Pedir un 20 % más de base dentro de la misma banda.', why: 'Si ya estás en el tope de la banda, es probable que la base no se mueva sin cambiar de nivel. Insistir solo en la base suele chocar con esa regla interna.' },
+    { text: 'Plantear, con ejemplos concretos de alcance y responsabilidad, que te evalúen para el nivel senior.', correct: true, why: 'El nivel define la banda de hoy y la de los aumentos futuros. Es la palanca más valiosa y muchas empresas pueden reconsiderarlo si das evidencia.' },
+    { text: 'Aceptar y pedir el cambio de nivel después de un mes.', why: 'Una vez que firmas, el nivel suele quedar fijo hasta el próximo ciclo de evaluación, que puede tardar un año o más.' },
+  ]}
+/>
+
+<QuestionDeck
+  title="Practica"
+  caption="Las preguntas y situaciones del cierre. Respóndelas en voz alta antes de revelar el modelo. Las cifras de los modelos son ejemplos."
+  cards={[
+    {
+      q: '¿Cuáles son tus expectativas salariales?',
+      checks: 'Si estás dentro del presupuesto y si sabes lo que vales en el mercado.',
+      level: 'junior',
+      answer: <><p>"Antes de dar un número me gustaría entender mejor el puesto y el paquete completo. ¿Cuál es el rango que tienen presupuestado?" Si insisten: "Por lo que investigué para puestos parecidos de este nivel, estoy buscando entre 2.000 y 2.400 dólares mensuales brutos, dependiendo del resto del paquete."</p></>,
+      strong: ['Pedir primero el rango', 'Un rango investigado, con unidades claras', 'Límite inferior que aceptarías con gusto'],
+      weak: ['Dar tu sueldo actual', 'Un número sin unidades (¿mensual?, ¿bruto?)', '"Lo que ustedes digan"'],
+      followups: ['¿Y cuál es tu sueldo actual?', '¿Ese número es flexible?'],
+    },
+    {
+      q: '¿Cuál es tu sueldo actual?',
+      checks: 'Un ancla para su oferta.',
+      level: 'semi',
+      answer: <><p>"Prefiero enfocarme en lo que corresponde a este puesto. Por lo que investigué y por lo que conversamos del alcance, mis expectativas están entre tal y tal número."</p></>,
+      strong: ['Redirigir con amabilidad a las expectativas', 'No mentir si decides responder'],
+      weak: ['Inflar el sueldo actual', 'Ponerte a la defensiva'],
+    },
+    {
+      q: 'Te hacen una oferta por teléfono y te preguntan si la aceptas.',
+      checks: 'Tu entusiasmo, y si vas a negociar.',
+      level: 'junior',
+      answer: <><p>"¡Muchas gracias! Estoy muy contento con la oferta. ¿Me la podrían enviar por escrito? Quiero revisarla con calma y les respondo el viernes."</p></>,
+      strong: ['Agradecer y mostrar entusiasmo', 'Pedirla por escrito', 'Dar una fecha concreta'],
+      weak: ['Aceptar en el momento', 'Negociar en caliente sin haber visto el detalle'],
+    },
+    {
+      q: 'Tienes una oferta que vence el viernes y otro proceso que termina en dos semanas.',
+      checks: 'Que manejes los plazos con transparencia.',
+      level: 'semi',
+      answer: <><p>A la empresa de la oferta: "Estoy muy interesado. Estoy terminando otro proceso y quiero tomar la decisión con toda la información. ¿Sería posible tener hasta el próximo miércoles?". A la otra: "Recibí una oferta con plazo hasta el miércoles. Ustedes me interesan mucho, ¿hay forma de acelerar las próximas etapas?"</p></>,
+      strong: ['Transparencia con ambas', 'Pedir plazos concretos'],
+      weak: ['Aceptar y retractarte después', 'Inventar una tercera oferta'],
+    },
+    {
+      q: 'La base no se puede mover. ¿Qué más pides?',
+      checks: 'Que conozcas las otras palancas.',
+      level: 'senior',
+      answer: <><p>"Entiendo. Entonces me gustaría ver tres cosas: si es posible evaluarme para el nivel siguiente, dado el alcance que conversamos; un bono de firma, porque dejo un bono anual sin cobrar; y una revisión del sueldo a los seis meses por escrito."</p></>,
+      strong: ['Nivel antes que dinero', 'Pedidos justificados', 'Todo por escrito'],
+      weak: ['Pedir diez cosas a la vez sin prioridad', 'Amenazar con irte'],
+    },
+    {
+      q: 'Renuncias y tu empleador actual te ofrece un 25 % más para quedarte.',
+      checks: 'Que decidas por las razones correctas.',
+      level: 'senior',
+      answer: <><p>Vuelve a por qué empezaste a buscar. Si fue solo el sueldo, la contraoferta puede ser razonable. Si fue el equipo, el aprendizaje o el tipo de trabajo, el dinero no lo resuelve. Y si ya diste tu palabra a la otra empresa, cumplirla vale más que la diferencia.</p></>,
+      strong: ['Decidir por las razones de fondo', 'Respetar compromisos'],
+      weak: ['Usar la otra oferta solo como palanca', 'Decidir en la misma reunión'],
+    },
+  ]}
+/>
+
+<Takeaways>
+
+- Investiga el mercado antes de la primera llamada: Levels.fyi, Glassdoor, encuestas salariales y, sobre todo, personas. Busca un **rango** para tu nivel, ciudad y modalidad.
+- Aclara siempre las unidades: **anual o mensual, bruto o líquido, qué moneda y qué incluye**.
+- Pide primero el rango de la empresa. Si das el tuyo, pon el límite inferior en un número que aceptarías con gusto, y no ancles con tu sueldo actual.
+- Una oferta tiene **componentes con riesgos distintos**: la base es segura, el bono depende, el equity puede valer cero. Compara con el equity descontado.
+- **Contractor no es lo mismo que empleado**: al bruto réstale previsión, salud, vacaciones sin goce y el riesgo de terminación. Consulta a un profesional local sobre impuestos.
+- Negocia con entusiasmo, con datos y sin mentir. El **nivel** es la palanca más valiosa; bono de firma, equity, fecha de inicio y revisión pactada, las siguientes.
+- Rechaza rápido y con agradecimiento, y piensa dos veces antes de aceptar una contraoferta.
+
+</Takeaways>
+
+## Fuentes y lecturas
+
+- Tech Interview Handbook, [Understanding compensation](https://www.techinterviewhandbook.org/understanding-compensation/), [Negotiation](https://www.techinterviewhandbook.org/negotiation/) y [Negotiation rules](https://www.techinterviewhandbook.org/negotiation-rules/).
+- Haseeb Qureshi, [Ten Rules for Negotiating a Job Offer](https://haseebq.com/my-ten-rules-for-negotiating-a-job-offer/): uno de los textos más citados sobre negociación de ofertas en tecnología.
+- Patrick McKenzie, [Salary Negotiation: Make More Money, Be More Valued](https://www.kalzumeus.com/2012/01/23/salary-negotiation/).
+- [Levels.fyi](https://www.levels.fyi/) y [Glassdoor](https://www.glassdoor.com/): compensación reportada por empleados.
+- Stack Overflow, [Developer Survey](https://survey.stackoverflow.co/): datos globales de compensación por país y rol.
+- Sysarmy y OpenQube, [Encuesta de sueldos](https://sueldos.openqube.io/): un ejemplo de encuesta comunitaria local (Argentina).
+- IRS, [About Form W-8BEN](https://www.irs.gov/forms-pubs/about-form-w-8-ben): el formulario que suelen pedir las empresas de EE. UU. a contractors no residentes.

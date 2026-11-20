@@ -1,0 +1,75 @@
+.ad-qs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-3) var(--s-4);
+}
+.ad-recs {
+  display: grid;
+  gap: 0;
+}
+.ad-rec {
+  position: relative;
+  display: grid;
+  grid-template-columns: 40px 1fr;
+  gap: var(--s-3);
+  padding: var(--s-3) 0;
+}
+.ad-rec + .ad-rec {
+  border-top: 1px solid var(--rule);
+}
+.ad-rec__icon {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: 3px solid var(--line);
+  background: var(--paper);
+  color: var(--line-ink);
+}
+.ad-rec__label {
+  font-weight: 700;
+  font-size: 0.74rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.ad-rec__title {
+  margin: 2px 0 4px;
+  font-weight: 700;
+  font-size: var(--step-1);
+  line-height: 1.2;
+  color: var(--ink);
+}
+.ad-rec__why {
+  margin: 0;
+  font-family: var(--font-read);
+  font-size: var(--step--1);
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+.ad-foot {
+  display: grid;
+  gap: var(--s-2);
+}
+.ad-warn {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+.ad-warn li {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  color: var(--ink);
+}
+.ad-warn svg {
+  flex: none;
+  margin-top: 3px;
+  color: var(--warn);
+}
+.ad-fit {
+  color: var(--ink-2);
+}

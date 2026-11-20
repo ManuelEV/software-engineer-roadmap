@@ -1,0 +1,317 @@
+.flow__frame {
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-lg);
+  background: var(--card);
+  overflow: hidden;
+  position: relative;
+}
+
+.flow__scroll {
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  background-image: radial-gradient(color-mix(in oklab, var(--rule) 70%, transparent) 1px, transparent 1px);
+  background-size: 22px 22px;
+  background-position: 11px 11px;
+}
+
+.flow__svg {
+  width: 100%;
+  height: auto;
+  font-family: var(--font-sign);
+  user-select: none;
+}
+
+.flow__hint {
+  position: absolute;
+  right: 10px;
+  top: 8px;
+  font-family: var(--font-sign);
+  font-size: var(--step--2);
+  color: var(--ink-3);
+  background: var(--card);
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--rule);
+  pointer-events: none;
+}
+
+/* Groups (boundaries such as "VPC", "Bounded context") */
+.flow__group rect {
+  fill: color-mix(in oklab, var(--line) 4%, transparent);
+  stroke: var(--rule-strong);
+  stroke-width: 1.5;
+  stroke-dasharray: 6 5;
+}
+.flow__group text {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  fill: var(--ink-3);
+}
+
+/* Edges: drawn like transit lines */
+.flow__edge-casing {
+  fill: none;
+  stroke: var(--card);
+  stroke-width: 9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.flow__edge-line {
+  fill: none;
+  stroke: var(--rule-strong);
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition:
+    stroke 260ms var(--ease-out),
+    stroke-width 260ms var(--ease-out),
+    opacity 260ms var(--ease-out);
+}
+.flow__edge.is-dashed .flow__edge-line {
+  stroke-dasharray: 2 8;
+}
+.flow__edge.is-on .flow__edge-line {
+  stroke: var(--line);
+  stroke-width: 4.5;
+}
+.flow__edge.is-dim {
+  opacity: 0.38;
+}
+.flow__arrow {
+  fill: none;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.flow__arrow--off {
+  stroke: var(--rule-strong);
+}
+.flow__arrow--on {
+  stroke: var(--line);
+}
+.flow__edge-label {
+  font-size: 13px;
+  font-weight: 600;
+  fill: var(--ink-2);
+  paint-order: stroke;
+  stroke: var(--card);
+  stroke-width: 5px;
+  stroke-linejoin: round;
+}
+.flow__edge.is-on .flow__edge-label {
+  fill: var(--ink);
+}
+.flow__packet {
+  fill: var(--card);
+  stroke: var(--line);
+  stroke-width: 3.5;
+}
+
+/* Nodes: stations */
+.flow__node {
+  transition: opacity 260ms var(--ease-out);
+}
+.flow__node-box {
+  fill: var(--card);
+  stroke: var(--ink-2);
+  stroke-width: 1.75;
+  transition:
+    fill 260ms var(--ease-out),
+    stroke 260ms var(--ease-out),
+    stroke-width 260ms var(--ease-out);
+}
+.flow__node-icon {
+  color: var(--ink-2);
+  transition: color 260ms var(--ease-out);
+}
+.flow__node-label {
+  font-size: 15.5px;
+  font-weight: 600;
+  fill: var(--ink);
+}
+.flow__node-sub {
+  font-size: 12.5px;
+  font-weight: 500;
+  fill: var(--ink-3);
+}
+.flow__node.tone-line .flow__node-box {
+  stroke: var(--line);
+  stroke-width: 2.5;
+}
+.flow__node.tone-muted .flow__node-box {
+  stroke-dasharray: 4 4;
+  stroke: var(--rule-strong);
+}
+.flow__node.tone-warn .flow__node-box {
+  stroke: var(--warn);
+  fill: color-mix(in oklab, var(--warn) 8%, var(--card));
+}
+.flow__node.tone-ok .flow__node-box {
+  stroke: var(--ok);
+  fill: color-mix(in oklab, var(--ok) 8%, var(--card));
+}
+.flow__node.is-on .flow__node-box {
+  fill: var(--line-tint-2);
+  stroke: var(--line);
+  stroke-width: 3;
+}
+.flow__node.is-on .flow__node-icon {
+  color: var(--line-ink);
+}
+.flow__node.is-dim {
+  opacity: 0.42;
+}
+.flow__node.is-clickable {
+  cursor: pointer;
+}
+.flow__node.is-clickable:hover .flow__node-box {
+  stroke: var(--line);
+}
+.flow__node:focus-visible {
+  outline: none;
+}
+.flow__node:focus-visible .flow__node-box {
+  stroke: var(--line);
+  stroke-width: 3.5;
+}
+
+/* Step panel */
+.flow__panel {
+  border-top: 1px solid var(--rule);
+  padding: var(--s-3) var(--s-4) var(--s-4);
+  background: var(--paper);
+}
+.flow__controls {
+  display: flex;
+  align-items: center;
+  gap: var(--s-1);
+  flex-wrap: wrap;
+}
+.flow__play {
+  margin-left: auto;
+  min-height: 36px;
+}
+.flow__stations {
+  display: flex;
+  align-items: center;
+  list-style: none;
+  margin: 0;
+  padding: 0 var(--s-1);
+  position: relative;
+  flex: 1 1 auto;
+  max-width: 420px;
+  justify-content: space-between;
+}
+.flow__stations::before {
+  content: '';
+  position: absolute;
+  left: 14px;
+  right: 14px;
+  top: 50%;
+  height: 4px;
+  transform: translateY(-50%);
+  background: var(--line);
+  border-radius: 4px;
+  opacity: 0.85;
+}
+.flow__stations li {
+  position: relative;
+  display: grid;
+  place-items: center;
+}
+.flow__station {
+  width: 28px;
+  height: 28px;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  display: grid;
+  place-items: center;
+}
+.flow__station::after {
+  content: '';
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  border: 3px solid var(--line);
+  background: var(--paper);
+  transition:
+    transform 200ms var(--ease-out),
+    background-color 200ms var(--ease-out);
+}
+.flow__station.is-past::after {
+  background: var(--line);
+}
+.flow__station.is-current::after {
+  transform: scale(1.45);
+  background: var(--ink);
+  border-color: var(--line);
+}
+.flow__station:hover::after {
+  transform: scale(1.25);
+}
+.flow__station.is-current:hover::after {
+  transform: scale(1.45);
+}
+
+.flow__step {
+  margin-top: var(--s-2);
+}
+.flow__step-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-2);
+  font-family: var(--font-sign);
+  font-size: var(--step-1);
+  line-height: 1.25;
+}
+.flow__step-head strong {
+  font-weight: 600;
+}
+.flow__step-num {
+  font-weight: 700;
+  font-size: var(--step--1);
+  color: var(--line-ink);
+  font-variant-numeric: tabular-nums;
+  flex: none;
+}
+.flow__step-body {
+  margin-top: var(--s-1);
+  color: var(--ink-2);
+  font-size: 0.97rem;
+  line-height: 1.55;
+  max-width: 70ch;
+}
+.flow__step-body code {
+  font-family: var(--font-code);
+  font-size: 0.85em;
+  padding: 0.05em 0.3em;
+  border-radius: 4px;
+  background: var(--paper-3);
+}
+.flow__panel--info {
+  min-height: 3.6rem;
+}
+.flow__idle {
+  margin: var(--s-1) 0 0;
+  font-family: var(--font-sign);
+  color: var(--ink-3);
+  font-size: var(--step--1);
+}
+
+@media (max-width: 559px) {
+  .flow__frame {
+    border-radius: var(--radius);
+  }
+  .flow__stations {
+    order: 3;
+    flex-basis: 100%;
+    max-width: none;
+    margin-top: var(--s-2);
+  }
+  .flow__play {
+    margin-left: auto;
+  }
+}

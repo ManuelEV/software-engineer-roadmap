@@ -1,0 +1,428 @@
+import { GofMap } from '../../components/widgets/patrones/GofMap'
+import { SolidToggle } from '../../components/widgets/patrones/SolidToggle'
+import { PatternFinder } from '../../components/widgets/patrones/PatternFinder'
+import { UmlDiagram } from '../../components/widgets/patrones/UmlDiagram'
+
+Llevas un tiempo programando y empiezas a notar que ciertos problemas vuelven una y otra vez. El cálculo de envío que tiene un `switch` que crece con cada transportista nuevo. El SDK de pagos que no encaja con tu código. La función que necesita deshacer lo que hizo. No es casualidad: son problemas **recurrentes**, y alguien ya los resolvió muchas veces antes que tú.
+
+Un **patrón de diseño** es eso: una solución con nombre a un problema que se repite en un contexto concreto, con sus consecuencias documentadas. No es una librería ni un fragmento para copiar y pegar. Es una idea de diseño lo bastante general para aplicarla en cualquier lenguaje y lo bastante precisa para que dos personas que dicen "aquí va un *Decorator*" estén pensando lo mismo.
+
+Este tema es la base de la unidad. Vas a ver de dónde salen los patrones, el mapa de los 23 clásicos, los principios SOLID con código antes y después, por qué la composición le gana a la herencia y, sobre todo, cuándo **no** usar un patrón.
+
+## De dónde salen los patrones
+
+La idea no nació en el software, sino en la arquitectura de edificios. En 1977, Christopher Alexander publicó *A Pattern Language*, un catálogo de 253 soluciones para diseñar ciudades, barrios y casas. Su definición sigue siendo la mejor. En traducción libre: cada patrón describe un problema que ocurre una y otra vez en nuestro entorno, y luego describe el núcleo de la solución, de forma que puedas usarla un millón de veces sin hacerlo dos veces igual.
+
+Esa última parte importa. Un patrón **no es una plantilla rígida**. Es el núcleo de la solución, y tú lo adaptas a tu caso.
+
+En 1987, Kent Beck y Ward Cunningham presentaron en OOPSLA un trabajo que aplicaba las ideas de Alexander a interfaces en Smalltalk. Pero el punto de quiebre llegó en 1994, con *Design Patterns: Elements of Reusable Object-Oriented Software*, de Erich Gamma, Richard Helm, Ralph Johnson y John Vlissides. Como nadie quería decir cuatro apellidos, el libro pasó a ser "el libro del GoF" (*Gang of Four*, la pandilla de los cuatro).
+
+### La anatomía de un patrón
+
+El GoF describe cada patrón con cuatro elementos esenciales. Vale la pena memorizarlos, porque son exactamente lo que te piden explicar en una entrevista:
+
+1. **Nombre.** Una o dos palabras que se vuelven vocabulario del equipo: *Observer*, *Adapter*.
+2. **Problema.** Cuándo aplicarlo: el contexto y los síntomas.
+3. **Solución.** Los elementos que lo componen, sus relaciones y responsabilidades. Es un diseño abstracto, no código concreto.
+4. **Consecuencias.** Lo que ganas y lo que pagas. Un patrón sin trade-offs no es un patrón: es publicidad.
+
+<Callout type="idea" title="El valor real es el nombre">
+
+Decir "envolvamos el cliente HTTP con un decorator de reintentos" comunica en una frase lo que de otra forma requiere un diagrama. Los patrones comprimen conversaciones de diseño. Por eso conocer el vocabulario te sirve aunque nunca escribas una clase llamada `RetryDecorator`.
+
+</Callout>
+
+## El mapa del catálogo GoF
+
+Los 23 patrones del libro se agrupan en tres familias según la pregunta que responden:
+
+- **Creacionales**: ¿cómo se crean los objetos sin acoplarte a sus clases concretas?
+- **Estructurales**: ¿cómo se ensamblan objetos y clases en estructuras más grandes?
+- **De comportamiento**: ¿cómo se reparten responsabilidades y cómo se comunican los objetos?
+
+<GofMap />
+
+Si activas "los que verás seguido", notarás que no todos envejecieron igual. Hay tres grupos:
+
+- **Absorbidos por los lenguajes.** *Iterator* hoy es `for...of` en JavaScript o `__iter__` en Python. *Observer* está en `addEventListener`, en `EventEmitter` de Node y en RxJS. *Strategy*, en un lenguaje con funciones de primera clase, muchas veces es simplemente pasar una función.
+- **Vivos y cotidianos.** *Adapter*, *Decorator*, *Facade*, *Builder*, *Composite*, *Command* y *Chain of Responsibility* aparecen en cualquier base de código mediana, con o sin ese nombre.
+- **De nicho.** *Flyweight*, *Interpreter* o *Visitor* resuelven problemas reales pero específicos: editores, compiladores, motores de juegos.
+
+En 1996, Peter Norvig dio una charla titulada *Design Patterns in Dynamic Languages* donde mostró que 16 de los 23 patrones se vuelven más simples o directamente invisibles en lenguajes como Lisp o Dylan<Sidenote>La lectura correcta no es "los patrones son inútiles", sino que muchos patrones del GoF compensan limitaciones de C++ y Smalltalk de los años 90. La **intención** sigue vigente; la **implementación** cambia según el lenguaje.</Sidenote>. Por eso en esta unidad verás cada patrón en TypeScript y en Python o Java: a veces la versión idiomática es una clase, y a veces es una función de tres líneas.
+
+## Dos principios que están detrás de todo
+
+Antes del catálogo, el libro del GoF plantea dos principios que explican casi todos los patrones. Si entiendes estos dos, entiendes el 80 % del libro.
+
+### Programa contra una interfaz, no contra una implementación
+
+Tu código debería depender de **lo que algo hace** (su contrato), no de **qué clase concreta es**. `CheckoutService` no necesita saber que paga con Stripe; necesita algo que sepa cobrar. Ese "algo que sepa cobrar" es una interfaz, y detrás puede haber Stripe, MercadoPago o un fake para tests.
+
+### Prefiere la composición de objetos a la herencia de clases
+
+La herencia es la forma más fuerte de acoplamiento que existe: la subclase depende de los detalles internos de la clase base, se decide en tiempo de compilación y solo puedes heredar en una dirección. Cuando la usas para combinar comportamientos, explota.
+
+Imagina un sistema de notificaciones. Empiezas con email y SMS. Después piden que algunos registren en un log. Después, que algunos reintenten. Con herencia, cada combinación es una clase nueva:
+
+<UmlDiagram
+  caption="Herencia para combinar comportamientos: cada eje nuevo multiplica las clases."
+  classes={[
+    { id: 'n', name: 'Notifier', kind: 'abstract', methods: ['send(to, msg)'], x: 0.75, y: 0, desc: 'Clase base. Todo lo que cambie aquí impacta a todas las subclases.' },
+    { id: 'e', name: 'EmailNotifier', methods: ['send(to, msg)'], x: 0, y: 1 },
+    { id: 's', name: 'SmsNotifier', methods: ['send(to, msg)'], x: 1.5, y: 1 },
+    { id: 'le', name: 'LoggedEmailNotifier', methods: ['send(to, msg)'], x: 0, y: 2, tone: 'muted', desc: 'Duplica la lógica de logging que también está en LoggedSmsNotifier.' },
+    { id: 'ls', name: 'LoggedSmsNotifier', methods: ['send(to, msg)'], x: 1.5, y: 2, tone: 'muted', desc: 'Y si mañana piden "con reintentos", necesitas RetryingLoggedSmsNotifier, RetryingEmailNotifier...' },
+  ]}
+  relations={[
+    { from: 'e', to: 'n', kind: 'inherits' },
+    { from: 's', to: 'n', kind: 'inherits' },
+    { from: 'le', to: 'e', kind: 'inherits' },
+    { from: 'ls', to: 's', kind: 'inherits' },
+  ]}
+/>
+
+Con dos canales y dos comportamientos opcionales ya tienes ocho combinaciones posibles. Con composición, cada eje varía por separado: el `Notifier` **tiene** canales, y los comportamientos extra se agregan envolviendo un canal en otro (eso es un [*Decorator*](/patrones/estructurales)).
+
+<UmlDiagram
+  caption="Composición: el notificador tiene canales; cada canal es intercambiable y envolvible."
+  classes={[
+    { id: 'n', name: 'Notifier', fields: ['channels: Channel[]'], methods: ['notify(user, msg)'], x: 0, y: 0, tone: 'line', desc: 'No sabe qué canales concretos usa. Los recibe por el constructor.' },
+    { id: 'c', name: 'Channel', kind: 'interface', methods: ['deliver(to, msg)'], x: 1.35, y: 0, desc: 'El contrato. Cualquier objeto que sepa entregar un mensaje sirve.' },
+    { id: 'e', name: 'EmailChannel', methods: ['deliver(to, msg)'], x: 0.7, y: 1.15 },
+    { id: 's', name: 'SmsChannel', methods: ['deliver(to, msg)'], x: 2, y: 1.15 },
+  ]}
+  relations={[
+    { from: 'n', to: 'c', kind: 'aggregates', label: '1..*' },
+    { from: 'e', to: 'c', kind: 'implements' },
+    { from: 's', to: 'c', kind: 'implements' },
+  ]}
+/>
+
+<CodeTabs>
+
+```ts title="TypeScript"
+interface Channel {
+  deliver(to: string, message: string): Promise<void>
+}
+
+class EmailChannel implements Channel {
+  constructor(private readonly mailer: Mailer) {}
+  deliver(to: string, message: string) {
+    return this.mailer.send({ to, subject: 'Aviso', text: message })
+  }
+}
+
+// Un comportamiento extra = un envoltorio, no una subclase
+class LoggedChannel implements Channel {
+  constructor(private readonly inner: Channel, private readonly log: Logger) {}
+  async deliver(to: string, message: string) {
+    this.log.info('notify', { to })
+    await this.inner.deliver(to, message)
+  }
+}
+
+class Notifier {
+  constructor(private readonly channels: Channel[]) {}
+  async notify(user: User, message: string) {
+    await Promise.all(this.channels.map((c) => c.deliver(user.contact, message)))
+  }
+}
+
+const notifier = new Notifier([
+  new LoggedChannel(new EmailChannel(mailer), logger),
+  new SmsChannel(twilio),
+])
+```
+
+```python title="Python"
+from typing import Protocol, Callable
+import logging
+
+class Channel(Protocol):
+    def deliver(self, to: str, message: str) -> None: ...
+
+class EmailChannel:
+    def __init__(self, mailer: "Mailer") -> None:
+        self._mailer = mailer
+
+    def deliver(self, to: str, message: str) -> None:
+        self._mailer.send(to=to, subject="Aviso", text=message)
+
+class LoggedChannel:
+    """Envuelve cualquier Channel; no hereda de ninguno."""
+    def __init__(self, inner: Channel, log: logging.Logger) -> None:
+        self._inner, self._log = inner, log
+
+    def deliver(self, to: str, message: str) -> None:
+        self._log.info("notify to=%s", to)
+        self._inner.deliver(to, message)
+
+class Notifier:
+    def __init__(self, channels: list[Channel]) -> None:
+        self._channels = channels
+
+    def notify(self, user: "User", message: str) -> None:
+        for channel in self._channels:
+            channel.deliver(user.contact, message)
+```
+
+</CodeTabs>
+
+En Python, `Protocol` permite **tipado estructural**: `EmailChannel` cumple el contrato sin heredar de nada, igual que en TypeScript, donde las interfaces también son estructurales.
+
+<Callout type="note" title="La herencia no está prohibida">
+
+Hereda cuando la relación es genuinamente "es un" y estable, cuando la subclase respeta por completo el contrato de la base (ver Liskov más abajo) y cuando quieres reutilizar un esqueleto, como en el patrón [*Template Method*](/patrones/comportamiento-2). Lo que falla es usar la herencia como mecanismo para **combinar** comportamientos.
+
+</Callout>
+
+## SOLID: cinco heurísticas para código que cambia
+
+SOLID es un acrónimo de cinco principios que Robert C. Martin reunió hacia el año 2000 en su artículo *Design Principles and Design Patterns*. Michael Feathers notó que las iniciales formaban la palabra y el nombre se quedó. Ninguno es una ley: son **heurísticas para que el código sea barato de cambiar**. Por eso la mejor forma de entenderlos es con un pedido de cambio concreto y la pregunta "¿cuántos archivos tengo que tocar?".
+
+<SolidToggle />
+
+Recorre los cinco en el widget. Estos son los matices que suelen faltar en las explicaciones rápidas.
+
+### S — Responsabilidad única
+
+La versión popular, "una clase debe hacer una sola cosa", es engañosa: ¿qué es "una cosa"? Martin la reformuló en *Clean Architecture*: un módulo debería ser responsable ante **un solo actor**, es decir, un solo grupo de personas que pide cambios. `Invoice` con cálculo, PDF y persistencia responde a Finanzas, a Diseño y a Infraestructura. Tres actores, tres razones para cambiar, tres oportunidades de pisarse.
+
+### O — Abierto/cerrado
+
+Lo formuló Bertrand Meyer en 1988, en *Object-Oriented Software Construction*. La idea moderna: cuando aparece un caso nuevo, deberías poder **agregar** código en vez de **editar** código que ya funciona y está probado. Es la motivación directa de [*Strategy*](/patrones/comportamiento-1), *Decorator* y *Observer*.
+
+El matiz: no puedes estar abierto a todas las extensiones posibles. Elige los ejes que **ya** cambiaron o que el negocio te dice que van a cambiar. Abrir ejes por adelantado es la [generalidad especulativa](/patrones/antipatrones).
+
+### L — Sustitución de Liskov
+
+Barbara Liskov lo planteó en su charla *Data Abstraction and Hierarchy* (1987) y lo formalizó con Jeannette Wing en 1994. Si `GiftCardPayment` es un `Payment`, todo código que funciona con un `Payment` debe funcionar con una gift card. Una subclase que lanza "no soportado" en un método heredado, que exige precondiciones más estrictas o que entrega menos garantías **rompe el contrato**, aunque compile. La señal típica de que violaste LSP es un `if (x instanceof Subclase)` en el código cliente.
+
+### I — Segregación de interfaces
+
+Las interfaces se diseñan **desde el cliente**, no desde la implementación. `SalesReport` solo necesita leer pedidos por fecha, así que debería depender de algo con ese único método. La implementación real puede seguir siendo una clase `PostgresOrderStore` que cumple cinco interfaces pequeñas. El beneficio inmediato se nota en los tests: un fake de un método en vez de seis.
+
+### D — Inversión de dependencias
+
+Es el principio con más impacto en la arquitectura. La regla: los módulos de alto nivel (tu negocio) no deben depender de los de bajo nivel (SDKs, bases de datos). Ambos dependen de una abstracción, y **la abstracción pertenece al alto nivel**. Esa última parte es la "inversión": la interfaz `PaymentGateway` vive en el dominio, con el vocabulario del dominio, y el adapter de Stripe depende de ella, no al revés.
+
+<CodeTabs>
+
+```ts title="TypeScript"
+// domain/payments.ts: la abstracción vive con quien la usa
+export interface PaymentGateway {
+  charge(customerId: string, amountCents: number): Promise<string>
+}
+
+// domain/checkout.ts: cero imports de infraestructura
+export class Checkout {
+  constructor(private readonly payments: PaymentGateway) {}
+
+  async pay(cart: Cart): Promise<string> {
+    if (cart.totalCents <= 0) throw new Error('Carrito vacío')
+    return this.payments.charge(cart.customerId, cart.totalCents)
+  }
+}
+
+// infra/stripe-gateway.ts: el detalle depende de la abstracción
+import Stripe from 'stripe'
+
+export class StripeGateway implements PaymentGateway {
+  constructor(private readonly stripe: Stripe) {}
+
+  async charge(customerId: string, amountCents: number) {
+    const intent = await this.stripe.paymentIntents.create({
+      customer: customerId,
+      amount: amountCents,
+      currency: 'usd',
+    })
+    return intent.id
+  }
+}
+
+// checkout.test.ts: sin red, sin mocks de módulo
+const fake: PaymentGateway = { charge: async () => 'pi_test_123' }
+expect(await new Checkout(fake).pay(cart)).toBe('pi_test_123')
+```
+
+```python title="Python"
+# domain/payments.py
+from typing import Protocol
+
+class PaymentGateway(Protocol):
+    def charge(self, customer_id: str, amount_cents: int) -> str: ...
+
+# domain/checkout.py
+class Checkout:
+    def __init__(self, payments: PaymentGateway) -> None:
+        self._payments = payments
+
+    def pay(self, cart: "Cart") -> str:
+        if cart.total_cents <= 0:
+            raise ValueError("Carrito vacío")
+        return self._payments.charge(cart.customer_id, cart.total_cents)
+
+# infra/stripe_gateway.py
+import stripe
+
+class StripeGateway:  # cumple el Protocol sin heredar
+    def __init__(self, api_key: str) -> None:
+        self._api_key = api_key
+
+    def charge(self, customer_id: str, amount_cents: int) -> str:
+        intent = stripe.PaymentIntent.create(
+            api_key=self._api_key,
+            customer=customer_id,
+            amount=amount_cents,
+            currency="usd",
+        )
+        return intent.id
+
+# test_checkout.py
+class FakeGateway:
+    def __init__(self) -> None:
+        self.charges: list[tuple[str, int]] = []
+
+    def charge(self, customer_id: str, amount_cents: int) -> str:
+        self.charges.append((customer_id, amount_cents))
+        return "pi_test_123"
+```
+
+</CodeTabs>
+
+¿Quién crea el `StripeGateway` y se lo pasa a `Checkout`? Un solo lugar al arrancar la aplicación, la *composition root*. Eso es [inyección de dependencias](/patrones/patrones-aplicacion), y llevado al nivel de arquitectura es la base de la [arquitectura hexagonal](/arquitectura/hexagonal).
+
+<Callout type="warn" title="SOLID no es un checklist">
+
+Aplicar los cinco principios al máximo en cada clase produce lo contrario de lo que buscan: decenas de interfaces de un método, clases de tres líneas y una navegación imposible. Incluso hay críticas serias, como la de Dan North, que propuso CUPID como alternativa centrada en propiedades del código ("componible", "predecible") en vez de reglas. Úsalos como **lentes para diagnosticar** un dolor real: "este cambio me obliga a tocar seis archivos, ¿qué principio estoy violando?".
+
+</Callout>
+
+<Quiz
+  question="Tu clase ReportService calcula métricas, genera el Excel y lo envía por email. Finanzas pide cambiar una métrica y Marketing pide cambiar el diseño del Excel, la misma semana. ¿Qué principio describe mejor el problema?"
+  options={[
+    { text: 'Inversión de dependencias', why: 'No hay una dependencia de alto nivel hacia un detalle de bajo nivel en el enunciado; el problema es quién pide los cambios.' },
+    { text: 'Responsabilidad única', correct: true, why: 'Dos actores distintos (Finanzas y Marketing) piden cambios a la misma clase. En la formulación de Martin, cada módulo debería responder a un solo actor.' },
+    { text: 'Sustitución de Liskov', why: 'Liskov habla de subtipos que rompen el contrato de su tipo base. Aquí no hay herencia involucrada.' },
+    { text: 'Segregación de interfaces', why: 'ISP trata de clientes que dependen de métodos que no usan. Aquí el problema es una clase que mezcla responsabilidades de actores distintos.' },
+  ]}
+/>
+
+## Patrones son vocabulario, no metas
+
+Este es el punto que separa a quien leyó el libro de quien lo entendió. Un patrón **resuelve un problema**. Si no tienes el problema, el patrón es solo complejidad.
+
+El error clásico de quien recién descubre los patrones es buscar dónde meterlos: una `AbstractShippingStrategyFactory` para un sistema con un solo tipo de envío, un *Observer* para avisarle a exactamente un objeto, un *Singleton* "porque solo necesito una instancia". El resultado tiene nombre: generalidad especulativa, y lo verás en [antipatrones](/patrones/antipatrones).
+
+Tres ideas para mantener los pies en la tierra:
+
+- **YAGNI** (*You Aren't Gonna Need It*). Del Extreme Programming: no construyas flexibilidad para un futuro que imaginas. Martin Fowler tiene un buen artículo donde distingue el costo de construir, el costo del retraso y el costo de cargar con lo que construiste.
+- **La regla de tres.** En *Refactoring*, Fowler la atribuye a Don Roberts: la primera vez lo haces; la segunda, te molesta la duplicación pero la toleras; la tercera, refactorizas. Con tres casos reales ves la forma verdadera de la abstracción.
+- **La abstracción equivocada cuesta más que la duplicación.** Sandi Metz lo resumió en una frase que conviene recordar: *duplication is far cheaper than the wrong abstraction*. Una abstracción prematura obliga a todos los casos futuros a encajar en ella, con parámetros y condicionales cada vez más raros.
+
+La forma sana de llegar a un patrón es **refactorizar hacia él**. Escribes la solución directa. Cuando aparece el dolor (el `switch` que crece, la clase que nadie puede testear), reconoces el síntoma y aplicas el patrón que lo cura. Joshua Kerievsky escribió un libro entero sobre esto: *Refactoring to Patterns*.
+
+<PatternFinder />
+
+<Callout type="tip" title="Cómo usar el buscador">
+
+Marca solo lo que ves hoy en tu código, no lo que te imaginas para mañana. Si el único síntoma es "quizás mañana haya más casos", la respuesta correcta suele ser no usar ningún patrón todavía.
+
+</Callout>
+
+<Quiz
+  question="Te piden un cálculo de comisión para vendedores. Hoy existe una sola regla y nadie ha mencionado otras. ¿Qué haces?"
+  options={[
+    { text: 'Defines una interfaz CommissionStrategy y una fábrica, para estar listo cuando aparezcan reglas nuevas.', why: 'Eso es generalidad especulativa: pagas hoy la complejidad de una variación que quizás nunca llegue, y probablemente adivines mal su forma.' },
+    { text: 'Escribes una función clara y bien testeada. Si aparece una segunda regla, extraes la Strategy en ese momento.', correct: true, why: 'Extraer una interfaz cuando aparece el segundo caso es un refactor barato y lo harás con información real. Mientras tanto, el código es más simple.' },
+    { text: 'Usas un Singleton CommissionCalculator para que todo el sistema use la misma regla.', why: 'Singleton resuelve el problema de "una sola instancia global", que aquí no existe, y agrega estado global y acoplamiento oculto.' },
+    { text: 'Usas herencia: una clase base Commission y una subclase por vendedor.', why: 'Herencia para variar datos (cada vendedor) es el uso más frágil posible; además, sin variación real, no hay nada que modelar.' },
+  ]}
+/>
+
+## Cómo estudiar un patrón (y explicarlo en una entrevista)
+
+Cada tema de esta unidad presenta los patrones con la misma estructura, que también te sirve como guion para responder en una entrevista:
+
+<Steps>
+<Step title="Intención en una frase">
+
+"*Decorator* agrega responsabilidades a un objeto envolviéndolo, sin cambiar su clase." Si no puedes decirlo en una frase, todavía no lo entiendes.
+
+</Step>
+<Step title="El problema, con un síntoma concreto">
+
+El código "antes": el `switch` que crece, la clase con nueve parámetros, la jerarquía que explota. Los entrevistadores valoran mucho que conectes el patrón con un dolor real.
+
+</Step>
+<Step title="La estructura">
+
+Los participantes y sus relaciones: quién conoce a quién, quién implementa qué. Un diagrama de cajas basta.
+
+</Step>
+<Step title="Dónde lo has visto">
+
+Middleware de Express es *Chain of Responsibility*. Los streams de Java I/O son *Decorators*. RxJS es *Observer*. Un ejemplo real vale más que la definición del libro.
+
+</Step>
+<Step title="Cuándo no usarlo y con qué se confunde">
+
+El trade-off y los patrones vecinos: *Strategy* vs *State*, *Decorator* vs *Proxy* vs *Adapter*. Esta es la parte que distingue una respuesta senior.
+
+</Step>
+</Steps>
+
+<Callout type="interview" title="Las preguntas que más se repiten">
+
+"¿Cuál es la diferencia entre Strategy y State?" (en [Comportamiento I](/patrones/comportamiento-1)). "Decorator vs Proxy vs Adapter" (en [estructurales](/patrones/estructurales)). "¿Por qué Singleton es polémico?" (en [creacionales](/patrones/creacionales)). "¿Cómo harías testeable este código?" (inyección de dependencias, en [patrones de aplicación](/patrones/patrones-aplicacion)). "¿Qué pasa si el servicio de pagos se cae?" (en [resiliencia](/patrones/patrones-resiliencia)).
+
+</Callout>
+
+## Más allá del GoF
+
+El libro de 1994 se enfoca en el diseño de objetos dentro de un programa. Después vinieron otros catálogos para otros niveles, y esta unidad toma lo más útil de cada uno:
+
+| Catálogo | Nivel | Ejemplos | Dónde lo ves |
+| --- | --- | --- | --- |
+| GoF (1994) | Objetos y clases | Strategy, Decorator, Observer | Temas 4.2 a 4.5 |
+| *Patterns of Enterprise Application Architecture*, Fowler (2002) | Capa de aplicación y datos | Repository, Unit of Work, Data Mapper | [Patrones de aplicación](/patrones/patrones-aplicacion) |
+| *Domain-Driven Design*, Evans (2003) | Modelo de dominio | Entity, Value Object, Aggregate, Specification | [DDD táctico](/arquitectura/ddd-tactico) |
+| *Enterprise Integration Patterns*, Hohpe y Woolf (2003) | Mensajería entre sistemas | Pub/Sub, Message Router, Dead Letter Channel | [Event-driven](/arquitectura/event-driven) |
+| *Release It!*, Nygard, y catálogo cloud de Azure | Sistemas distribuidos | Circuit Breaker, Bulkhead, Sidecar | [Resiliencia](/patrones/patrones-resiliencia) |
+
+Y del otro lado están los **antipatrones**: soluciones que parecen razonables, se repiten mucho y producen más problemas de los que resuelven. Conocerlos es igual de útil, porque te ayudan a diagnosticar código existente. Los verás al final de la unidad.
+
+<Quiz
+  question="¿Cuál de estas afirmaciones sobre los patrones del GoF es la más precisa hoy?"
+  options={[
+    { text: 'Están obsoletos: los lenguajes modernos los hicieron innecesarios.', why: 'Algunos se volvieron características del lenguaje (Iterator, Observer en parte), pero los problemas que resuelven siguen existiendo y el vocabulario sigue siendo estándar.' },
+    { text: 'Hay que implementarlos tal como aparecen en el libro, con las mismas clases.', why: 'El libro usa C++ y Smalltalk de los 90. En TypeScript o Python, muchas veces una función o un Protocol reemplaza una jerarquía de clases.' },
+    { text: 'Su intención sigue vigente, pero la implementación idiomática depende del lenguaje.', correct: true, why: 'Exacto. Strategy en Python puede ser pasar una función; Iterator es un generador. El problema y el nombre se mantienen; la forma cambia.' },
+    { text: 'Cuantos más patrones use un sistema, mejor diseñado está.', why: 'Al revés: un patrón sin el problema que resuelve es complejidad gratuita. Se mide por los cambios que facilita, no por la cantidad de patrones.' },
+  ]}
+/>
+
+<Takeaways>
+
+- Un patrón es una solución con nombre a un problema recurrente, **con sus consecuencias**. Su mayor valor es el vocabulario compartido.
+- El GoF agrupa 23 patrones en creacionales, estructurales y de comportamiento. Muchos siguen siendo cotidianos; otros los absorbió el lenguaje.
+- Detrás de casi todos hay dos ideas: programar contra interfaces y preferir composición sobre herencia.
+- SOLID son heurísticas para abaratar el cambio. Úsalas para diagnosticar un dolor concreto, no como checklist.
+- Inversión de dependencias significa que la abstracción pertenece al negocio y los detalles (SDKs, bases de datos) dependen de ella.
+- No busques dónde meter un patrón: refactoriza hacia él cuando aparezca el síntoma. Con un solo caso, la respuesta suele ser ningún patrón.
+
+</Takeaways>
+
+## Fuentes y lecturas
+
+- Gamma, Helm, Johnson y Vlissides, [*Design Patterns: Elements of Reusable Object-Oriented Software*](https://www.oreilly.com/library/view/design-patterns-elements/0201633612/) (Addison-Wesley, 1994).
+- Eric Freeman y Elisabeth Robson, [*Head First Design Patterns*, 2.ª edición](https://www.oreilly.com/library/view/head-first-design/9781492077992/) (O'Reilly, 2020).
+- Christopher Alexander et al., *A Pattern Language* (Oxford University Press, 1977).
+- [Refactoring.Guru: catálogo de patrones de diseño](https://refactoring.guru/design-patterns/catalog), con ejemplos en varios lenguajes.
+- Peter Norvig, [*Design Patterns in Dynamic Languages*](https://norvig.com/design-patterns/) (1996).
+- Robert C. Martin, [*The Single Responsibility Principle*](https://blog.cleancoder.com/uncle-bob/2014/05/08/SingleReponsibilityPrinciple.html) y [*Solid Relevance*](https://blog.cleancoder.com/uncle-bob/2020/10/18/Solid-Relevance.html).
+- Barbara Liskov y Jeannette Wing, [*A Behavioral Notion of Subtyping*](https://dl.acm.org/doi/10.1145/197320.197383) (ACM TOPLAS, 1994).
+- Dan North, [*CUPID: for joyful coding*](https://dannorth.net/2022/02/10/cupid-for-joyful-coding/) (2022).
+- Sandi Metz, [*The Wrong Abstraction*](https://sandimetz.com/blog/2016/1/20/the-wrong-abstraction) (2016).
+- Martin Fowler, [*Yagni*](https://martinfowler.com/bliki/Yagni.html) y [*Refactoring*, 2.ª edición](https://martinfowler.com/books/refactoring.html) (2018).
+- Joshua Kerievsky, *Refactoring to Patterns* (Addison-Wesley, 2004).

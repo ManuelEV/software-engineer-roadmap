@@ -1,0 +1,172 @@
+.cor-chain {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--s-2);
+  position: relative;
+}
+.cor-node {
+  position: relative;
+  display: grid;
+  justify-items: center;
+  align-content: start;
+  gap: 4px;
+  text-align: center;
+  padding-top: 2px;
+}
+/* connector between links of the chain */
+.cor-node:not(:last-child)::after {
+  content: '';
+  position: absolute;
+  top: 14px;
+  left: calc(50% + 16px);
+  width: calc(100% - 32px + var(--s-2));
+  height: 5px;
+  border-radius: 5px;
+  background: var(--rule-strong);
+  transition: background-color 260ms var(--ease-out);
+}
+.cor-node.is-pass::after {
+  background: var(--line);
+}
+.cor-node__dot {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: 3px solid var(--rule-strong);
+  background: var(--paper);
+  transition:
+    border-color 260ms var(--ease-out),
+    background-color 260ms var(--ease-out);
+}
+.cor-node.is-pass .cor-node__dot,
+.cor-node.is-active .cor-node__dot {
+  border-color: var(--line);
+}
+.cor-node.is-done .cor-node__dot {
+  border-color: var(--ok);
+  background: var(--ok);
+}
+.cor-node.is-stop .cor-node__dot {
+  border-color: var(--bad);
+  background: color-mix(in oklab, var(--bad) 18%, var(--paper));
+}
+.cor-node__packet {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--line);
+}
+.cor-node__label {
+  font-weight: 700;
+  font-size: var(--step--1);
+  color: var(--ink);
+  line-height: 1.2;
+}
+.cor-node__cls {
+  font-family: var(--font-code);
+  font-size: 0.68rem;
+  color: var(--ink-3);
+  word-break: break-all;
+}
+.cor-node__final {
+  font-family: var(--font-code);
+  font-size: 0.75rem;
+  color: var(--ok);
+  min-height: 40px;
+  display: grid;
+  place-items: center;
+}
+.cor-node__resp {
+  font-family: var(--font-code);
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--bad);
+}
+.cor-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 40px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1.5px solid var(--rule-strong);
+  background: var(--card);
+  font-family: var(--font-sign);
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--ink-3);
+  cursor: pointer;
+  text-decoration: line-through;
+}
+.cor-toggle.is-on {
+  color: var(--ink);
+  text-decoration: none;
+  border-color: var(--ok);
+}
+.cor-toggle:focus-visible {
+  outline: 2px solid var(--line-ink);
+  outline-offset: 2px;
+}
+.cor-toggle__knob {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--bad);
+}
+.cor-toggle.is-on .cor-toggle__knob {
+  background: var(--ok);
+}
+.cor-readout {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-3) var(--s-5);
+}
+.cor-readout p {
+  flex: 1 1 16rem;
+}
+
+@media (max-width: 559px) {
+  .cor-chain {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--s-3);
+  }
+  .cor-node {
+    grid-template-columns: 30px minmax(0, 1fr) auto;
+    justify-items: start;
+    align-items: center;
+    text-align: left;
+    column-gap: var(--s-3);
+    row-gap: 0;
+  }
+  .cor-node__dot {
+    grid-row: span 2;
+  }
+  .cor-node__label {
+    grid-column: 2;
+  }
+  .cor-node__cls {
+    grid-column: 2;
+  }
+  .cor-toggle,
+  .cor-node__final {
+    grid-column: 3;
+    grid-row: 1 / span 2;
+  }
+  .cor-node__resp {
+    grid-column: 2 / -1;
+  }
+  .cor-node:not(:last-child)::after {
+    top: 30px;
+    left: 12.5px;
+    width: 5px;
+    height: calc(100% - 30px + var(--s-3));
+  }
+}

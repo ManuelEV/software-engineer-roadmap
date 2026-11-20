@@ -1,0 +1,264 @@
+import { StatelessSessions } from '../../components/widgets/system-design/StatelessSessions'
+import { ScalabilityCurve } from '../../components/widgets/system-design/ScalabilityCurve'
+
+Todo sistema empieza en una máquina. Una aplicación, una base de datos, quizá en el mismo servidor. Y está bien: es lo más simple, lo más barato y lo más fácil de depurar. El problema llega cuando el tráfico crece y esa máquina deja de alcanzar. Ahí tienes dos caminos: una máquina más grande o más máquinas.
+
+Escalar no es «agregar servidores». Es identificar **qué recurso se agota primero** (CPU, memoria, disco, conexiones a la base, ancho de banda), resolver ese cuello de botella con el cambio más simple posible y repetir. Cada paso agrega complejidad operativa, así que el arte está en darlo justo a tiempo, ni antes ni después.
+
+En este tema vemos cómo describir la carga y el rendimiento con precisión, la diferencia entre escalar vertical y horizontal, por qué los servicios sin estado son la base de todo, la evolución canónica de «un servidor» a «millones de usuarios» y los límites matemáticos de agregar máquinas.
+
+## Describir la carga y el rendimiento
+
+«Nuestro sistema escala» no significa nada si no dices **a qué carga** y **con qué rendimiento**. Martin Kleppmann, en *Designing Data-Intensive Applications*, propone empezar por los **parámetros de carga**: las pocas cifras que describen el trabajo que hace tu sistema. Pueden ser peticiones por segundo, la proporción lecturas/escrituras, usuarios conectados a la vez, el tamaño del dato más grande o el número de seguidores del usuario más popular.
+
+El último ejemplo no es casual. Para un feed tipo Twitter, el parámetro que define la arquitectura no es el total de tuits, sino el ***fan-out***: a cuántos timelines llega cada tuit. Un usuario con 50 millones de seguidores es un problema de naturaleza distinta a un millón de usuarios con 50 seguidores cada uno (lo vemos en detalle en el caso de Twitter de la unidad *Casos*).
+
+Para el rendimiento, mide **percentiles**, no promedios:
+
+- **p50 (mediana)**: la experiencia típica.
+- **p99 y p999**: la cola. Uno de cada cien o mil usuarios ve esto, y suelen ser tus clientes más activos, porque son los que más peticiones hacen y los que tienen más datos.
+
+La cola importa más de lo que parece por un efecto de amplificación. Si atender una página requiere consultar 100 servidores en paralelo y cada uno tarda más de un segundo en 1 de cada 100 peticiones, la probabilidad de que **al menos uno** sea lento es 1 − 0,99¹⁰⁰ ≈ **63 %**. Dean y Barroso lo describieron en *The Tail at Scale*: en sistemas con mucho *fan-out*, la latencia de cola de cada pieza se vuelve la latencia típica del todo.
+
+<Callout type="interview" title="Antes de escalar, define la carga">
+
+Cuando el entrevistador diga «¿y cómo escala esto?», no respondas con tecnologías. Pregunta o asume el parámetro que domina: «El cuello de botella aquí es el fan-out de las publicaciones de cuentas muy populares, no el volumen total. Diseñemos para un usuario con 10 M de seguidores». Mostrar que sabes **qué** escala es más valioso que listar **con qué**.
+
+</Callout>
+
+## Vertical u horizontal
+
+<Compare>
+<Option title="Escalar verticalmente (scale up)">
+
+Una máquina más grande: más CPU, más RAM, discos más rápidos.
+
+- **Cero cambios en el código.** Tu aplicación no sabe que ahora tiene 64 núcleos.
+- Las máquinas grandes de hoy tienen cientos de núcleos y varios TB de RAM. Llegan mucho más lejos de lo que la gente cree.
+- **Techo duro**: hay una máquina más grande que no existe.
+- **Precio no lineal**: el doble de capacidad suele costar más del doble.
+- **Punto único de falla**: si esa máquina cae, cae todo.
+
+</Option>
+<Option title="Escalar horizontalmente (scale out)">
+
+Más máquinas iguales detrás de un balanceador.
+
+- **Sin techo teórico** y con redundancia natural: perder una de diez es perder un 10 % de capacidad.
+- Máquinas commodity, más baratas por unidad de capacidad.
+- **Exige diseño**: los servidores no pueden guardar estado local, hay que repartir la carga y coordinar.
+- Introduce los problemas de sistemas distribuidos: red poco confiable, consistencia, fallas parciales.
+
+</Option>
+</Compare>
+
+En la práctica se combinan. La capa de aplicación casi siempre escala horizontal, porque es fácil si no tiene estado. La base de datos suele escalar **vertical primero** (más una réplica para disponibilidad) y solo se particiona cuando de verdad no queda otra, porque particionar datos es caro y difícil de revertir.
+
+<Callout type="tip" title="El camino aburrido llega lejos">
+
+Una sola base de datos relacional en una máquina grande, con réplicas de lectura y un caché delante, atiende sin problemas a una cantidad de usuarios que sorprende. Antes de proponer sharding en una entrevista, estima el volumen (ver *Estimaciones rápidas*) y verifica que de verdad no cabe.
+
+</Callout>
+
+## Servicios sin estado: la llave del escalado horizontal
+
+Un servicio **sin estado** (*stateless*) no guarda en su memoria ni en su disco local nada que una petición futura necesite. Cualquier instancia puede atender cualquier petición. Eso te da tres superpoderes: agregar instancias sin coordinación, matar instancias sin perder nada (despliegues, fallas, autoscaling hacia abajo) y balancear con el algoritmo más simple.
+
+El estado no desaparece: **se muda** a un sistema diseñado para guardarlo. El caso clásico es la sesión del usuario. Compara las opciones tirando servidores en el simulador:
+
+<StatelessSessions />
+
+Las cuatro estrategias, en orden de preferencia habitual:
+
+- **Almacén compartido** (Redis, Memcached, DynamoDB): la sesión vive fuera y expira sola con un TTL. Es lo que recomienda la metodología *Twelve-Factor App*, que considera las *sticky sessions* una violación de sus principios. Costo: un salto de red extra por petición (del orden de cientos de microsegundos dentro del datacenter) y otra pieza que operar.
+- **Token firmado** (JWT u otro formato): el cliente guarda su identidad y el servidor solo verifica una firma. Cero estado en el servidor. Costo: no puedes invalidar un token antes de que expire sin volver a tener estado (una lista de revocados), así que se usan tokens de vida corta con *refresh tokens*.
+- **Sticky sessions**: el balanceador fija a cada usuario en un servidor. Es una muleta útil para migrar aplicaciones viejas, pero si ese servidor se cae, sus usuarios pierden la sesión, y la carga se desbalancea cuando unos usuarios son mucho más activos que otros.
+- **Sesión en memoria sin afinidad**: no funciona con más de un servidor. Es el error que el simulador muestra en el modo «RAM».
+
+La sesión es el ejemplo famoso, pero el estado se esconde en más lugares:
+
+- **Archivos subidos al disco local** → muévelos a blob storage (S3, GCS).
+- **Cachés locales** → están bien como optimización, siempre que perderlos no rompa nada y toleres que cada instancia tenga una copia algo distinta.
+- **Tareas programadas** (*cron*) dentro de la aplicación → con 10 instancias, el reporte diario se envía 10 veces. Usa un programador central o elección de líder.
+- **Conexiones persistentes** (WebSockets) → son estado por naturaleza. Se escalan con una capa de conexión separada y un registro de qué usuario está conectado a qué nodo.
+
+<Quiz
+  question="Tu aplicación corre en 6 instancias detrás de un balanceador. Cada instancia tiene un job interno que, cada noche a las 2:00, cobra las suscripciones vencidas. ¿Qué pasa?"
+  options={[
+    { text: 'Nada, cada instancia cobra una sexta parte de las suscripciones.', why: 'Solo si hubieras programado ese reparto explícitamente. Por defecto, cada instancia ejecuta el job completo sobre todos los datos.' },
+    { text: 'Cada suscripción se intenta cobrar hasta 6 veces.', correct: true, why: 'Es estado escondido: el job asume que hay una sola instancia. Soluciones: un programador externo que dispare el job una vez, elección de líder o un lock distribuido, y además cobros idempotentes por si algo se repite igual.' },
+    { text: 'El balanceador evita que se ejecute más de una vez.', why: 'El balanceador reparte peticiones entrantes. No sabe nada de los procesos que cada instancia lanza por su cuenta.' },
+    { text: 'Solo lo ejecuta la instancia que recibió la última petición.', why: 'Los jobs programados internos no dependen del tráfico; corren en todas las instancias donde estén configurados.' },
+  ]}
+/>
+
+## De un servidor a millones de usuarios
+
+Esta es la evolución canónica que describe el primer capítulo del libro de Alex Xu, y que AWS repite desde hace años en su charla *Scaling up to your first 10 million users*. No es una receta que se aplica en orden ciego: cada paso responde a un cuello de botella concreto. Recórrela:
+
+<FlowDiagram
+  caption="La evolución típica de una arquitectura web a medida que crece el tráfico. Cada paso resuelve un cuello de botella concreto."
+  nodes={[
+    { id: 'u', label: 'Usuarios', kind: 'users', x: 0, y: 1 },
+    { id: 'cdn', label: 'CDN', kind: 'cdn', x: 1, y: 0, sub: 'estáticos y media' },
+    { id: 'lb', label: 'Load balancer', kind: 'lb', x: 1, y: 1 },
+    { id: 'web', label: 'Servidores web', kind: 'server', x: 2, y: 1, sub: 'N instancias' },
+    { id: 'cache', label: 'Redis', kind: 'cache', x: 2, y: 0, sub: 'caché + sesiones' },
+    { id: 'q', label: 'Cola', kind: 'queue', x: 2, y: 2 },
+    { id: 'db', label: 'BD primaria', kind: 'db', x: 3, y: 1, sub: 'escrituras' },
+    { id: 'rep', label: 'Réplicas', kind: 'db', x: 3, y: 0, sub: 'lecturas' },
+    { id: 'wk', label: 'Workers', kind: 'worker', x: 3, y: 2, sub: 'trabajo asíncrono' },
+    { id: 'sh', label: 'Shards', kind: 'layers', x: 4, y: 1, sub: 'particionado', tone: 'muted' },
+    { id: 'obs', label: 'Observabilidad', kind: 'monitor', x: 4, y: 2, sub: 'logs, métricas, CI/CD' },
+  ]}
+  edges={[
+    { from: 'u', to: 'lb' },
+    { from: 'u', to: 'cdn', dashed: true },
+    { from: 'lb', to: 'web' },
+    { from: 'web', to: 'cache' },
+    { from: 'web', to: 'db' },
+    { from: 'web', to: 'rep' },
+    { from: 'db', to: 'rep', label: 'replica', dashed: true },
+    { from: 'web', to: 'q' },
+    { from: 'q', to: 'wk' },
+    { from: 'db', to: 'sh', dashed: true },
+  ]}
+  steps={[
+    {
+      title: '1 · Un solo servidor',
+      body: 'Aplicación y base de datos en la misma máquina. Perfecto para validar el producto. Cuello de botella: la app y la base compiten por CPU y RAM, y si la máquina cae, cae todo.',
+      active: ['u', 'web'],
+    },
+    {
+      title: '2 · Separar la base de datos',
+      body: 'La base va a su propia máquina. Ahora cada capa escala por separado: la base puede crecer verticalmente sin tocar la app. Elige relacional por defecto salvo que el patrón de acceso pida otra cosa.',
+      active: ['u', 'web', 'db'],
+      flow: ['web-db'],
+    },
+    {
+      title: '3 · Load balancer y varias instancias',
+      body: 'Un balanceador reparte el tráfico entre varios servidores web. Gana capacidad y disponibilidad: si cae uno, los demás siguen. Requisito: que los servidores no guarden estado local.',
+      active: ['u', 'lb', 'web', 'db'],
+      flow: ['u-lb', 'lb-web', 'web-db'],
+    },
+    {
+      title: '4 · Réplicas de lectura',
+      body: 'La base primaria acepta escrituras y las replica a seguidores que atienden lecturas. Aguanta mucho más tráfico de lectura y sobrevive a la caída de la primaria promoviendo una réplica. Costo: lecturas posiblemente atrasadas.',
+      active: ['web', 'db', 'rep'],
+      flow: ['db-rep', 'web-rep'],
+    },
+    {
+      title: '5 · Caché',
+      body: 'Lo que se lee mucho y cambia poco se guarda en memoria (Redis, Memcached). Una lectura de caché cuesta microsegundos y libera a la base. Nuevo problema: invalidar cuando el dato cambia.',
+      active: ['web', 'cache'],
+      flow: ['web-cache'],
+    },
+    {
+      title: '6 · CDN',
+      body: 'Imágenes, video, JS y CSS se sirven desde servidores cerca del usuario. Baja la latencia (menos viajes intercontinentales) y saca la mayor parte del ancho de banda de tus servidores.',
+      active: ['u', 'cdn'],
+      flow: ['u-cdn'],
+    },
+    {
+      title: '7 · Capa web sin estado',
+      body: 'Las sesiones salen de la memoria de los servidores hacia Redis (o tokens firmados). Ahora el autoscaling puede agregar y quitar instancias libremente.',
+      active: ['lb', 'web', 'cache'],
+      flow: ['lb-web', 'web-cache'],
+    },
+    {
+      title: '8 · Varios datacenters',
+      body: 'Para latencia global y para sobrevivir a la caída de una región entera, se replica la arquitectura en varias regiones y un DNS geográfico (GeoDNS) manda a cada usuario a la más cercana. El reto pasa a ser replicar datos entre regiones.',
+      active: ['u', 'lb', 'web', 'db', 'cache', 'cdn'],
+    },
+    {
+      title: '9 · Cola de mensajes',
+      body: 'Lo que no necesita respuesta inmediata (enviar emails, procesar video, generar miniaturas) se encola y lo procesan workers. Productores y consumidores escalan y fallan por separado, y la cola absorbe los picos.',
+      active: ['web', 'q', 'wk'],
+      flow: ['web-q', 'q-wk'],
+    },
+    {
+      title: '10 · Observabilidad y automatización',
+      body: 'Con decenas de máquinas ya no puedes entrar por SSH a mirar logs. Logs centralizados, métricas, alertas y despliegues automatizados pasan a ser infraestructura crítica.',
+      active: ['obs', 'web', 'db', 'wk'],
+    },
+    {
+      title: '11 · Sharding de la base',
+      body: 'Cuando las escrituras o el volumen ya no caben en una primaria, se particionan los datos por una clave (usuario, tenant). Es el paso más caro y menos reversible; por eso va al final.',
+      active: ['db', 'sh'],
+      flow: ['db-sh'],
+    },
+  ]}
+/>
+
+El orden no es sagrado. Una app de video necesita CDN desde el día uno; un sistema interno de reportes quizá nunca necesite caché. Lo que sí es universal es el razonamiento: **mide, encuentra el cuello de botella, aplica el cambio más simple que lo resuelve**.
+
+<Callout type="interview" title="Narra la evolución, no el destino">
+
+Si te piden diseñar algo «para 100 millones de usuarios», no dibujes las once cajas de golpe. Parte de lo simple y agrega cada pieza **diciendo qué problema resuelve**: «Con este volumen de lecturas la primaria no aguanta, así que agrego réplicas; eso me trae lecturas atrasadas, y para el perfil del propio usuario leo desde la primaria». Cada caja con su razón y su costo.
+
+</Callout>
+
+## Escalar la capa de datos
+
+Los servidores sin estado escalan casi linealmente. La base de datos es otra historia, porque el estado no se puede clonar gratis. Las palancas, en el orden en que normalmente se aplican:
+
+1. **Optimizar antes de escalar**: índices correctos, consultas sin N+1, un pool de conexiones. Es sorprendente cuánto se gana aquí.
+2. **Escalar verticalmente** la primaria.
+3. **Caché** para lecturas repetidas (tema *Caché y CDN*).
+4. **Réplicas de lectura**, aceptando su atraso (tema *Replicación y sharding*).
+5. **Particionado funcional** (*federation*): bases separadas por dominio (usuarios, pedidos, pagos), lo que en microservicios ocurre de forma natural.
+6. **Sharding**: dividir una misma tabla entre varias máquinas por una clave. Resuelve escrituras y volumen, pero complica las consultas que cruzan shards, las transacciones y el rebalanceo.
+7. **Desnormalizar** o mover partes del modelo a un almacén especializado (búsqueda, series de tiempo, clave-valor) cuando el patrón de acceso lo justifica (tema *Bases de datos*).
+
+## Los límites de agregar máquinas
+
+Si un servidor atiende 1.000 peticiones por segundo, ¿diez atienden 10.000? Casi nunca. Dos fuerzas lo impiden:
+
+- **Contención (α)**: partes del trabajo que se serializan en un recurso compartido. Un lock global, una fila contador que todos actualizan, una base de datos única detrás de todos los servidores. Es la ley de Amdahl: si el 5 % del trabajo es serial, nunca pasarás de 20× por más máquinas que agregues.
+- **Coherencia (β)**: el costo de que los nodos se pongan de acuerdo entre sí. Invalidar cachés en todos los nodos, protocolos de consenso, *gossip* entre miembros de un clúster. Crece con el número de **pares** de nodos, así que a partir de cierto punto agregar nodos **reduce** la capacidad total.
+
+Neil Gunther combinó ambas en la **ley de escalabilidad universal** (USL). Mueve los parámetros y busca el punto donde agregar nodos empieza a empeorar las cosas:
+
+<ScalabilityCurve />
+
+La lección para el diseño es directa: **arquitecturas *shared-nothing***. Cada nodo atiende su parte sin hablar con los demás: servidores sin estado, datos particionados por una clave que evita consultas entre particiones, contadores repartidos en varias claves en vez de uno global. Cuando oigas «escala linealmente», pregunta dónde están α y β.
+
+<Quiz
+  question="Agregaste instancias a un servicio y el throughput total dejó de crecer en 8 instancias; con 16, bajó. La CPU de las instancias está al 30 %. ¿Qué es lo más probable?"
+  options={[
+    { text: 'Las instancias necesitan más CPU.', why: 'Con 30 % de uso, la CPU no es el límite. El problema está en algo que comparten.' },
+    { text: 'Hay contención y coherencia: todas compiten por un recurso compartido (un lock en la base, una fila caliente) y el costo de coordinarse crece con cada instancia nueva.', correct: true, why: 'Es la firma de la USL con β mayor que cero: la capacidad llega a un pico y luego cae. Hay que encontrar el recurso compartido (con métricas de esperas por locks, conexiones, filas calientes) y eliminarlo o particionarlo.' },
+    { text: 'El balanceador está mal configurado y manda todo a una instancia.', why: 'Entonces una instancia estaría saturada y las demás ociosas, y el throughput no caería al agregar más. El patrón de pico y caída apunta a contención.' },
+    { text: 'Es normal: ningún sistema escala más allá de 8 instancias.', why: 'Los sistemas shared-nothing escalan a miles de nodos. El límite lo pone el diseño, no un número mágico.' },
+  ]}
+/>
+
+## Autoscaling y margen de capacidad
+
+Con servicios sin estado, la nube te deja agregar y quitar instancias según la carga. Algunas reglas que se aprenden a golpes:
+
+- **Elige bien la métrica.** CPU funciona para servicios que calculan; para servicios que esperan I/O, son mejores las peticiones por instancia, la latencia o la profundidad de la cola que consumen los workers.
+- **Escala hacia arriba rápido y hacia abajo despacio.** Quitar capacidad apresuradamente provoca oscilaciones.
+- **El autoscaling no es instantáneo.** Arrancar una instancia, calentar cachés y pasar los *health checks* toma de segundos a minutos. Un pico repentino de 10× llega antes que las máquinas nuevas: necesitas margen (*headroom*), colas que absorban la ráfaga y *load shedding* (tema *Confiabilidad*).
+- **Escalar la app puede tumbar la base.** Duplicar instancias duplica las conexiones a la base de datos. Revisa los límites de lo que está detrás.
+- **Define un mínimo** de instancias repartidas en varias zonas de disponibilidad, para sobrevivir a la caída de una zona aunque el tráfico sea bajo.
+
+<Takeaways>
+
+- Escalar es encontrar **el recurso que se agota primero** y resolverlo con el cambio más simple. Define la carga con parámetros concretos y el rendimiento con **percentiles**.
+- **Vertical** es simple y llega lejos, pero tiene techo y es un punto único de falla. **Horizontal** no tiene techo, pero exige servicios sin estado.
+- El estado no desaparece: **se muda** a un almacén compartido, a un token o a blob storage. Busca el estado escondido (cron, archivos locales, conexiones).
+- La evolución típica: separar la base → balanceador → réplicas → caché → CDN → capa sin estado → multi-región → colas → observabilidad → sharding. Cada paso con su razón.
+- La **contención** y la **coherencia** ponen límite al escalado horizontal; diseña *shared-nothing*.
+- El autoscaling necesita margen: no llega a tiempo para picos instantáneos.
+
+</Takeaways>
+
+## Fuentes y lecturas
+
+- Martin Kleppmann, [*Designing Data-Intensive Applications*](https://dataintensive.net/), cap. 1: carga, rendimiento, percentiles y escalabilidad.
+- Alex Xu, *System Design Interview*, cap. 1: [*Scale from zero to millions of users*](https://bytebytego.com/courses/system-design-interview/scale-from-zero-to-millions-of-users).
+- Jeffrey Dean y Luiz André Barroso, [*The Tail at Scale*](https://research.google/pubs/the-tail-at-scale/), Communications of the ACM, 2013.
+- Neil Gunther, [*How to quantify scalability* (USL)](http://www.perfdynamics.com/Manifesto/USLscalability.html).
+- Adam Wiggins, [*The Twelve-Factor App: Processes*](https://12factor.net/processes): procesos sin estado y por qué evitar las sticky sessions.
+- Donne Martin, [*The System Design Primer*](https://github.com/donnemartin/system-design-primer): secciones sobre escalabilidad, balanceo y bases de datos.

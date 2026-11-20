@@ -1,0 +1,470 @@
+import { NotificationPipeline } from '../../components/widgets/casos-b/NotificationPipeline'
+
+"Tu pedido va en camino." "Tu código de verificación es 482913." "Ana comentó tu foto." Casi todo producto envía notificaciones, y la primera versión siempre es la misma: el servicio de pedidos llama directo a Firebase o a un proveedor de email dentro del request. Funciona hasta que deja de funcionar: el proveedor de SMS se cae y los pedidos no se pueden crear, una campaña de marketing a 20 millones de usuarios retrasa los códigos de verificación media hora, o un reintento mal hecho le manda a alguien el mismo push cinco veces a las 3 de la mañana.
+
+Por eso "diseña un sistema de notificaciones" es un clásico de entrevista. No pide ningún algoritmo exótico: pide **ingeniería de plataformas**. Muchos productores, tres o más canales con proveedores externos que fallan y limitan tu tráfico, preferencias de usuario y obligaciones legales, picos enormes y dos pecados capitales: **perder** una notificación crítica o **duplicar** una que no debía repetirse. LinkedIn resumió el objetivo de su plataforma (Air Traffic Controller) como las "5 cosas correctas": el mensaje correcto, a la persona correcta, por el canal correcto, en el momento correcto y con la frecuencia correcta<Sidenote>"Air Traffic Controller: Member-First Notifications at LinkedIn", 2018. Ver Fuentes.</Sidenote>.
+
+<Sketch
+  width={640}
+  height={300}
+  caption="La mitad del diseño en un dibujo: con una sola cola, el código OTP espera detrás de millones de mensajes de marketing; con colas por prioridad, lo urgente nunca hace fila detrás de lo masivo."
+  items={[
+    { type: 'text', x: 24, y: 34, text: 'una sola cola', size: 22, tone: 'pencil' },
+    { type: 'cells', x: 24, y: 52, values: ['M', 'M', 'M', 'M', 'M', 'OTP'], size: 42, states: [null, null, null, null, null, 'bad'] },
+    { type: 'cross', x: 296, y: 73, size: 22 },
+    { type: 'text', x: 330, y: 80, text: 'el OTP llega tarde', size: 20, tone: 'bad' },
+    { type: 'line', points: [[24, 124], [616, 124]], dashed: true, tone: 'muted' },
+    { type: 'text', x: 24, y: 160, text: 'colas por prioridad', size: 22, tone: 'line' },
+    { type: 'cells', x: 24, y: 176, values: ['OTP'], size: 42, states: ['ok'] },
+    { type: 'arrow', from: [72, 197], to: [176, 197], tone: 'ok' },
+    { type: 'text', x: 186, y: 204, text: 'segundos', size: 20, tone: 'ok' },
+    { type: 'cells', x: 24, y: 236, values: ['M', 'M', 'M', 'M', 'M'], size: 42, with: true },
+    { type: 'arrow', from: [240, 257], to: [300, 257], tone: 'muted' },
+    { type: 'text', x: 310, y: 264, text: 'minutos u horas', size: 20, tone: 'pencil' },
+    { type: 'text', x: 430, y: 186, text: ['workers propios', 'por prioridad', 'y por canal'], size: 19, tone: 'pencil' },
+  ]}
+/>
+
+## Requisitos
+
+**Funcionales**
+
+- Enviar por **push** (iOS vía APNs, Android vía FCM), **email** y **SMS**. El inbox dentro de la app es un canal más que conviene mencionar.
+- Dos tipos de tráfico: **transaccional** (código OTP, recibo de pago, "tu conductor llegó"), disparado por servicios internos para un usuario, y **campañas** (marketing, novedades) a segmentos de millones, a veces programadas.
+- **Preferencias** por usuario: por categoría (marketing, social, seguridad) y por canal, con *opt-out* y horas de silencio en su zona horaria.
+- **Plantillas** versionadas y localizadas ("es-CL", "pt-BR").
+- **Seguimiento**: enviada, entregada, abierta, fallida; y registro de dispositivos (tokens de push).
+
+**No funcionales**
+
+- **Al menos una vez** con deduplicación, para que el usuario perciba "exactamente una vez".
+- **Latencia por prioridad**: un OTP debería llegar en pocos segundos (supongamos p99 menor a 5 s hasta el proveedor); una campaña puede tardar minutos u horas.
+- **Aislamiento**: si cae Twilio, el push y el email siguen. Si hay una campaña enorme, el tráfico transaccional no se entera.
+- **Escalable a ráfagas**: una campaña dispara millones de envíos en minutos.
+- **Observable**: saber cuántos se enviaron, cuántos fallaron y por qué, por canal y proveedor.
+
+**Fuera de alcance**
+
+- Construir tu propio transporte push (conexiones persistentes a los teléfonos, como hizo Uber con RAMEN). Usamos APNs y FCM.
+- El modelo de ML que decide si una notificación vale la pena (lo mencionaremos).
+- El editor visual de campañas y la segmentación de audiencias.
+
+<Callout type="interview" title="Separa los dos mundos desde el principio">
+
+Pregunta: **¿el sistema maneja tanto transaccional como marketing?** Casi siempre la respuesta es sí, y ahí está la mitad del diseño. Tienen prioridades, volúmenes, reglas legales y tolerancias opuestas. Un OTP que llega en 10 minutos es un bug; una newsletter que llega en 10 minutos es normal. Decirlo temprano te da la justificación para colas separadas, límites distintos y pools de workers dedicados.
+
+</Callout>
+
+## Estimaciones
+
+Supuestos explícitos para una app de consumo grande:
+
+- **Supongamos 100 M de usuarios registrados**, con 1,5 dispositivos con push habilitado en promedio.
+- Volumen diario: **50 M push**, **20 M emails**, **2 M SMS** (el SMS es por lejos el canal más caro, así que se reserva para lo crítico).
+
+```text
+Total ≈ 72 M notificaciones/día
+Promedio ≈ 72 M / 86.400 s ≈ 830/s
+```
+
+El promedio engaña. Lo que dimensiona el sistema son los **picos**:
+
+- Una campaña a **30 M de usuarios** que marketing quiere entregar en 10 minutos: `30 M / 600 s = 50.000/s`, sesenta veces el promedio.
+- Casos reales lo confirman: Duolingo contó en QCon London 2024 cómo enviaron **4 M de push en los cinco segundos** de su anuncio del Super Bowl; el 95 % se publicó en 3,9 s<Sidenote>Es una tasa del orden de 800.000/s, sostenida unos segundos. Lo lograron con lotes, colas SQS y ~5.000 workers preaprovisionados a mano.</Sidenote>.
+
+**Almacenamiento**:
+
+```text
+Log de notificaciones: ~500 B por registro (ids, canal, estado, timestamps)
+72 M × 500 B ≈ 36 GB/día → con retención de 90 días ≈ 3,2 TB
+
+Tokens de dispositivo: 100 M × 1,5 × ~200 B ≈ 30 GB
+Preferencias: 100 M × ~200 B ≈ 20 GB  (cabe en una caché distribuida)
+```
+
+Conclusiones que guían el diseño: el log es una **serie temporal de escritura intensiva** (base wide-column), las preferencias y tokens son **lectura intensiva** (caché delante), y el throughput real lo limitan los **proveedores externos**, no tu base de datos.
+
+## Entidades y API
+
+Entidades principales: **Notificación** (la intención: "avisar a Ana que su pedido salió"), **Entrega** (un intento por canal y dispositivo), **Usuario/Preferencias**, **Dispositivo** (token push), **Plantilla** y **Campaña**.
+
+La API interna que usan los productores:
+
+```http
+POST /v1/notifications HTTP/1.1
+Idempotency-Key: order-81723-shipped
+Content-Type: application/json
+
+{
+  "user_id": "u_4821",
+  "category": "order_updates",
+  "priority": "high",
+  "template": "order_shipped",
+  "locale": "es-CL",
+  "data": { "order_id": "81723", "eta": "18:30" },
+  "channels": ["push", "email"],
+  "dedup_key": "order-81723-shipped",
+  "ttl_seconds": 3600
+}
+
+HTTP/1.1 202 Accepted
+{ "notification_id": "ntf_9f2c…", "status": "queued" }
+```
+
+Detalles que el entrevistador mira:
+
+- **`202 Accepted`**, no `200`: aceptamos el encargo y lo procesaremos de forma asíncrona. El productor no espera a APNs.
+- **`Idempotency-Key`**: si el servicio de pedidos reintenta la llamada porque se le cortó la conexión, recibe la misma respuesta y no se crea una segunda notificación (el patrón que popularizó Stripe).
+- **`ttl_seconds`**: "tu conductor llegó" no sirve una hora después. Si no se pudo entregar dentro del TTL, se descarta en vez de molestar tarde.
+- **`channels`** es una sugerencia: el orquestador decide según preferencias.
+
+El resto de la superficie:
+
+```http
+POST /v1/campaigns                 # segmento + plantilla + horario
+PUT  /v1/users/{id}/preferences    # categoría × canal, horas de silencio
+POST /v1/users/{id}/devices        # registrar o refrescar un token push
+POST /v1/webhooks/{provider}       # callbacks de estado (entregado, rebotado)
+GET  /v1/notifications/{id}        # estado y entregas, para soporte
+```
+
+## Modelo de datos
+
+```sql title="Postgres: configuración (lectura intensiva, con caché)"
+CREATE TABLE preferences (
+  user_id      TEXT,
+  category     TEXT,          -- 'marketing', 'social', 'security', 'order_updates'
+  channel      TEXT,          -- 'push', 'email', 'sms'
+  enabled      BOOLEAN NOT NULL,
+  PRIMARY KEY (user_id, category, channel)
+);
+
+CREATE TABLE devices (
+  token        TEXT PRIMARY KEY,
+  user_id      TEXT NOT NULL,
+  platform     TEXT NOT NULL,  -- 'ios', 'android', 'web'
+  app_version  TEXT,
+  last_seen_at TIMESTAMPTZ
+);
+
+CREATE TABLE templates (
+  name     TEXT,
+  version  INT,
+  locale   TEXT,
+  channel  TEXT,
+  body     TEXT,               -- con placeholders {{order_id}}
+  PRIMARY KEY (name, version, locale, channel)
+);
+```
+
+```sql title="Cassandra: log de entregas (serie temporal, escritura intensiva)"
+CREATE TABLE deliveries_by_user (
+  user_id          text,
+  created_at       timeuuid,
+  notification_id  text,
+  channel          text,
+  provider         text,
+  status           text,      -- queued | sent | delivered | failed | dropped
+  attempts         int,
+  error            text,
+  PRIMARY KEY ((user_id), created_at)
+) WITH CLUSTERING ORDER BY (created_at DESC)
+  AND default_time_to_live = 7776000;  -- 90 días
+```
+
+Y dos piezas en Redis, de vida corta:
+
+- **Dedup**: `SET dedup:{dedup_key} 1 NX EX 86400`. Si la clave ya existía, la notificación es un duplicado.
+- **Límites por usuario**: contadores por ventana (`INCR rl:{user}:{categoría}:{hora}` con TTL), o un *sliding window* si necesitas precisión. Ver [Rate limiter distribuido](/casos/rate-limiter).
+
+¿Por qué no todo en Postgres? Porque el log crece ~36 GB por día con un patrón "escribir una vez, leer poco y por usuario", que es exactamente lo que una base wide-column particionada por `user_id` hace barato. La configuración, en cambio, es pequeña, relacional y se lee en cada envío: Postgres más una caché.
+
+<Quiz
+  question="Una campaña de marketing a 30 M de usuarios entra al sistema al mismo tiempo que los códigos OTP de inicio de sesión. Todo pasa por una única cola FIFO. ¿Qué ocurre y cómo lo evitas?"
+  options={[
+    { text: 'Los OTP quedan detrás de millones de mensajes de marketing y llegan tarde; se separan colas (o topics) por prioridad y se dedican workers a la prioridad alta.', correct: true, why: 'Es el problema de head-of-line blocking. Colas separadas por prioridad, con capacidad reservada para la alta, garantizan que lo urgente no espere a lo masivo.' },
+    { text: 'No pasa nada porque las colas FIFO procesan en paralelo.', why: 'Aunque haya muchos consumidores, el orden FIFO hace que los OTP esperen a que se drenen los mensajes encolados antes que ellos.' },
+    { text: 'Se resuelve agregando más workers a la cola única.', why: 'Ayuda a drenar más rápido, pero el OTP sigue esperando su turno detrás de 30 M de mensajes. Y los proveedores limitan cuánto puedes enviar por segundo.' },
+    { text: 'Se resuelve enviando los OTP por email en vez de push.', why: 'Cambiar de canal no cambia la cola: el problema es la contención, no el canal.' },
+  ]}
+/>
+
+## Diseño de alto nivel
+
+<FlowDiagram
+  caption="De la llamada de un productor a la pantalla del usuario. Recorre los pasos."
+  nodes={[
+    { id: 'prod', label: 'Productores', kind: 'service', x: 0, y: 1, sub: 'pedidos, pagos, social' },
+    { id: 'camp', label: 'Campañas', kind: 'timer', x: 0, y: 2.5, sub: 'scheduler + segmentos' },
+    { id: 'api', label: 'Notification API', kind: 'gateway', x: 1, y: 1, sub: 'idempotencia, 202' },
+    { id: 'prefs', label: 'Preferencias', kind: 'db', x: 1, y: 0, sub: 'Postgres + caché' },
+    { id: 'orch', label: 'Orquestador', kind: 'workflow', x: 2, y: 1, sub: 'prefs · dedup · límites' },
+    { id: 'redis', label: 'Redis', kind: 'cache', x: 2, y: 0, sub: 'dedup, rate limit' },
+    { id: 'q', label: 'Kafka', kind: 'stream', x: 2, y: 2.5, sub: 'canal × prioridad' },
+    { id: 'wp', label: 'Worker push', kind: 'worker', x: 3, y: 1 },
+    { id: 'we', label: 'Worker email', kind: 'worker', x: 3, y: 2.5 },
+    { id: 'ws', label: 'Worker SMS', kind: 'worker', x: 3, y: 4 },
+    { id: 'apns', label: 'APNs / FCM', kind: 'external', x: 4, y: 1 },
+    { id: 'ses', label: 'SES', kind: 'mail', x: 4, y: 2.5 },
+    { id: 'tw', label: 'Twilio', kind: 'external', x: 4, y: 4 },
+    { id: 'dlq', label: 'DLQ', kind: 'archive', x: 2, y: 4, tone: 'warn', sub: 'revisión y redrive' },
+    { id: 'log', label: 'Log de entregas', kind: 'db', x: 4, y: 0, sub: 'Cassandra' },
+  ]}
+  edges={[
+    { from: 'prod', to: 'api', label: 'POST' },
+    { from: 'camp', to: 'q', label: 'lotes' },
+    { from: 'api', to: 'orch' },
+    { from: 'orch', to: 'prefs', dashed: true },
+    { from: 'orch', to: 'redis', dashed: true },
+    { from: 'orch', to: 'q' },
+    { from: 'q', to: 'wp' },
+    { from: 'q', to: 'we' },
+    { from: 'q', to: 'ws' },
+    { from: 'wp', to: 'apns' },
+    { from: 'we', to: 'ses' },
+    { from: 'ws', to: 'tw' },
+    { from: 'ws', to: 'dlq', dashed: true },
+    { from: 'wp', to: 'log', dashed: true, label: 'estado' },
+  ]}
+  steps={[
+    { title: 'El productor encarga', body: <>El servicio de pedidos llama <code>POST /v1/notifications</code> con una <code>Idempotency-Key</code>. La API valida, persiste la intención y responde <code>202</code> en milisegundos. Idealmente el productor publica vía <em>outbox</em> para no perder el aviso si se cae entre su commit y la llamada.</>, active: ['prod', 'api'], flow: ['prod-api'] },
+    { title: 'Decidir si, cómo y cuándo', body: <>El orquestador lee preferencias (desde caché), elige canales, descarta duplicados con <code>SET NX</code>, aplica límites por usuario y horas de silencio. Lo que no pasa queda registrado como <code>dropped</code> con su motivo.</>, active: ['orch', 'prefs', 'redis'], flow: ['api-orch', 'orch-prefs', 'orch-redis'] },
+    { title: 'Renderizar y encolar', body: <>Renderiza la plantilla en el idioma del usuario y publica un mensaje por canal en el topic que corresponde a su prioridad: <code>push.high</code>, <code>email.low</code>…</>, active: ['orch', 'q'], flow: ['orch-q'] },
+    { title: 'Workers por canal', body: <>Cada canal tiene su pool de workers. El de push busca los tokens del usuario y llama a APNs o FCM con TTL y collapse id; un <code>410 Unregistered</code> borra el token.</>, active: ['q', 'wp', 'apns'], flow: ['q-wp', 'wp-apns'] },
+    { title: 'Email y SMS, aislados', body: <>Si Twilio está caído, solo se acumula el topic de SMS. Push y email siguen fluyendo: es un <em>bulkhead</em>.</>, active: ['q', 'we', 'ses', 'ws', 'tw'], flow: ['q-we', 'we-ses', 'q-ws', 'ws-tw'] },
+    { title: 'Fallos: backoff y DLQ', body: <>Un error transitorio (503, 429, timeout) se reintenta con backoff exponencial y jitter. Tras N intentos, el mensaje va a la cola de mensajes muertos para revisión humana o redrive.</>, active: ['ws', 'dlq'], flow: ['ws-dlq'] },
+    { title: 'Estado y métricas', body: <>Los workers escriben cada intento en el log; los webhooks de los proveedores actualizan entregado, rebotado o queja. De ahí salen dashboards y alertas por canal.</>, active: ['wp', 'log'], flow: ['wp-log'] },
+    { title: 'Campañas por otra puerta', body: <>El scheduler expande el segmento en lotes de miles de usuarios y los publica en los topics de prioridad baja, con un ritmo controlado para no saturar a los proveedores.</>, active: ['camp', 'q'], flow: ['camp-q'] },
+  ]}
+/>
+
+El patrón de fondo: **la API acepta rápido y todo lo demás es asíncrono**. Los productores no conocen canales, proveedores ni reintentos; solo dicen "avisa a este usuario de este evento". Eso desacopla a decenas de equipos de los detalles de APNs, y centraliza las reglas que protegen al usuario de recibir de más.
+
+## Profundizaciones
+
+### 1. Fiabilidad: al menos una vez, deduplicación e idempotencia
+
+Empieza por aceptar una verdad incómoda: **no existe "exactamente una vez" cuando hay un proveedor externo de por medio**. Imagina que tu worker llama a APNs, APNs entrega el push, y la respuesta se pierde por un timeout. Tu worker no sabe si se envió. Si reintenta, el usuario puede recibir dos. Si no reintenta, puede no recibir ninguno. Para notificaciones, casi siempre prefieres **al menos una vez** y luego reduces los duplicados en cada capa:
+
+1. **En la entrada**: `Idempotency-Key` en la API. El productor puede reintentar sin miedo.
+2. **En el orquestador**: una `dedup_key` de negocio (`order-81723-shipped`) con `SET NX EX`. Si dos servicios distintos disparan "pedido enviado", solo pasa uno.
+3. **En el worker**: una máquina de estados por entrega (`queued → sending → sent | failed`) con actualización condicional. Si el mensaje se procesa dos veces porque Kafka lo reentregó tras un rebalanceo, el segundo worker ve que ya está `sent` y no lo vuelve a enviar.
+4. **En el proveedor**: `apns-collapse-id` (APNs) o `collapse_key` (FCM) hacen que un segundo push con la misma clave **reemplace** al primero en la pantalla, en vez de apilarse.
+
+<CodeTabs>
+
+```java title="Java"
+// PushWorker.java
+void handle(PushMessage msg) {
+    // 1) ¿Ya expiró? Mejor no enviar que enviar tarde.
+    if (Instant.now().isAfter(msg.expiresAt())) {
+        markDropped(msg, "expired");
+        return;
+    }
+
+    // 2) Reclamar la entrega de forma atómica: solo un worker gana.
+    int claimed = jdbc.update("""
+        UPDATE deliveries SET status = 'sending', attempts = attempts + 1
+         WHERE id = ? AND status IN ('queued', 'retrying')""", msg.deliveryId());
+    if (claimed == 0) return; // otro worker ya la tomó o ya se envió
+
+    try {
+        apns.send(msg.token(), msg.payload(), new ApnsOptions(
+            msg.dedupKey(),                              // duplicados se pisan en pantalla
+            msg.expiresAt().getEpochSecond(),
+            msg.priority() == Priority.HIGH ? 10 : 5));
+        markSent(msg);
+    } catch (ApnsException e) {
+        if (e.status() == 410) removeToken(msg.token());   // token muerto
+        else if (e.isPermanent()) markFailed(msg, e);      // 400: no reintentar
+        else scheduleRetry(msg, e);                        // 429, 5xx, timeout
+    }
+}
+```
+
+```ts title="TypeScript"
+// push-worker.ts
+async function handle(msg: PushMessage) {
+  // 1) ¿Ya expiró? Mejor no enviar que enviar tarde.
+  if (Date.now() > msg.expiresAt) return markDropped(msg, 'expired')
+
+  // 2) Reclamar la entrega de forma atómica: solo un worker gana.
+  const claimed = await db.update('deliveries')
+    .set({ status: 'sending', attempts: sql`attempts + 1` })
+    .where({ id: msg.deliveryId, status: ['queued', 'retrying'] })
+  if (claimed === 0) return // otro worker ya la tomó o ya se envió
+
+  try {
+    await apns.send(msg.token, msg.payload, {
+      collapseId: msg.dedupKey,              // duplicados se pisan en pantalla
+      expiration: Math.floor(msg.expiresAt / 1000),
+      priority: msg.priority === 'high' ? 10 : 5,
+    })
+    await markSent(msg)
+  } catch (err) {
+    if (isUnregistered(err)) return removeToken(msg.token)   // 410: token muerto
+    if (isPermanent(err)) return markFailed(msg, err)        // 400: no reintentar
+    await scheduleRetry(msg, err)                            // 429, 5xx, timeout
+  }
+}
+```
+
+</CodeTabs>
+
+Clasificar errores es tan importante como reintentar. Un `400 BadDeviceToken` no se arregla esperando: reintentarlo solo quema cuota. Un `429` o un `503` sí merecen otro intento, más tarde.
+
+<Callout type="note" title="El outbox del productor">
+
+La API idempotente no te salva si el servicio de pedidos hace commit de "pedido enviado" y se cae antes de llamar a la API. Para que el aviso no se pierda, el productor escribe el evento en una tabla *outbox* en la misma transacción y un relay lo publica después. Lo verás en detalle en [Sagas y outbox](/arquitectura/sagas-y-outbox).
+
+</Callout>
+
+### 2. Colas, prioridades, reintentos y la DLQ
+
+Juega con el simulador. Envía notificaciones de distintas prioridades, lanza una ráfaga, reenvía el mismo evento (dedup) y sube la tasa de fallo del proveedor para ver cómo los mensajes rebotan al backoff y, tras agotar intentos, terminan en la DLQ.
+
+<NotificationPipeline />
+
+Tres decisiones de diseño se ven ahí:
+
+**Colas separadas por canal y por prioridad.** Por canal, para aislar fallos (un proveedor caído solo llena su cola). Por prioridad, para que la alta nunca espere detrás de la baja. Uber hace algo parecido en su plataforma de push: clasifica los mensajes en prioridad alta, media y baja, y la alta recibe reintentos en el servidor y replicación entre regiones<Sidenote>"Uber's Real-Time Push Platform", 2020. Cada mensaje tiene además un TTL de segundos a 30 minutos, y se reintenta hasta que expira.</Sidenote>.
+
+Cuidado con la **prioridad estricta** (el simulador la usa): si siempre atiendes la alta primero, la baja puede morir de inanición durante un pico. En producción es más sano dedicar **pools de workers** por prioridad (por ejemplo, 50 % de la capacidad reservada a alta aunque esté ociosa) o usar colas ponderadas.
+
+**Reintentos con backoff exponencial y jitter.** Si un proveedor falla y todos los workers reintentan cada 1 s, lo rematas cuando intenta recuperarse. Duplicar la espera en cada intento (1, 2, 4, 8 s…) con un tope, y aleatorizarla (*jitter*), reparte la carga en el tiempo. El artículo de AWS sobre backoff y jitter lo muestra con simulaciones: sin jitter, los reintentos llegan en oleadas sincronizadas.
+
+```text
+espera(n) = aleatorio(0, min(tope, base × 2^n))     // "full jitter"
+base = 1 s, tope = 5 min, intentos máx. = 8, y nunca más allá del TTL
+```
+
+**Dead letter queue.** Tras N intentos el mensaje no se descarta en silencio: va a una DLQ con el último error. Ahí alguien (o una alarma) decide si era un bug (se corrige y se hace *redrive*) o basura (se purga). En SQS esto es nativo con `maxReceiveCount`. Kafka no tiene reintentos con demora ni DLQ incorporados; Uber publicó el patrón de **topics de reintento** (`retry-1`, `retry-2`… y finalmente `dlq`), cada uno con su consumidor que espera antes de reprocesar, para no bloquear la partición principal con un mensaje problemático.
+
+<Compare>
+<Option title="Kafka" verdict="Volumen y orden">
+
+Particionando por `user_id` conservas orden por usuario y throughput enorme, con retención para reprocesar. Pero reintentos con demora y DLQ los construyes tú (topics de reintento), y un mensaje lento bloquea su partición.
+
+</Option>
+<Option title="SQS / RabbitMQ" verdict="Semántica de tareas">
+
+Cada mensaje se confirma individualmente, hay *visibility timeout*, demora por mensaje y DLQ nativa. Más simple para "tareas que pueden fallar". Menos orden (salvo colas FIFO, con menos throughput) y sin replay.
+
+</Option>
+</Compare>
+
+<Quiz
+  question="El proveedor de SMS responde 503 durante 2 minutos. Tus workers reintentan cada mensaje fallido inmediatamente, sin espera. ¿Qué es lo más probable que pase?"
+  options={[
+    { text: 'Se genera una tormenta de reintentos que mantiene al proveedor saturado, gasta tu cuota y puede hacer que te limiten (429) incluso cuando se recupere.', correct: true, why: 'Los reintentos sin backoff multiplican la carga justo cuando el proveedor está débil. Backoff exponencial con jitter, más un circuit breaker, le dan espacio para recuperarse.' },
+    { text: 'Nada grave: los mensajes se entregan apenas el proveedor vuelve.', why: 'Mientras tanto, cada mensaje se reintenta decenas de veces, y si hay un límite de intentos, muchos acabarán en la DLQ por un fallo que era transitorio.' },
+    { text: 'Los mensajes se duplican en el teléfono del usuario.', why: 'Un 503 indica que el proveedor no aceptó el mensaje; el problema principal no es la duplicación sino la sobrecarga.' },
+    { text: 'Los push también dejan de funcionar.', why: 'Solo si comparten cola y workers. Con colas y pools por canal (bulkhead), el push sigue intacto.' },
+  ]}
+/>
+
+### 3. Preferencias, límites y no ser molesto
+
+Técnicamente es fácil enviar mil notificaciones a un usuario. El sistema tiene que impedirlo. Este es el aspecto que más distingue a un candidato senior.
+
+**Modelo de preferencias.** Una matriz *categoría × canal* por usuario, con valores por defecto por categoría. Las de seguridad (OTP, inicio de sesión sospechoso) suelen ser obligatorias; las de marketing, opcionales y **apagadas por defecto** donde la ley lo exige. El orquestador consulta esta matriz en cada envío, así que va en caché con invalidación al cambiar.
+
+**Obligaciones legales y de los proveedores.** Para email masivo, Gmail exige desde febrero de 2024 a quienes envían más de 5.000 mensajes diarios que los correos de marketing tengan **baja con un clic** (cabeceras `List-Unsubscribe` y `List-Unsubscribe-Post`, RFC 8058) y una tasa de spam reportado bajo 0,3 %. Si no cumples, tus correos transaccionales también terminan en spam: comparten la reputación del dominio. Por eso es común enviar marketing desde un subdominio distinto. Para SMS, la mayoría de los países exigen consentimiento explícito.
+
+**Límites de frecuencia por usuario.** Un tope por categoría y ventana ("como máximo 3 push sociales por hora, 10 por día"), con la prioridad alta exenta. Lo que excede el límite se descarta o se **agrega**: "Ana y 12 personas más reaccionaron a tu foto" en lugar de 13 avisos.
+
+**Horas de silencio y momento óptimo.** Respetar la zona horaria del usuario: lo no urgente que cae a las 3 a. m. se reprograma para la mañana. LinkedIn fue más allá: su ATC agrega, elige canal y momento de envío según la probabilidad de que el miembro interactúe o desactive las notificaciones, y reportan que las quejas de los miembros bajaron a la mitad<Sidenote>Procesa más de mil millones de solicitudes al día sobre Samza, con el estado de cada miembro en RocksDB local particionado por ID de miembro.</Sidenote>.
+
+<Callout type="idea">
+
+El límite por usuario no es solo cortesía: es **defensa en profundidad**. Si un bug en un productor dispara el mismo evento en bucle, el dedup atrapa las repeticiones exactas y el rate limit atrapa las variaciones. Sin él, el bug llega a millones de teléfonos.
+
+</Callout>
+
+### 4. Push en detalle: tokens, TTL, collapse y prioridades
+
+El push tiene particularidades que conviene conocer de primera mano.
+
+**Tokens.** Cada instalación de la app obtiene un token del sistema operativo y lo registra en tu backend (`POST /devices`). Los tokens cambian (reinstalación, restauración) y mueren (desinstalación). APNs responde `410 Unregistered` cuando un token ya no es válido para tu app: bórralo en ese momento. Además, guarda `last_seen_at` y purga los que no se refrescan hace meses; enviar a tokens muertos desperdicia cuota y ensucia tus métricas.
+
+**APNs** (HTTP/2, autenticación con JWT):
+
+- `apns-priority: 10` para entrega inmediata (alertas visibles) y `5` para entregas que pueden esperar a que convenga a la batería; los push silenciosos de fondo deben usar `5`.
+- `apns-expiration`: hasta cuándo APNs guarda y reintenta si el teléfono está apagado. `0` significa "intenta una vez y descarta".
+- `apns-collapse-id` (máximo 64 bytes): los avisos con el mismo id se reemplazan entre sí.
+- Payload máximo de 4 KB para notificaciones normales.
+
+**FCM**:
+
+- Prioridad `normal` (puede demorarse en modo Doze) o `high` (despierta el dispositivo). Si una app abusa de `high` para mensajes que no muestran nada al usuario, FCM puede degradarlos a normal.
+- TTL de 0 a 28 días (por defecto, 4 semanas). TTL 0 = entregar ahora o descartar.
+- Mensajes **colapsables**: FCM guarda como máximo **4 claves de colapso distintas** por dispositivo. Y para los no colapsables, si un dispositivo Android acumula 100 pendientes, FCM los descarta todos y avisa a la app para que haga una sincronización completa.
+
+La lección de diseño: **el payload de push es un aviso, no la fuente de verdad**. Incluye lo justo para mostrar el texto y un id, y que la app consulte tu API al abrirse. Así no importa si un push se colapsó, expiró o llegó dos veces.
+
+<Quiz
+  question="Envías 'tu conductor está a 3 min', luego 'a 1 min' y luego 'llegó'. El teléfono estuvo sin señal y al reconectarse recibe los tres. ¿Qué mecanismo hace que el usuario vea solo el último?"
+  options={[
+    { text: 'Usar la misma clave de colapso (apns-collapse-id o collapse_key) para los tres avisos del viaje.', correct: true, why: 'Con la misma clave, cada aviso reemplaza al anterior en el almacenamiento del proveedor y en la pantalla. Complementar con TTL corto evita entregar avisos que ya no tienen sentido.' },
+    { text: 'Deduplicar en el orquestador con SET NX.', why: 'Son tres eventos distintos con contenido distinto; el dedup por clave de negocio los dejaría pasar (y está bien que pasen al proveedor).' },
+    { text: 'Enviarlos con prioridad alta.', why: 'La prioridad decide qué tan rápido se intenta entregar, no si un aviso reemplaza a otro.' },
+    { text: 'Ponerles un rate limit de 1 por minuto.', why: 'Retrasaría o descartaría avisos válidos sin garantizar que el usuario vea el más reciente.' },
+  ]}
+/>
+
+## Cuellos de botella y trade-offs
+
+| Decisión | Ganas | Pagas |
+|---|---|---|
+| API asíncrona (`202`) | Productores desacoplados y rápidos | Estado eventual; hay que exponer consulta de estado |
+| Colas por canal y prioridad | Aislamiento de fallos, lo urgente no espera | Más topics, más pools que operar y dimensionar |
+| Al menos una vez + dedup | Nada crítico se pierde | Duplicados raros pero posibles; claves de dedup que mantener |
+| Reintentos con backoff | Sobrevive a caídas transitorias | Latencia en el peor caso; hay que respetar el TTL |
+| Rate limit y agregación por usuario | Menos quejas y desinstalaciones | Algunos avisos legítimos se retrasan o agrupan |
+| Campañas en lotes con ritmo | No satura proveedores ni tu infraestructura | Una campaña tarda minutos u horas en completarse |
+
+Cuellos de botella típicos y cómo atacarlos:
+
+- **Límites de los proveedores.** Tu throughput real lo marcan APNs, FCM, SES y Twilio. Pon un *token bucket* por proveedor en los workers y un *circuit breaker* que deje de llamar cuando la tasa de error se dispara. Para SMS crítico, ten un **segundo proveedor** y conmuta.
+- **Expansión de campañas.** Resolver un segmento de 30 M de usuarios con sus preferencias y tokens es un job por lotes: particiónalo por rango de `user_id`, procésalo en paralelo y publica a ritmo controlado.
+- **Lecturas de preferencias.** Cada notificación lee preferencias y tokens: van en caché (Redis) con TTL corto e invalidación al editar.
+- **El log como punto caliente.** Escribe el estado de forma asíncrona y en lotes; nunca bloquees el envío por no poder escribir el log.
+
+## Qué espera el entrevistador
+
+<Callout type="interview" title="Según el nivel">
+
+**Mid.** API asíncrona con cola, workers por canal, integración con APNs/FCM/SES/Twilio, plantillas y preferencias básicas, reintentos con DLQ. Estimaciones con la diferencia entre promedio y pico.
+
+**Senior.** Transaccional vs campañas con colas y pools separados por prioridad y canal (bulkhead). Semántica al menos una vez explicada con el ejemplo del timeout del proveedor, y dedup en varias capas (idempotency key, dedup key, máquina de estados, collapse id). Backoff exponencial con jitter, clasificación de errores, TTL, higiene de tokens (410). Rate limit por usuario y horas de silencio.
+
+**Staff.** La plataforma como producto: "las 5 cosas correctas", agregación y elección de canal guiadas por relevancia, presupuesto de notificaciones por usuario, métricas de negocio (opt-outs, desinstalaciones, quejas) junto a las técnicas. Reputación de email (subdominios, baja con un clic, umbral de spam), redundancia de proveedores de SMS, multi-región para la prioridad alta, y gobernanza: quién puede crear categorías nuevas y cómo evitar que cada equipo inunde al usuario.
+
+</Callout>
+
+<Takeaways>
+
+- La API **acepta rápido (202) y todo lo demás es asíncrono**: los productores no conocen canales, proveedores ni reintentos.
+- **Colas separadas por canal y prioridad**: un proveedor caído no afecta a los demás y un OTP nunca espera detrás de una campaña.
+- No hay "exactamente una vez" con proveedores externos: haz **al menos una vez** y deduplica en capas (idempotency key, dedup key, estado condicional, collapse id).
+- **Backoff exponencial con jitter**, errores clasificados (permanentes vs transitorios), TTL respetado y **DLQ** con redrive.
+- Proteger al usuario es parte del sistema: **preferencias, límites por usuario, agregación y horas de silencio**.
+- El push es un **aviso**, no la fuente de verdad; cuida los tokens y usa las claves de colapso.
+
+</Takeaways>
+
+## Fuentes y lecturas
+
+- Alex Xu, *System Design Interview – An Insider's Guide*, cap. "Design a Notification System" (versión en línea en [ByteByteGo](https://bytebytego.com/courses/system-design-interview/design-a-notification-system)).
+- [Air Traffic Controller: Member-First Notifications at LinkedIn](https://www.linkedin.com/blog/engineering/messaging-notifications/air-traffic-controller-member-first-notifications-at-linkedin) — agregación, elección de canal, límites y momento de envío.
+- [Uber's Real-Time Push Platform](https://www.uber.com/en/blog/real-time-push-platform/) — prioridades, TTL y reintentos en RAMEN.
+- [Rapid Event Notification System at Netflix](https://netflixtechblog.com/rapid-event-notification-system-at-netflix-6deb1d2b57d1) — priorización de eventos y entrega best-effort por plataforma.
+- [Duolingo: 4 millones de push en el Super Bowl](https://www.infoq.com/news/2024/04/qcon-london-duolingo-super-bowl/) — resumen de InfoQ de la charla en QCon London 2024.
+- Apple, [Sending notification requests to APNs](https://developer.apple.com/documentation/usernotifications/sending-notification-requests-to-apns) — cabeceras de prioridad, expiración y collapse id.
+- Firebase, [Android message priority](https://firebase.google.com/docs/cloud-messaging/android/message-priority), [Collapsible message types](https://firebase.google.com/docs/cloud-messaging/customize-messages/collapsible-message-types) y [Setting message lifespan](https://firebase.google.com/docs/cloud-messaging/customize-messages/setting-message-lifespan).
+- Stripe, [Designing robust and predictable APIs with idempotency](https://stripe.com/blog/idempotency).
+- AWS Architecture Blog, [Exponential Backoff and Jitter](https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter/).
+- Uber Engineering, [Building Reliable Reprocessing and Dead Letter Queues with Apache Kafka](https://www.uber.com/blog/reliable-reprocessing/).
+- AWS, [Using dead-letter queues in Amazon SQS](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-dead-letter-queues.html).
+- Google, [Email sender guidelines](https://support.google.com/a/answer/81126) y [RFC 8058: Signaling One-Click Functionality for List Email Headers](https://www.rfc-editor.org/rfc/rfc8058).
+- En estos apuntes: [Colas y streaming](/system-design/colas-y-streaming), [Confiabilidad](/system-design/confiabilidad), [Rate limiter distribuido](/casos/rate-limiter), [Sagas y outbox](/arquitectura/sagas-y-outbox).

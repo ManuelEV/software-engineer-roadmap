@@ -1,0 +1,446 @@
+import { MethodWalkthrough } from '../../components/widgets/entrevistas/MethodWalkthrough'
+import { ComplexityBudget } from '../../components/widgets/entrevistas/ComplexityBudget'
+
+En una entrevista de live coding no gana quien conoce más algoritmos, sino quien muestra mejor cómo piensa con el tiempo que tiene. Dos candidatos pueden escribir exactamente el mismo código y recibir evaluaciones opuestas: uno aclaró el problema, descartó una fuerza bruta con números, acordó el enfoque, narró mientras programaba y encontró su propio bug probando a mano; el otro escribió en silencio durante 25 minutos y dijo "creo que funciona".
+
+Este tema es el método que usa el primero. Son siete pasos que funcionan con cualquier problema, una forma práctica de leer las restricciones para saber qué complejidad te piden, una tabla para reconocer el patrón desde el enunciado y qué decir cuando te trabas. Los temas siguientes de la unidad son los patrones; este es la forma de usarlos.
+
+<Sketch
+  width={640}
+  height={290}
+  caption="La forma de una buena ronda: los primeros minutos se habla y se anota, sin código. El código empieza después de un acuerdo explícito."
+  items={[
+    { type: 'text', x: 24, y: 30, text: 'una ronda de 45 minutos', size: 20, tone: 'pencil' },
+    { type: 'line', points: [[40, 96], [40, 86], [260, 86], [260, 96]], tone: 'pencil' },
+    { type: 'text', x: 40, y: 74, text: 'hablar y anotar, sin código', size: 20, tone: 'pencil', with: true },
+    { type: 'cells', x: 40, y: 104, values: [1, 2, 3, 4, 5], size: 44, font: 'hand' },
+    { type: 'text', x: 40, y: 186, text: ['entender · aclarar · ejemplos', 'fuerza bruta · optimizar'], size: 18, tone: 'pencil' },
+    { type: 'line', points: [[345, 60], [345, 240]], dashed: true, tone: 'line' },
+    { type: 'text', x: 352, y: 40, text: '~min 12', size: 18, tone: 'pencil', with: true },
+    { type: 'text', x: 345, y: 272, text: '¿te parece?', size: 20, anchor: 'middle', tone: 'line' },
+    { type: 'check', x: 418, y: 264, size: 22 },
+    { type: 'line', points: [[420, 96], [420, 86], [508, 86], [508, 96]], tone: 'line' },
+    { type: 'text', x: 420, y: 74, text: 'código', size: 20, tone: 'line', with: true },
+    { type: 'cells', x: 420, y: 104, values: [6, 7], size: 44, font: 'hand', states: ['line', 'line'] },
+    { type: 'text', x: 420, y: 186, text: ['codificar narrando', 'probar a mano'], size: 18, tone: 'pencil' },
+  ]}
+/>
+
+## El método en siete pasos
+
+Hay varios marcos conocidos para esto. CodePath enseña **UMPIRE** (entender, buscar un problema parecido, planear, implementar, revisar y evaluar), y el Tech Interview Handbook organiza su guía en antes, durante y después de programar. Todos dicen lo mismo con otras palabras: no programes hasta saber qué vas a programar, y no digas "listo" hasta haberlo probado. Esta es una versión en siete pasos, pensada para decirla en voz alta.
+
+<Steps>
+<Step title="Escuchar y reformular">
+
+Escucha el enunciado completo sin interrumpir, y repítelo con tus palabras: "Entonces recibo una lista de enteros y devuelvo true si algún valor se repite, ¿correcto?". Escribe la firma de la función. Treinta segundos que evitan resolver el problema equivocado.
+
+</Step>
+<Step title="Aclarar">
+
+Pregunta lo que cambia la solución: **tamaño de n** (decide la complejidad), **duplicados**, **negativos o ceros**, **entrada vacía**, si los datos vienen **ordenados**, si puedes **modificar la entrada** y qué devolver si no hay respuesta. No preguntes por preguntar: cada pregunta debería poder cambiar tu código.
+
+</Step>
+<Step title="Hacer ejemplos propios">
+
+Uno normal, uno que rompa la idea ingenua y los bordes (vacío, un elemento, todo igual). Escríbelos: son los tests que vas a correr en el paso 7. A menudo el patrón aparece mientras resuelves un ejemplo a mano.
+
+</Step>
+<Step title="Fuerza bruta en voz alta">
+
+Di la solución más directa y su Big-O, **sin programarla**: "Comparar todos los pares es O(n²); con n = 10⁵ son 10¹⁰ operaciones, no alcanza". Te asegura una respuesta correcta, le da al entrevistador algo que evaluar y es el punto de partida para optimizar.
+
+</Step>
+<Step title="Optimizar">
+
+Pregúntate qué trabajo estás repitiendo y qué estructura lo evita: un diccionario para búsquedas O(1) (`HashMap` en Java, `dict` en Python), ordenar para agrupar, dos punteros en vez de dos bucles, un heap para el mínimo (`PriorityQueue` en Java). Compara las alternativas en tiempo y memoria y **pide acuerdo antes de programar**: "¿Te parece que vaya con el conjunto de vistos?".
+
+</Step>
+<Step title="Codificar narrando">
+
+Programa contando la intención de cada bloque, no cada carácter: "Ahora recorro los números; si ya está en el conjunto, corto". Nombres claros, funciones auxiliares si algo se repite, y si algo es tedioso pero obvio (parsear la entrada), pregunta si puedes asumirlo.
+
+</Step>
+<Step title="Probar y analizar">
+
+Traza tu código a mano con uno de tus ejemplos, línea por línea, con los valores reales de las variables. Después los bordes. Corrige lo que encuentres en voz alta. Termina con la complejidad final de tiempo y memoria, y una alternativa con su trade-off.
+
+</Step>
+</Steps>
+
+Mira el método aplicado a dos problemas clásicos. Cada momento muestra lo que dirías, lo que te responde el entrevistador, lo que anotarías en la pizarra y, en la etapa de programar, la línea que estás escribiendo. La prueba final es una ejecución real del algoritmo sobre el ejemplo.
+
+<MethodWalkthrough />
+
+Fíjate en el reparto del tiempo: en este recorrido no hay código hasta el minuto 12, más o menos. Parece mucho, pero es lo que hace que el código salga de una vez y sin reescrituras. Quien empieza a programar en el minuto 2 suele terminar reescribiendo en el minuto 20.
+
+## Big-O práctico: las restricciones te dicen la respuesta
+
+El dato más útil del enunciado suele estar al final, en letra chica: `1 <= nums.length <= 10^5`. Esa línea te dice qué complejidad necesitas antes de pensar el algoritmo.
+
+La regla aproximada parte de un **supuesto**: una computadora hace del orden de **10⁸ operaciones simples por segundo** (en C++ o Java; en Python, más cerca de 10⁷). Los jueces en línea suelen dar uno o dos segundos. Entonces basta con calcular cuántas operaciones hace tu algoritmo con el n máximo:
+
+| n hasta | Complejidad que cabe | Algoritmos típicos |
+|---|---|---|
+| ~10 | O(n!) | todas las permutaciones |
+| ~20 | O(2ⁿ) | todos los subconjuntos, backtracking |
+| ~500 | O(n³) | DP sobre intervalos, tres bucles anidados |
+| ~5.000 | O(n²) | DP de dos dimensiones, todos los pares |
+| ~10⁶ | O(n log n) | ordenar, heaps, búsqueda binaria dentro de un bucle |
+| ~10⁸ | O(n) | una pasada: hashing, two pointers, sliding window |
+| más | O(log n) u O(1) | búsqueda binaria sobre la respuesta, una fórmula |
+
+La lectura más frecuente: **n ≤ 10⁵ significa que necesitas O(n log n) o mejor**, porque O(n²) serían 10¹⁰ operaciones, cien veces el presupuesto. Y al revés: **n ≤ 20 es casi una invitación a algo exponencial**, porque 2²⁰ es apenas un millón.
+
+<ComplexityBudget />
+
+Tres matices para no aplicar la tabla a ciegas:
+
+- **Es un orden de magnitud, no un límite exacto.** Las constantes importan: un O(n log n) con un hash pesado puede ser más lento que un O(n²) muy simple para n = 1.000. Si estás en la frontera, dilo: "es justo, pero las operaciones son baratas".
+- **En una entrevista conversada, la restricción no siempre viene escrita.** Pregúntala: "¿De qué tamaño es la entrada? ¿Miles o millones?". La respuesta te ahorra optimizar de más o de menos.
+- **La memoria también tiene presupuesto.** 10⁷ enteros en un arreglo son unos 40 MB en C++ o en un `int[]` de Java, pero en una lista de Python cada entero es un objeto y ocupa varias veces más. Lo mismo pasa en Java con un `HashSet<Integer>` o una `List<Integer>`: cada valor es un objeto.
+
+<Quiz
+  question="El enunciado dice 1 <= n <= 2 · 10^5 y tu primera idea es comparar cada elemento con todos los siguientes. ¿Qué concluyes antes de programar?"
+  options={[
+    { text: 'Que está bien, porque 2 · 10⁵ no es tanto.', why: 'Con O(n²) son unos 4 · 10¹⁰ pasos (la mitad si solo comparas pares i < j): cientos de veces lo que cabe en un segundo con el supuesto de 10⁸ por segundo.' },
+    { text: 'Que la fuerza bruta no alcanza y debes buscar algo O(n log n) o mejor: ordenar, un diccionario o dos punteros.', correct: true, why: 'Exacto. La restricción descarta O(n²) y te orienta a ordenar (n log n ≈ 3,6 · 10⁶) o a una pasada con hashing. Dilo en voz alta: muestra que leíste el enunciado completo.' },
+    { text: 'Que hay que usar programación dinámica.', why: 'El tamaño de n te dice cuánto puedes gastar, no qué técnica usar. La técnica sale de la forma del problema.' },
+    { text: 'Que conviene programarla igual y optimizar si da timeout.', why: 'En una entrevista eso consume el tiempo que necesitas para la solución buena. La fuerza bruta se dice, no se programa, cuando ya sabes que no alcanza.' },
+  ]}
+/>
+
+## Del enunciado al patrón
+
+Reconocer el patrón es la mitad del problema. Con práctica, ciertas palabras del enunciado disparan una idea casi automática. Esta tabla es el resumen de los temas de patrones de la unidad:
+
+| Si en el enunciado ves… | Piensa en… | Tema |
+|---|---|---|
+| "¿ya apareció?", contar frecuencias, pares que suman un objetivo, agrupar | diccionario o conjunto (`HashMap`, `HashSet`) | [Arreglos y hashing](/casos/arrays-y-hashing) |
+| suma de un subarreglo, muchas consultas sobre rangos | sumas de prefijos | [Arreglos y hashing](/casos/arrays-y-hashing) |
+| arreglo **ordenado** y pares o tripletas; palíndromos | two pointers | [Two pointers y sliding window](/casos/two-pointers-y-sliding-window) |
+| subarreglo o subcadena **contigua** "más larga" o "más corta" que cumple algo | sliding window | [Two pointers y sliding window](/casos/two-pointers-y-sliding-window) |
+| paréntesis, deshacer, "el siguiente mayor" | pila, pila monótona | [Pilas y colas](/casos/pilas-y-colas) |
+| datos ordenados o monótonos, "el mínimo valor que cumple", n o valores enormes | búsqueda binaria | [Búsqueda binaria](/casos/busqueda-binaria) |
+| lista enlazada, ciclos, la mitad de la lista | punteros rápido y lento, nodo ficticio | [Listas enlazadas](/casos/listas-enlazadas) |
+| árbol, jerarquía, "por niveles" | DFS recursivo o BFS | [Árboles](/casos/arboles) |
+| "los k mayores", "los k más frecuentes", mediana de un flujo | heap | [Heaps y top-K](/casos/heaps-y-top-k) |
+| grilla, conexiones, dependencias, camino más corto | BFS, DFS, orden topológico | [Grafos](/casos/grafos) |
+| "todas las combinaciones", "todas las permutaciones", n ≤ 20 | backtracking | [Backtracking](/casos/backtracking) |
+| "de cuántas formas", "costo mínimo", decisiones que se repiten | programación dinámica | [Programación dinámica](/casos/programacion-dinamica) |
+| intervalos, reuniones, horarios que se solapan | ordenar y barrer, greedy | [Intervalos y greedy](/casos/intervalos-y-greedy) |
+
+Cuando ninguna fila encaja, vuelve a la fuerza bruta y pregúntate qué trabajo repite: la respuesta casi siempre es una de estas estructuras.
+
+## Un problema de punta a punta: Contains Duplicate
+
+Veamos el método completo, por escrito, con el primer problema del widget.
+
+**Enunciado.** Dado un arreglo de enteros `nums`, devuelve `true` si algún valor aparece al menos dos veces y `false` si todos son distintos ([LeetCode 217](https://leetcode.com/problems/contains-duplicate/)). Por ejemplo, `[3, 1, 4, 1]` → `true` y `[1, 2, 3]` → `false`.
+
+**Qué aclarar.** El tamaño de n (en LeetCode, hasta 10⁵), si hay negativos (sí, eso descarta usar los valores como índices de un arreglo), si puede venir vacío y si puedes modificar la entrada. Esa última respuesta decide entre las dos soluciones buenas.
+
+**Fuerza bruta.** Comparar cada par `i < j`. Son n(n−1)/2 comparaciones: **O(n²) tiempo y O(1) memoria**. Con n = 10⁵, unos 5 · 10⁹ pares: no alcanza.
+
+**La idea clave.** El trabajo repetido es "buscar si ya vi este valor", que en la fuerza bruta cuesta O(n) cada vez. Hay dos formas de abaratarlo:
+
+1. **Ordenar**: los valores iguales quedan juntos y basta comparar vecinos. O(n log n), y ordenar en su lugar no usa memoria extra, pero modifica la entrada.
+2. **Un conjunto de vistos** (`HashSet` en Java, `set` en Python, `Set` en TypeScript): cada consulta y cada inserción cuestan O(1) en promedio. O(n) tiempo y O(n) memoria.
+
+La señal para reconocerlo: **si la pregunta es "¿ya apareció?" o "¿cuántas veces?", piensa en un conjunto o un diccionario.** Es la idea central del tema [Arreglos y hashing](/casos/arrays-y-hashing).
+
+<CodeTabs>
+
+```java title="Java"
+import java.util.Arrays;
+import java.util.HashSet;
+import java.util.Set;
+
+class Solution {
+    public boolean containsDuplicateBrute(int[] nums) {
+        // O(n²) tiempo, O(1) memoria
+        for (int i = 0; i < nums.length; i++) {
+            for (int j = i + 1; j < nums.length; j++) {
+                if (nums[i] == nums[j]) return true;
+            }
+        }
+        return false;
+    }
+
+    public boolean containsDuplicateSorted(int[] nums) {
+        // O(n log n) tiempo; la copia ocupa O(n) memoria.
+        // Arrays.sort ordena en su lugar: copiamos para no modificar nums.
+        int[] ordered = Arrays.copyOf(nums, nums.length);
+        Arrays.sort(ordered);
+        for (int i = 1; i < ordered.length; i++) {
+            if (ordered[i] == ordered[i - 1]) return true;
+        }
+        return false;
+    }
+
+    public boolean containsDuplicate(int[] nums) {
+        // O(n) tiempo promedio, O(n) memoria
+        Set<Integer> seen = new HashSet<>();
+        for (int x : nums) {
+            if (seen.contains(x)) return true;
+            seen.add(x);
+        }
+        return false;
+    }
+}
+```
+
+```python title="Python"
+def contains_duplicate_brute(nums: list[int]) -> bool:
+    # O(n²) tiempo, O(1) memoria
+    n = len(nums)
+    for i in range(n):
+        for j in range(i + 1, n):
+            if nums[i] == nums[j]:
+                return True
+    return False
+
+
+def contains_duplicate_sorted(nums: list[int]) -> bool:
+    # O(n log n) tiempo; sorted() devuelve una copia: O(n) memoria
+    ordered = sorted(nums)
+    for i in range(1, len(ordered)):
+        if ordered[i] == ordered[i - 1]:
+            return True
+    return False
+
+
+def contains_duplicate(nums: list[int]) -> bool:
+    # O(n) tiempo promedio, O(n) memoria
+    seen: set[int] = set()
+    for x in nums:
+        if x in seen:
+            return True
+        seen.add(x)
+    return False
+```
+
+```ts title="TypeScript"
+function containsDuplicateBrute(nums: number[]): boolean {
+  // O(n²) tiempo, O(1) memoria
+  for (let i = 0; i < nums.length; i++) {
+    for (let j = i + 1; j < nums.length; j++) {
+      if (nums[i] === nums[j]) return true
+    }
+  }
+  return false
+}
+
+function containsDuplicateSorted(nums: number[]): boolean {
+  // O(n log n) tiempo; la copia ocupa O(n) memoria.
+  // Sin comparador, sort() ordena como texto: [10, 9] quedaría igual.
+  const ordered = [...nums].sort((a, b) => a - b)
+  for (let i = 1; i < ordered.length; i++) {
+    if (ordered[i] === ordered[i - 1]) return true
+  }
+  return false
+}
+
+function containsDuplicate(nums: number[]): boolean {
+  // O(n) tiempo promedio, O(n) memoria
+  const seen = new Set<number>()
+  for (const x of nums) {
+    if (seen.has(x)) return true
+    seen.add(x)
+  }
+  return false
+}
+```
+
+</CodeTabs>
+
+**Complejidad.** La versión con conjunto es O(n) en tiempo promedio (cada elemento se consulta e inserta una vez) y O(n) en memoria en el peor caso, cuando no hay repetidos. La ordenada es O(n log n) en tiempo, y su memoria depende de si copias: O(n) con copia, O(1) extra si ordenas en su lugar (más la pila del algoritmo de ordenamiento).
+
+**Casos borde y errores típicos.**
+
+- **Vacío y un elemento**: ambos devuelven `false`. El código ya los cubre sin un `if` especial; dilo en voz alta al probar.
+- **`sort()` sin comparador en JavaScript** ordena como cadenas: `[10, 9, 1]` queda `[1, 10, 9]`. Con este problema funciona igual (los iguales quedan juntos), pero en cualquier problema que dependa del orden numérico es un bug clásico.
+- **El atajo de una línea** `len(set(nums)) != len(nums)` es correcto y O(n), pero siempre recorre todo el arreglo, aunque el duplicado esté en las dos primeras posiciones. Puedes mencionarlo, y explicar por qué preferiste la versión que corta antes.
+- **Bucle con `j` desde 0**: compara cada elemento consigo mismo y siempre devuelve `true`. Es un off-by-one que aparece en la fuerza bruta.
+
+<Callout type="tip" title="En Java">
+
+- `Set.add` devuelve `false` si el elemento ya estaba, así que el bucle se puede escribir `if (!seen.add(x)) return true;`: una sola consulta al hash en vez de dos. Si lo usas, explícalo; la versión con `contains` se lee más fácil.
+- `Arrays.sort` sobre un `int[]` ordena primitivos en su lugar con un quicksort de doble pivote. Sobre un `Integer[]`, o con un comparador, usa un ordenamiento estable de objetos, más lento y con más memoria. Aquí conviene `int[]`.
+- `HashSet<Integer>` guarda objetos: cada `int` se convierte en `Integer` (*autoboxing*). Y nunca compares dos `Integer` con `==`: compara referencias, y solo parece funcionar con los valores entre −128 y 127, que Java guarda en caché.
+
+</Callout>
+
+**Variantes y repreguntas.**
+
+| Repregunta | Respuesta corta |
+|---|---|
+| "¿Y si los duplicados tienen que estar a distancia ≤ k?" ([Contains Duplicate II](https://leetcode.com/problems/contains-duplicate-ii/)) | Ventana deslizante: un conjunto con los últimos k valores. O(n) tiempo, O(k) memoria. |
+| "¿Y si basta con que los valores difieran en ≤ t?" ([Contains Duplicate III](https://leetcode.com/problems/contains-duplicate-iii/)) | Cubetas de ancho t + 1, o un árbol ordenado con la ventana. |
+| "¿Y si no puedes usar memoria extra?" | Ordenar en su lugar: O(n log n) y O(1) extra. |
+| "¿Y si los datos no caben en memoria?" | Repartir por hash en archivos (los iguales caen en el mismo) y revisar cada archivo por separado. |
+
+Para practicar el mismo método con problemas cortos: [Contains Duplicate](https://leetcode.com/problems/contains-duplicate/), [Valid Anagram](https://leetcode.com/problems/valid-anagram/) (el segundo problema del widget) y [Two Sum](https://leetcode.com/problems/two-sum/).
+
+## Comunicación: lo que dices cuando las cosas no salen
+
+El método funciona cuando el problema es razonable. Lo que separa a los candidatos es cómo actúan cuando no lo es.
+
+### Cuando te trabas
+
+El silencio es lo peor que puedes hacer: el entrevistador no puede ayudarte ni evaluarte. Di en voz alta lo que sí sabes y dónde está el obstáculo:
+
+> "Tengo una solución O(n²). El cuello de botella es que para cada elemento vuelvo a buscar en todo el arreglo. Si pudiera saber en O(1) si ya vi algo… eso es un diccionario. Déjame ver si alcanza."
+
+Si no sale nada, tres salidas concretas: vuelve a un ejemplo y resuélvelo a mano lentamente (mira qué haces tú, no qué haría el código); simplifica el problema (¿y si el arreglo estuviera ordenado? ¿y si n fuera 3?); o recorre la tabla de patrones preguntándote cuál encaja.
+
+<Sketch
+  width={640}
+  height={270}
+  caption="Trabarte no es el problema; quedarte en silencio sí. Tres salidas concretas, todas dichas en voz alta."
+  items={[
+    { type: 'text', x: 24, y: 32, text: 'en voz alta, siempre', size: 22, tone: 'line' },
+    { type: 'text', x: 320, y: 78, text: 'me trabé', size: 20, anchor: 'middle', tone: 'pencil' },
+    { type: 'circle', x: 320, y: 140, r: 40, label: '?', size: 30, tone: 'line' },
+    { type: 'arrow', from: [280, 152], to: [170, 194] },
+    { type: 'text', x: 24, y: 222, text: ['un ejemplo', 'a mano, lento'], size: 20 },
+    { type: 'arrow', from: [360, 152], to: [470, 194] },
+    { type: 'text', x: 440, y: 222, text: ['¿y si estuviera', 'ordenado? ¿n = 3?'], size: 20 },
+    { type: 'arrow', from: [320, 182], to: [320, 222] },
+    { type: 'text', x: 320, y: 252, text: 'la tabla de patrones', size: 20, anchor: 'middle' },
+    { type: 'text', x: 616, y: 110, text: 'si no sale: una pista acotada', size: 18, anchor: 'end', tone: 'pencil' },
+  ]}
+/>
+
+
+### Cómo pedir una pista sin perder puntos
+
+Una pista bien pedida resta poco; diez minutos de silencio restan mucho más. La diferencia está en mostrar lo que ya pensaste:
+
+- **Débil**: "No sé cómo hacerlo, ¿me das una pista?".
+- **Fuerte**: "Estoy entre ordenar o usar un diccionario. Ordenar me da O(n log n), pero pierdo los índices originales que necesito devolver. ¿Voy bien si sigo por el diccionario?".
+
+Y cuando te den una pista, **úsala de inmediato y en voz alta**. Lo que se evalúa es qué haces con ella: incorporarla rápido es una señal positiva; ignorarla porque estabas pensando otra cosa, una negativa.
+
+### Un bug en vivo
+
+Pasa en casi todas las entrevistas, y es una oportunidad: depurar bien es una señal de ingeniero con experiencia.
+
+1. **No borres ni cambies cosas al azar.** Cada cambio sin hipótesis puede meter un segundo bug.
+2. **Traza con un ejemplo pequeño** hasta el punto donde el valor real se separa del esperado.
+3. **Formula la hipótesis en voz alta**: "Creo que el problema es que avanzo `left` antes de sacar el elemento de la ventana".
+4. **Corrige y vuelve a probar** con el mismo ejemplo y con un borde.
+
+### Si te sobra o te falta tiempo
+
+- **Si te sobra**: prueba más bordes, mejora nombres, discute la complejidad de memoria y propón tú una variante ("si fuera un stream, haría…"). Terminar temprano y quedarte callado desperdicia la mejor parte de la entrevista.
+- **Si te falta**: avisa ("me quedan cinco minutos, prefiero terminar esta parte y contarte el resto"), deja lo que no alcanzas en pseudocódigo o comentarios y prioriza una solución completa que funcione sobre una óptima a medias. Una fuerza bruta correcta y probada vale más que una solución brillante que no compila.
+
+<Quiz
+  question="Llevas cuatro minutos en silencio sin encontrar cómo mejorar tu fuerza bruta O(n²). ¿Qué es lo mejor que puedes hacer?"
+  options={[
+    { text: 'Seguir pensando en silencio hasta tener la idea completa, para no parecer inseguro.', why: 'Desde afuera, el silencio largo es indistinguible de estar perdido, y el entrevistador no puede darte una pista porque no sabe en qué estás.' },
+    { text: 'Decir en voz alta qué trabajo repite la fuerza bruta y qué estructura podría evitarlo, y preguntar si vas bien encaminado.', correct: true, why: 'Muestra razonamiento aunque no tengas la respuesta, y convierte una posible pista en una conversación. Si el entrevistador te ayuda, usarás la pista en el contexto que tú armaste.' },
+    { text: 'Programar la fuerza bruta completa para tener algo.', why: 'Si ya sabes que no alcanza por las restricciones, programarla gasta tiempo. Es mejor como último recurso, avisando que lo haces para tener una base correcta.' },
+    { text: 'Pedir directamente la solución para no perder más tiempo.', why: 'Una pista acotada después de mostrar tu razonamiento resta poco; pedir la solución sin contexto le dice al entrevistador que no tienes por dónde empezar.' },
+  ]}
+/>
+
+## Cómo se evalúa
+
+La mayoría de las rúbricas de las empresas grandes evalúan cuatro áreas, aunque cada una les ponga otro nombre. El Tech Interview Handbook las resume así:
+
+- **Resolución del problema**: entiendes el problema, llegas a un enfoque correcto y razonablemente óptimo, y comparas alternativas.
+- **Código**: traduces la idea a código limpio y correcto con soltura en tu lenguaje. Nombres, estructura, uso idiomático.
+- **Comunicación**: preguntas lo necesario, explicas tu enfoque y tus trade-offs, y el entrevistador puede seguirte en todo momento.
+- **Verificación**: pruebas tu código con casos normales y bordes, y encuentras y corriges tus propios errores.
+
+Por eso la misma solución puede aprobar o reprobar:
+
+<Sketch
+  width={640}
+  height={290}
+  caption="El mismo código deja dos informes muy distintos. El entrevistador solo puede escribir lo que vio."
+  items={[
+    { type: 'text', x: 24, y: 30, text: 'mismo código, distinto informe', size: 20, tone: 'pencil' },
+    { type: 'box', x: 24, y: 52, w: 280, h: 200 },
+    { type: 'text', x: 44, y: 86, text: 'candidato A', size: 20, tone: 'line' },
+    { type: 'text', x: 44, y: 124, text: ['comunicación', 'resolución', 'código', 'verificación'], size: 20 },
+    { type: 'check', x: 262, y: 118, size: 18 },
+    { type: 'check', x: 262, y: 143, size: 18 },
+    { type: 'check', x: 262, y: 168, size: 18 },
+    { type: 'check', x: 262, y: 193, size: 18 },
+    { type: 'box', x: 336, y: 52, w: 280, h: 200 },
+    { type: 'text', x: 356, y: 86, text: 'candidato B', size: 20, tone: 'line' },
+    { type: 'text', x: 356, y: 124, text: ['comunicación', 'resolución', 'código', 'verificación'], size: 20 },
+    { type: 'cross', x: 574, y: 118, size: 14 },
+    { type: 'cross', x: 574, y: 143, size: 14 },
+    { type: 'check', x: 574, y: 168, size: 18 },
+    { type: 'cross', x: 574, y: 193, size: 14 },
+    { type: 'text', x: 24, y: 280, text: 'el código es solo una de las cuatro filas', size: 18, tone: 'pencil' },
+  ]}
+/>
+
+<Compare>
+<Option title="Entrevista aprobada" verdict="Señal fuerte en las cuatro áreas">
+
+Pregunta por el tamaño de n y si hay negativos. Propone la fuerza bruta y la descarta con números. Compara ordenar contra un conjunto y pide acuerdo. Escribe la versión con conjunto contando qué hace. La traza con `[3, 1, 4, 1]`, prueba el vacío y cierra con O(n) y O(n), mencionando que ordenar en su lugar ahorra memoria.
+
+</Option>
+<Option title="Entrevista reprobada" verdict="Mismo código, poca señal">
+
+Lee el enunciado y escribe la versión con conjunto en silencio, en tres minutos. Dice "creo que funciona". Cuando le preguntan la complejidad, duda. Cuando le preguntan por la memoria, no había pensado en alternativas. El entrevistador no sabe si entendió el problema o si lo recordó, y no tiene nada que escribir sobre comunicación ni verificación.
+
+</Option>
+</Compare>
+
+<Callout type="interview" title="Lo que el entrevistador está evaluando aquí">
+
+No solo si llegas a la respuesta, sino **cuánta evidencia le das** para escribir su informe. Cada pregunta aclaratoria, cada comparación de alternativas y cada prueba a mano son líneas en ese informe. Un problema resuelto en silencio deja el informe casi vacío, aunque el código sea perfecto.
+
+</Callout>
+
+## Rondas con asistente de IA
+
+Algunas empresas empezaron a usar rondas en las que trabajas con un asistente de IA dentro del entorno de la entrevista. **Según reportes de sitios de preparación (no anuncios oficiales)**, Meta reemplazó desde fines de 2025 una de sus dos rondas de código del onsite por una de unos 60 minutos con asistente, y Google estaría piloteando en 2026 una ronda de "code comprehension" asistida por IA en algunos equipos de EE. UU. Las rondas tradicionales, sin IA, siguen siendo la norma.
+
+El método no cambia; cambia quién teclea. Según esos mismos reportes, lo que se mira es:
+
+- **Especificar antes de pedir.** Descompones el problema y le pides al asistente piezas acotadas ("una función que agrupe los pedidos por cliente, con esta firma"), no "resuelve el ejercicio".
+- **Validar la salida.** Lees lo que genera como si fuera código de un colega: ¿maneja el vacío?, ¿la complejidad es la que necesitas?, ¿inventó una función que no existe?
+- **Probar.** Corres casos, incluidos los bordes que el modelo suele olvidar, y corriges.
+- **Explicar todo.** Al final tienes que poder justificar cada línea, la hayas escrito tú o no.
+
+Es la misma disciplina que se usa para trabajar con agentes de código en el día a día; el tema [Verificación: tests, evals y review](/ia/verificacion) la desarrolla, y [Take-home, code review y rondas con IA](/casos/otros-formatos) cubre el formato de entrevista en detalle.
+
+<Quiz
+  question="Dos candidatos entregan la misma solución correcta con un conjunto de vistos. ¿Cuál de estas diferencias es la que más probablemente separa una evaluación aprobada de una reprobada?"
+  options={[
+    { text: 'Que uno la escribió en Python y el otro en Java.', why: 'El lenguaje casi nunca importa mientras lo uses con soltura. Ninguna rúbrica premia un lenguaje sobre otro.' },
+    { text: 'Que uno aclaró, comparó alternativas con su Big-O, narró el código y lo probó a mano, y el otro lo escribió en silencio.', correct: true, why: 'Comunicación, resolución del problema y verificación son tres de las cuatro áreas de evaluación. El código idéntico solo cubre una.' },
+    { text: 'Que uno terminó en 10 minutos y el otro en 25.', why: 'La velocidad suma, pero terminar rápido en silencio deja poca evidencia. Muchas veces el que terminó antes recibe una segunda pregunta y se evalúa también esa.' },
+    { text: 'Que uno usó nombres de variables en inglés.', why: 'Los nombres claros importan; el idioma, casi nada.' },
+  ]}
+/>
+
+<Takeaways>
+
+- Siete pasos: escuchar y reformular, aclarar, ejemplos propios, fuerza bruta en voz alta, optimizar, codificar narrando, probar y analizar. No programes hasta haber acordado el enfoque.
+- Lee las restricciones primero. Con el supuesto de unas 10⁸ operaciones por segundo, n ≤ 10⁵ pide O(n log n) o mejor y n ≤ 20 permite algo exponencial.
+- Aprende las señales del enunciado: "¿ya apareció?" es un diccionario, "contiguo más largo" es sliding window, "los k mayores" es un heap.
+- Cuando te trabas, piensa en voz alta y pide pistas mostrando lo que ya razonaste; usa la pista de inmediato.
+- Ante un bug, traza con un ejemplo pequeño y formula una hipótesis antes de cambiar código.
+- Se evalúan cuatro áreas: resolución, código, comunicación y verificación. El mismo código puede aprobar o reprobar según cuánta evidencia des de las otras tres.
+- En rondas con IA, el método es el mismo: especificar, validar, probar y poder explicar cada línea.
+
+</Takeaways>
+
+## Fuentes y lecturas
+
+- Tech Interview Handbook, [How candidates are evaluated in coding interviews](https://www.techinterviewhandbook.org/coding-interview-rubrics/): las cuatro áreas de evaluación.
+- Tech Interview Handbook, [Top techniques to approach and solve coding interview questions](https://www.techinterviewhandbook.org/coding-interview-techniques/): técnicas para encontrar y optimizar una solución.
+- CodePath, [UMPIRE Interview Strategy](https://github.com/codepath/compsci_guides/wiki/UMPIRE-Interview-Strategy): el marco UMPIRE con un ejemplo resuelto.
+- Antti Laaksonen, [Competitive Programmer's Handbook](https://cses.fi/book/book.pdf), capítulo 2: estimar la eficiencia a partir del tamaño de la entrada, con una tabla similar a la de este tema.
+- Gayle Laakmann McDowell, *Cracking the Coding Interview* ([sitio del libro](https://www.crackingthecodinginterview.com/)): la sección sobre cómo enfrentar un problema y optimizar con "BUD" (cuellos de botella, trabajo innecesario y duplicado).
+- LeetCode: [Contains Duplicate](https://leetcode.com/problems/contains-duplicate/), [Contains Duplicate II](https://leetcode.com/problems/contains-duplicate-ii/), [Contains Duplicate III](https://leetcode.com/problems/contains-duplicate-iii/), [Valid Anagram](https://leetcode.com/problems/valid-anagram/).
+- Intervue, [Meta Interview Experience 2026: the AI-assisted coding round](https://www.intervue.io/blog/meta-interview-experience), y Levelop, [Google coding interviews in 2026](https://levelop.dev/blog/google-coding-interviews-in-2026-what-changed-and-what-didnt): reportes, no anuncios oficiales, sobre las rondas con IA.

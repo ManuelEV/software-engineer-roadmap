@@ -1,0 +1,155 @@
+.asp-pick {
+  display: grid;
+  gap: 4px;
+}
+.asp-pick select {
+  min-height: 40px;
+  padding: 0 10px;
+  border: 1.5px solid var(--rule-strong);
+  border-radius: 8px;
+  background: var(--card);
+  color: var(--ink);
+  font-family: var(--font-code);
+  font-size: 0.82rem;
+}
+
+.asp-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
+.asp-axis-title {
+  font-size: 14px;
+  font-weight: 600;
+  fill: var(--ink-3);
+}
+.asp-cell {
+  stroke-width: 1.5;
+  transition:
+    fill 240ms var(--ease-out),
+    stroke 240ms var(--ease-out),
+    opacity 240ms var(--ease-out);
+}
+.asp-cell.is-range {
+  fill: var(--line-tint);
+  stroke: color-mix(in oklab, var(--line) 55%, var(--rule-strong));
+}
+.asp-cell.is-out {
+  fill: var(--paper-3);
+  stroke: var(--rule-strong);
+  stroke-dasharray: 3 2;
+  opacity: 0.6;
+}
+.asp-cell.is-yes {
+  fill: color-mix(in oklab, var(--ok) 55%, var(--card));
+  stroke: var(--ok);
+}
+.asp-cell.is-no {
+  fill: color-mix(in oklab, var(--bad) 45%, var(--card));
+  stroke: var(--bad);
+}
+.asp-cell.is-yes.is-inferred {
+  fill: color-mix(in oklab, var(--ok) 20%, var(--card));
+}
+.asp-cell.is-no.is-inferred {
+  fill: color-mix(in oklab, var(--bad) 16%, var(--card));
+}
+.asp-cell.is-mid {
+  stroke: var(--ink);
+  stroke-width: 3;
+}
+.asp-cell.is-answer {
+  stroke: var(--ink);
+  stroke-width: 3;
+  fill: var(--ok);
+}
+.asp-num {
+  font-family: var(--font-code);
+  font-size: 14px;
+  font-weight: 600;
+  fill: var(--ink);
+}
+.asp-tick {
+  stroke: var(--ink-3);
+  stroke-width: 1.5;
+}
+.asp-ptr {
+  fill: var(--line-ink);
+}
+.asp-ptr-label {
+  font-family: var(--font-code);
+  font-size: 15px;
+  font-weight: 700;
+  fill: var(--line-ink);
+}
+.asp-ptr.asp-ptr--mid,
+.asp-ptr-label.asp-ptr--mid {
+  fill: var(--ink);
+}
+
+.asp-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  font-size: 0.82rem;
+  color: var(--ink-2);
+}
+.asp-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.asp-sw {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  border: 1.5px solid;
+}
+.asp-sw.is-yes {
+  background: color-mix(in oklab, var(--ok) 55%, var(--card));
+  border-color: var(--ok);
+}
+.asp-sw.is-no {
+  background: color-mix(in oklab, var(--bad) 45%, var(--card));
+  border-color: var(--bad);
+}
+.asp-sw.is-yes.is-inferred {
+  background: color-mix(in oklab, var(--ok) 20%, var(--card));
+}
+
+.asp-calc {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-code);
+  font-size: 0.8rem;
+  color: var(--ink-2);
+}
+.asp-calc__title {
+  font-weight: 700;
+  color: var(--ink);
+}
+.asp-calc__pile {
+  padding: 3px 8px;
+  border: 1px solid var(--rule-strong);
+  border-radius: 6px;
+  background: var(--card);
+}
+.asp-calc__sum {
+  padding: 3px 8px;
+  border: 1.5px solid;
+  border-radius: 6px;
+  font-weight: 700;
+  color: var(--ink);
+}
+.asp-calc__sum.is-yes {
+  border-color: var(--ok);
+  background: color-mix(in oklab, var(--ok) 18%, var(--card));
+}
+.asp-calc__sum.is-no {
+  border-color: var(--bad);
+  background: color-mix(in oklab, var(--bad) 14%, var(--card));
+}

@@ -1,0 +1,123 @@
+.tx-controls {
+  display: grid;
+  gap: 6px;
+  width: 100%;
+}
+.tx-controls__label {
+  font-weight: 700;
+  font-size: 0.74rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.tx-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.tx-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 40px;
+  padding: 0 14px;
+  border-radius: 999px;
+  border: 1.5px solid var(--rule-strong);
+  background: var(--card);
+  color: var(--ink-2);
+  font-family: var(--font-sign);
+  font-weight: 600;
+  font-size: var(--step--1);
+  transition:
+    background-color 160ms var(--ease-out),
+    border-color 160ms var(--ease-out),
+    color 160ms var(--ease-out);
+}
+.tx-chip:hover {
+  border-color: var(--ink-2);
+  color: var(--ink);
+}
+.tx-chip.is-on {
+  background: var(--line-tint-2);
+  border-color: var(--line);
+  color: var(--ink);
+}
+.tx-chip:focus-visible {
+  outline: 2px solid var(--line-ink);
+  outline-offset: 2px;
+}
+
+.tx-bars {
+  display: grid;
+  gap: 10px;
+  padding: var(--s-2) 0;
+}
+.tx-row {
+  display: grid;
+  grid-template-columns: minmax(6.5rem, 9rem) 1fr 2.5rem;
+  align-items: center;
+  gap: var(--s-3);
+}
+.tx-row__label {
+  font-weight: 600;
+  font-size: var(--step--1);
+  color: var(--ink);
+}
+.tx-row__val {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  color: var(--ink-3);
+}
+.tx-row__val.is-up {
+  color: var(--ok);
+}
+.tx-row__val.is-down {
+  color: var(--bad);
+}
+.tx-track {
+  position: relative;
+  height: 14px;
+  border-radius: 7px;
+  background: var(--paper-3);
+}
+.tx-track__zero {
+  position: absolute;
+  left: 50%;
+  top: -4px;
+  bottom: -4px;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--rule-strong);
+}
+.tx-track__bar {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  border-radius: 5px;
+  background: var(--rule-strong);
+}
+.tx-track__bar.is-up {
+  background: var(--ok);
+}
+.tx-track__bar.is-down {
+  background: var(--bad);
+}
+.tx-list {
+  margin: 0;
+  padding-left: 1.1rem;
+  display: grid;
+  gap: 4px;
+}
+@media (max-width: 480px) {
+  .tx-row {
+    grid-template-columns: 1fr 2.5rem;
+  }
+  .tx-row__label {
+    grid-column: 1 / -1;
+  }
+  .tx-track {
+    grid-column: 1;
+  }
+}

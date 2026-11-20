@@ -1,0 +1,230 @@
+.lld-stages {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.lld-stage {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 40px;
+  padding: 0 12px 0 6px;
+  border: 1.5px solid var(--rule-strong);
+  border-radius: 999px;
+  background: var(--card);
+  font-family: var(--font-sign);
+  font-weight: 600;
+  font-size: var(--step--1);
+  color: var(--ink-2);
+  cursor: pointer;
+  transition:
+    background-color 200ms var(--ease-out),
+    border-color 200ms var(--ease-out),
+    color 200ms var(--ease-out);
+}
+.lld-stage:hover {
+  border-color: var(--ink-2);
+}
+.lld-stage__n {
+  display: inline-grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 999px;
+  background: var(--paper-3);
+  color: var(--ink-2);
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+}
+.lld-stage.is-past .lld-stage__n {
+  background: var(--line-tint-2);
+  color: var(--line-ink);
+}
+.lld-stage.is-on {
+  border-color: var(--line);
+  background: var(--line-tint);
+  color: var(--ink);
+}
+.lld-stage.is-on .lld-stage__n {
+  background: var(--line);
+  color: var(--line-on);
+}
+
+.lld-stage-area {
+  min-height: 300px;
+  display: grid;
+  align-items: center;
+}
+
+/* Requirements view */
+.lld-reqs {
+  max-width: 62ch;
+  margin: 0 auto;
+  padding: var(--s-3) var(--s-4);
+  border: 1.5px solid var(--rule-strong);
+  border-radius: var(--radius-lg);
+  background: var(--card);
+  font-family: var(--font-read);
+  font-size: 0.98rem;
+  line-height: 1.55;
+  color: var(--ink);
+}
+.lld-reqs__head {
+  margin: 0 0 var(--s-2);
+  font-family: var(--font-sign);
+  font-weight: 700;
+  font-size: 0.8rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.lld-reqs ol {
+  margin: 0;
+  padding-left: 1.3em;
+}
+.lld-reqs li + li {
+  margin-top: 4px;
+}
+.lld-reqs__out {
+  margin: var(--s-3) 0 0;
+  color: var(--ink-2);
+}
+.lld-reqs__legend {
+  margin: var(--s-2) 0 0;
+  font-family: var(--font-sign);
+  font-size: 0.85rem;
+  color: var(--ink-3);
+}
+.lld-noun {
+  padding: 0 2px;
+  border-radius: 3px;
+  background: var(--hl-soft);
+  color: var(--ink);
+}
+.lld-verb {
+  text-decoration: underline;
+  text-decoration-color: var(--line);
+  text-decoration-thickness: 2px;
+  text-underline-offset: 3px;
+}
+
+/* Diagram */
+.lld-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: 560px;
+}
+.lld-l {
+  fill: none;
+  stroke: var(--ink-3);
+  stroke-width: 1.75;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+  transition: stroke 300ms var(--ease-out);
+}
+.lld-dash {
+  stroke-dasharray: 6 5;
+}
+.lld-hollow {
+  fill: var(--card);
+}
+.lld-filled {
+  fill: var(--ink-3);
+}
+.lld-edge.is-new .lld-l {
+  stroke: var(--line);
+  stroke-width: 2.5;
+}
+.lld-edge.is-new .lld-filled {
+  fill: var(--line);
+}
+.lld-edge__label {
+  font-family: var(--font-sign);
+  font-size: 13px;
+  font-weight: 600;
+  fill: var(--ink-2);
+  paint-order: stroke;
+  stroke: var(--card);
+  stroke-width: 5px;
+  stroke-linejoin: round;
+}
+.lld-rect {
+  fill: var(--card);
+  stroke: var(--ink-2);
+  stroke-width: 1.75;
+  transition:
+    fill 300ms var(--ease-out),
+    stroke 300ms var(--ease-out);
+}
+.lld-box.kind-interface .lld-rect,
+.lld-box.kind-abstract .lld-rect {
+  fill: var(--paper-2);
+}
+.lld-box.is-new .lld-rect {
+  fill: var(--line-tint);
+  stroke: var(--line);
+  stroke-width: 2.25;
+}
+.lld-stereo {
+  font-family: var(--font-sign);
+  font-size: 13px;
+  fill: var(--ink-3);
+}
+.lld-name {
+  font-family: var(--font-sign);
+  font-size: 15px;
+  font-weight: 700;
+  fill: var(--ink);
+}
+.lld-box.kind-interface .lld-name,
+.lld-box.kind-abstract .lld-name {
+  font-style: italic;
+}
+.lld-sub {
+  font-family: var(--font-code);
+  font-size: 13px;
+  fill: var(--ink-2);
+}
+.lld-lock__bg {
+  fill: var(--line);
+}
+.lld-lock__body {
+  fill: var(--line-on);
+}
+.lld-lock__arc {
+  fill: none;
+  stroke: var(--line-on);
+  stroke-width: 1.8;
+}
+
+/* Readout */
+.lld-readout__title {
+  font-weight: 700;
+  color: var(--ink);
+}
+.lld-readout__say {
+  font-family: var(--font-read);
+  color: var(--ink);
+}
+.lld-readout__why {
+  color: var(--ink-2);
+}
+
+.lld-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-2);
+  margin-top: var(--s-3);
+}
+.lld-nav__count {
+  font-family: var(--font-sign);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-2);
+}
+.lld-nav__count span {
+  color: var(--ink-3);
+  font-weight: 600;
+}

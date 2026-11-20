@@ -1,0 +1,122 @@
+.np-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-2);
+  margin-bottom: var(--s-3);
+}
+.np-spacer {
+  flex: 1 1 auto;
+}
+.np-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-2) var(--s-4);
+  margin-bottom: var(--s-2);
+  font-size: var(--step--1);
+  font-weight: 600;
+  color: var(--ink-2);
+}
+.np-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.np-legend__tick {
+  margin-left: auto;
+  font-family: var(--font-code);
+  font-weight: 400;
+  color: var(--ink-3);
+}
+.np-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+.np-dot--push {
+  background: var(--l4);
+  fill: var(--l4);
+}
+.np-dot--email {
+  background: var(--l5);
+  fill: var(--l5);
+}
+.np-dot--sms {
+  background: var(--l2);
+  fill: var(--l2);
+}
+.np-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.np-edge {
+  stroke: var(--rule-strong);
+  stroke-width: 4;
+  stroke-linecap: round;
+  transition: stroke 200ms var(--ease-out);
+}
+.np-edge.is-busy {
+  stroke: var(--line);
+}
+.np-edge.is-side {
+  stroke-width: 2.5;
+  stroke-dasharray: 5 6;
+}
+.np-station {
+  fill: var(--paper);
+  stroke: var(--rule-strong);
+  stroke-width: 3;
+  transition:
+    stroke 200ms var(--ease-out),
+    fill 200ms var(--ease-out);
+}
+.np-station.is-on {
+  stroke: var(--line);
+}
+.np-station.is-ok.is-on {
+  stroke: var(--ok);
+}
+.np-station.is-warn.is-on {
+  stroke: var(--warn);
+}
+.np-station.is-bad {
+  stroke: var(--bad);
+}
+.np-station.is-bad.is-on {
+  fill: color-mix(in oklab, var(--bad) 18%, var(--paper));
+}
+.np-station.is-muted {
+  stroke-dasharray: 3 4;
+}
+.np-label {
+  font-size: 14px;
+  font-weight: 700;
+  fill: var(--ink-2);
+}
+.np-count {
+  font-size: 13px;
+  font-weight: 700;
+  fill: var(--ink);
+}
+.np-dot-svg {
+  stroke: var(--card);
+  stroke-width: 1.5;
+}
+.np-dot-svg.is-dropped {
+  fill: var(--rule-strong);
+}
+.np-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-3) var(--s-5);
+  margin-bottom: var(--s-3);
+}
+@media (prefers-reduced-motion: reduce) {
+  .np-edge,
+  .np-station {
+    transition: none;
+  }
+}

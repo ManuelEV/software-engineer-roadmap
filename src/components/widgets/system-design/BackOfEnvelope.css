@@ -1,0 +1,63 @@
+.boe {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr);
+  gap: var(--s-5);
+  align-items: start;
+}
+.boe__inputs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--s-2) var(--s-4);
+}
+.boe__inputs .slider {
+  min-width: 0;
+}
+.boe__out {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--s-3) var(--s-4);
+  padding: var(--s-3) var(--s-4);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--card);
+}
+.boe__out .stat {
+  min-width: 0;
+}
+.boe__out .stat__value {
+  font-size: var(--step-1);
+}
+.boe__presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+}
+.boe__math {
+  display: grid;
+  gap: var(--s-2);
+  font-size: 0.9rem;
+  font-variant-numeric: tabular-nums;
+}
+.boe__math b {
+  color: var(--ink);
+}
+.boe__hint {
+  color: var(--ink-3);
+}
+.boe__note {
+  padding-bottom: var(--s-2);
+  border-bottom: 1px dotted var(--rule-strong);
+  color: var(--ink-3);
+  font-style: italic;
+}
+
+@media (max-width: 760px) {
+  .boe {
+    grid-template-columns: 1fr;
+  }
+}
+@media (max-width: 460px) {
+  .boe__inputs {
+    grid-template-columns: 1fr;
+  }
+}

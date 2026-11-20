@@ -1,0 +1,62 @@
+.t3-field {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+.t3-field--grow {
+  flex: 1 1 13rem;
+}
+.t3-field select,
+.t3-field input {
+  width: 100%;
+  min-height: 40px;
+  padding: 0 10px;
+  border: 1.5px solid var(--rule-strong);
+  border-radius: 8px;
+  background: var(--card);
+  color: var(--ink);
+  font-family: var(--font-code);
+  font-size: 0.86rem;
+}
+.t3-field input[aria-invalid='true'] {
+  border-color: var(--bad);
+}
+.t3-field select:focus-visible,
+.t3-field input:focus-visible {
+  outline: 2px solid var(--line-ink);
+  outline-offset: 1px;
+}
+.t3-res {
+  font-family: var(--font-code);
+  font-size: 0.86rem;
+}
+.t3-res__cap {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 0.8rem;
+  color: var(--ink-3);
+}
+.t3-res__rows {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-height: 2em;
+}
+.t3-res__empty {
+  color: var(--ink-3);
+}
+.t3-res__item {
+  padding: 3px 9px;
+  border: 1.5px solid var(--rule-strong);
+  border-radius: 6px;
+  background: var(--card);
+  font-weight: 700;
+  color: var(--ink);
+  transition:
+    background-color 220ms var(--ease-out),
+    border-color 220ms var(--ease-out);
+}
+.t3-res__item.is-new {
+  border-color: var(--ok);
+  background: color-mix(in oklab, var(--ok) 22%, var(--card));
+}

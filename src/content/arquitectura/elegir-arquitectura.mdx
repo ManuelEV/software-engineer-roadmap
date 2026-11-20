@@ -1,0 +1,275 @@
+import { ArchitectureDecision } from '../../components/widgets/arquitectura/ArchitectureDecision'
+
+Llegaste al final de la unidad. Recorriste capas, monolito modular, hexagonal, Clean, DDD, microservicios, eventos y sagas. La pregunta que queda es la que te van a hacer en el trabajo y en la entrevista: **¿cuál elijo?** La respuesta honesta empieza con "depende", pero un senior no se queda ahí. Dice de qué depende, cómo lo mediría y qué haría si el contexto cambia.
+
+Este tema junta todo en una guía práctica: los factores que de verdad deciden, una herramienta para razonar sobre tu caso, la idea de **arquitectura evolutiva** (diseñar para cambiar en lugar de para acertar), las ***fitness functions*** que protegen las decisiones automáticamente, el encaje con la organización y las señales que indican que llegó el momento de cambiar de estilo.
+
+## Lo que de verdad decide
+
+Las discusiones de arquitectura suelen girar en torno a tecnología. Las decisiones buenas giran en torno a cinco factores, más o menos en este orden:
+
+1. **La organización.** Cuántos equipos, cómo se comunican, qué tan independientes necesitan ser. Por la ley de Conway, esto define más la arquitectura que cualquier diagrama.
+2. **La claridad del dominio.** Si el negocio todavía se está descubriendo, las fronteras van a moverse, y moverlas entre servicios cuesta órdenes de magnitud más que entre módulos.
+3. **La complejidad de las reglas.** Un dominio con reglas ricas justifica proteger un núcleo (hexagonal, DDD táctico); un CRUD no.
+4. **Los atributos de calidad dominantes.** Escalado diferenciado, aislamiento de fallas, cumplimiento, latencia. Los tres o cuatro que identificaste en el primer tema.
+5. **La madurez operativa.** Sin despliegue automatizado, observabilidad y guardias, cualquier sistema distribuido es una fuente de incidentes.
+
+Fíjate en lo que **no** está en la lista: lo que usa una empresa famosa, lo que está de moda o lo que quieres aprender. Son razones válidas para un proyecto personal, no para un sistema del que dependen otros.
+
+## Una guía de decisión
+
+Responde por tu contexto **actual**. El error más frecuente es diseñar para la organización que esperas tener en tres años ("cuando seamos 200 ingenieros…"), pagando hoy el costo de una arquitectura que quizás nunca necesites.
+
+<ArchitectureDecision />
+
+Detrás de la herramienta hay unas pocas reglas que resumen el consenso de la industria:
+
+| Si… | Entonces, por defecto… | Porque… |
+| --- | --- | --- |
+| Un equipo, dominio en exploración | Monolito (modular si es posible) | La velocidad de aprendizaje es lo único que importa; las fronteras todavía se mueven |
+| Pocos equipos, dominio con reglas ricas | Monolito modular con núcleo hexagonal en los módulos core | Fronteras fuertes sin costo distribuido; reglas protegidas y testeables |
+| Muchos equipos, fronteras estables, operación madura | Microservicios por bounded context | El costo de coordinar personas supera el de operar servicios |
+| Una parte con perfil de escalado o de seguridad muy distinto | Extraer solo esa parte | Paga la distribución donde compra algo concreto |
+| Historia y auditoría son el producto | Event sourcing en ese contexto, CQRS para leer | El log de eventos es el modelo natural; no lo extiendas al resto |
+| Integraciones entre contextos con picos o fallas | Eventos + outbox + consumidores idempotentes | Desacopla en el tiempo sin perder consistencia |
+
+<Callout type="idea" title="El estilo es por parte, no por sistema">
+
+Un sistema real casi nunca tiene una sola arquitectura. Lo normal es un monolito modular con dos servicios extraídos, un núcleo hexagonal en el módulo de precios, CRUD simple en el back-office y event sourcing en el libro contable. Elegir "la arquitectura" del sistema es una simplificación; elegir el estilo de cada parte es el trabajo real.
+
+</Callout>
+
+## Arquitectura evolutiva
+
+Neal Ford, Rebecca Parsons y Patrick Kua (y Pramod Sadalage en la segunda edición) escribieron *Building Evolutionary Architectures* a partir de una observación: los requisitos, la tecnología y el negocio cambian más rápido de lo que cualquier diseño inicial puede anticipar. En lugar de intentar acertar, proponen diseñar para cambiar. Su definición: una arquitectura evolutiva **soporta cambio guiado e incremental a través de múltiples dimensiones**.
+
+Cada palabra importa:
+
+- **Incremental**: el sistema cambia en pasos pequeños y desplegables, no en reescrituras. Strangler fig, feature flags, despliegue continuo.
+- **Guiado**: los cambios no van en cualquier dirección; hay características que deben preservarse (rendimiento, seguridad, estructura de dependencias), y se verifican automáticamente.
+- **Múltiples dimensiones**: no solo el código; también datos, seguridad, operación, estructura de equipos.
+
+En la práctica, una arquitectura evolutiva se reconoce por tres cosas: **despliegue continuo** (sin él, cada cambio es un evento caro), **fronteras que permiten cambiar una parte sin tocar las demás** (módulos o servicios con contratos) y **fitness functions** que avisan cuando un cambio degrada algo importante.
+
+<Quiz
+  question="Un equipo pasa tres meses diseñando una arquitectura de microservicios 'definitiva' antes de escribir código, para no tener que cambiarla. ¿Qué diría el enfoque de arquitectura evolutiva?"
+  options={[
+    { text: 'Que es correcto: un buen diseño inicial evita cambios caros.', why: 'Es la mentalidad que el enfoque evolutivo cuestiona: el diseño inicial se basa en las suposiciones menos informadas del proyecto.' },
+    { text: 'Que conviene empezar con la estructura más simple que preserve las características críticas, verificarlas con fitness functions y evolucionar en pasos pequeños a medida que se aprende.', correct: true, why: 'Exacto. El objetivo no es acertar al principio, sino que cambiar sea barato y seguro: fronteras claras, despliegue continuo y verificación automática de lo que no puede romperse.' },
+    { text: 'Que deberían usar event sourcing para que todo sea reversible.', why: 'Event sourcing es una técnica de persistencia; no hace reversibles las decisiones de arquitectura.' },
+    { text: 'Que hay que documentar todo en un ADR gigante.', why: 'Los ADRs son cortos y de una decisión cada uno. Documentar no reemplaza aprender del sistema en producción.' },
+  ]}
+/>
+
+## Fitness functions
+
+El término viene de los algoritmos genéticos, donde una *fitness function* mide qué tan buena es una solución. En arquitectura, el libro la define como un mecanismo que da una **evaluación objetiva de la integridad** de alguna característica arquitectónica. Dicho más simple: un test automático para una decisión de arquitectura.
+
+Ya viste varias en esta unidad sin llamarlas así: las reglas de dependency-cruiser del monolito modular, la regla "el dominio no importa infraestructura" de hexagonal, el schema registry que rechaza eventos incompatibles. Lo que las une es que **convierten una decisión en algo que falla el build** cuando se viola, en lugar de depender de que alguien lo note en una revisión de código.
+
+El libro las clasifica en varias dimensiones; las más útiles para empezar:
+
+- **Atómicas u holísticas**: verifican una característica aislada (no hay ciclos entre paquetes) o la interacción de varias (latencia bajo carga con la cache fría).
+- **Disparadas o continuas**: corren en CI ante cada cambio, o vigilan producción todo el tiempo (alertas sobre SLOs).
+- **Estáticas o dinámicas**: tienen un umbral fijo o uno que depende del contexto.
+
+### Estructura: dependencias y capas
+
+En Java, ArchUnit expresa reglas de arquitectura como tests de JUnit:
+
+```java title="src/test/java/com/tienda/ArchitectureTest.java"
+@AnalyzeClasses(packages = "com.tienda")
+class ArchitectureTest {
+
+  @ArchTest
+  static final ArchRule domainIsPure = noClasses()
+      .that().resideInAPackage("..domain..")
+      .should().dependOnClassesThat()
+      .resideInAnyPackage("..infrastructure..", "org.springframework..", "jakarta.persistence..");
+
+  @ArchTest
+  static final ArchRule modulesWithoutCycles = slices()
+      .matching("com.tienda.(*)..")
+      .should().beFreeOfCycles();
+
+  @ArchTest
+  static final ArchRule layers = layeredArchitecture()
+      .consideringAllDependencies()
+      .layer("Api").definedBy("..api..")
+      .layer("Application").definedBy("..application..")
+      .layer("Domain").definedBy("..domain..")
+      .whereLayer("Api").mayNotBeAccessedByAnyLayer()
+      .whereLayer("Application").mayOnlyBeAccessedByLayers("Api")
+      .whereLayer("Domain").mayOnlyBeAccessedByLayers("Application", "Api");
+}
+```
+
+En TypeScript, dependency-cruiser cumple el mismo rol con reglas declarativas:
+
+```js title=".dependency-cruiser.cjs"
+module.exports = {
+  forbidden: [
+    { name: 'no-circular', severity: 'error', from: {}, to: { circular: true } },
+    {
+      name: 'domain-is-pure',
+      comment: 'El dominio no conoce frameworks, drivers ni adaptadores.',
+      severity: 'error',
+      from: { path: '/domain/' },
+      to: { path: '/adapters/|/infra/|node_modules/(express|pg|stripe)/' },
+    },
+    {
+      name: 'modules-talk-through-index',
+      severity: 'error',
+      from: { path: '^src/modules/([^/]+)/' },
+      to: { path: '^src/modules/[^/]+/', pathNot: '^src/modules/($1/|[^/]+/index\\.ts$)' },
+    },
+    { name: 'no-orphans', severity: 'warn', from: { orphan: true }, to: {} },
+  ],
+}
+```
+
+### Comportamiento: rendimiento y contratos
+
+Las fitness functions no son solo estructurales. Un umbral de latencia en las pruebas de carga protege un atributo operacional:
+
+```js title="load/checkout.k6.js"
+import http from 'k6/http'
+
+export const options = {
+  scenarios: { checkout: { executor: 'constant-arrival-rate', rate: 200, timeUnit: '1s', duration: '2m', preAllocatedVUs: 100 } },
+  thresholds: {
+    http_req_duration: ['p(99)<400'], // el build falla si el p99 supera 400 ms
+    http_req_failed: ['rate<0.001'],
+  },
+}
+
+export default function () {
+  http.post(`${__ENV.BASE_URL}/orders`, JSON.stringify({ customerId: 'c-42', items: [{ sku: 'TSHIRT-M', qty: 1 }] }), {
+    headers: { 'Content-Type': 'application/json' },
+  })
+}
+```
+
+Y en microservicios, las **pruebas de contrato dirigidas por el consumidor** (con herramientas como Pact) verifican que un proveedor no rompa lo que sus consumidores esperan, sin levantar todo el sistema. Son la fitness function que hace posible el despliegue independiente.
+
+<Callout type="tip" title="Empieza por tres">
+
+No intentes cubrir todo. Elige las tres decisiones cuya violación más te dolería (típicamente: dirección de dependencias, ausencia de ciclos entre módulos y un presupuesto de latencia del camino crítico) y automatízalas. Agrega más cuando una violación real te muestre que faltaba una.
+
+</Callout>
+
+<Quiz
+  question="Tu ADR dice 'ningún módulo accede a las tablas de otro módulo'. Seis meses después, encuentras tres JOINs entre esquemas. ¿Qué faltó?"
+  options={[
+    { text: 'Más revisiones de código.', why: 'Las revisiones ayudan, pero dependen de que alguien recuerde la regla y la detecte en cada PR. A escala, fallan.' },
+    { text: 'Una fitness function: por ejemplo, un usuario de base por módulo sin permisos sobre los otros esquemas, o un test que analiza las consultas y falla el build.', correct: true, why: 'Exacto. Una decisión que no se verifica automáticamente se erosiona. Convertirla en algo que falla el build o la conexión la vuelve imposible de violar por accidente.' },
+    { text: 'Reescribir el ADR con más detalle.', why: 'El ADR documenta el porqué; no impide nada por sí solo.' },
+    { text: 'Migrar a microservicios para que sea físicamente imposible.', why: 'Es una forma extremadamente cara de imponer una regla que se puede verificar con permisos y tests.' },
+  ]}
+/>
+
+## El encaje con la organización
+
+Una arquitectura que no encaja con los equipos que la construyen va a deformarse hasta encajar. *Team Topologies* de Skelton y Pais da el vocabulario para pensar ambas cosas juntas.
+
+Cuatro tipos de equipo:
+
+- **Stream-aligned**: alineado a un flujo de valor (una capacidad de negocio, un tipo de cliente). Es el tipo principal; la mayoría de los equipos deberían serlo. Dueño de sus servicios o módulos de punta a punta.
+- **Plataforma**: provee servicios internos (despliegue, observabilidad, bases de datos gestionadas) que reducen la carga de los stream-aligned.
+- **Habilitador** (*enabling*): ayuda temporalmente a otros equipos a adquirir una capacidad (por ejemplo, adoptar pruebas de contrato).
+- **Subsistema complicado**: dueño de una parte que requiere conocimiento muy especializado (un motor de precios con optimización matemática, un codec de video).
+
+Y una idea central: la **carga cognitiva**. Un equipo solo puede mantener en la cabeza una cantidad limitada de sistema. Si un equipo de seis personas es dueño de doce microservicios, la arquitectura le exige más de lo que puede sostener, y la calidad cae. El tamaño correcto de un servicio o módulo está acotado, en parte, por lo que un equipo puede entender y operar.
+
+Las consecuencias para elegir arquitectura son directas:
+
+- **No tengas más servicios que los que tus equipos pueden operar.** Un equipo por servicio (o por grupo pequeño de servicios relacionados) es una buena heurística; varios equipos sobre un mismo servicio es una señal de frontera mal trazada.
+- **Sin equipo de plataforma, los microservicios multiplican el trabajo operativo** de cada equipo. Una buena plataforma interna es casi un prerrequisito a cierta escala.
+- **Si vas a reorganizar equipos, reorganiza fronteras de código al mismo tiempo**, o el sistema empujará a la organización de vuelta a su forma anterior.
+
+## Señales para cambiar de estilo
+
+La arquitectura que elegiste hoy no es para siempre, y no debería serlo. Estas son señales concretas de que llegó el momento de moverse, y hacia dónde:
+
+| Síntoma | Probable diagnóstico | Movimiento |
+| --- | --- | --- |
+| Cada cambio toca código de todos lados; nadie sabe qué depende de qué | Bola de barro | Modularizar por capacidad de negocio y agregar reglas de dependencias |
+| Varios equipos se bloquean en el mismo tren de despliegue | El desplegable único es el cuello de botella | Extraer los módulos con más presión, empezando por los más desacoplados |
+| Un módulo necesita escalar diez veces más que el resto | Perfil de escalado diferenciado | Extraer ese módulo como servicio |
+| Los releases requieren desplegar varios servicios juntos | Monolito distribuido | Consolidar servicios que cambian juntos; separar sus datos |
+| Un equipo pequeño opera muchos servicios y vive en incidentes | Granularidad excesiva | Fusionar servicios; el costo operativo supera el beneficio |
+| Los tests de reglas de negocio necesitan base de datos y red | Dominio acoplado a infraestructura | Introducir puertos y adaptadores en ese módulo |
+| Las pantallas necesitan consultas cada vez más complejas sobre el modelo transaccional | Un solo modelo para leer y escribir | Modelos de lectura separados (CQRS), sin necesidad de event sourcing |
+
+Fíjate que varias filas van en dirección a **menos** distribución. Consolidar servicios no es un fracaso; es la arquitectura evolutiva funcionando.
+
+## Cómo presentar una decisión
+
+Ya sea en una entrevista de system design o en un RFC interno, una decisión de arquitectura bien presentada sigue casi siempre la misma estructura:
+
+<Steps>
+<Step title="Contexto y restricciones">
+
+Equipos, plazos, carga esperada, requisitos regulatorios. Con números cuando los hay ("50 pedidos por segundo en el pico, 3 equipos, lanzamiento en 4 meses").
+
+</Step>
+<Step title="Atributos de calidad prioritarios">
+
+Los tres o cuatro que definen el éxito, idealmente como escenarios medibles. Y los que explícitamente no priorizas.
+
+</Step>
+<Step title="Opciones consideradas">
+
+Al menos dos alternativas reales, con sus trade-offs frente a esos atributos. Si solo presentas una opción, no hubo decisión.
+
+</Step>
+<Step title="Decisión y razonamiento">
+
+Cuál eliges y por qué, conectado a los atributos y restricciones. Qué riesgos aceptas conscientemente.
+
+</Step>
+<Step title="Cómo se verifica y cuándo se revisa">
+
+Las fitness functions que la protegen y las condiciones que harían reabrirla. Esto es lo que más distingue a un senior: la decisión viene con su propio plan de evolución.
+
+</Step>
+</Steps>
+
+<Callout type="interview" title="Una respuesta modelo, en 30 segundos">
+
+"Con tres equipos y un dominio que todavía cambia, empezaría con un monolito modular: un módulo por capacidad de negocio, un esquema por módulo y reglas de dependencias en CI. El módulo de precios tiene reglas complejas, así que tendría un núcleo hexagonal. Los módulos se comunican por eventos en proceso con outbox, lo que deja lista la extracción. Extraería un servicio cuando un módulo tenga un perfil de escalado o un ritmo de despliegue claramente distinto, o cuando pasemos de cinco equipos. Lo documentaría en un ADR con esas condiciones de revisión".
+
+</Callout>
+
+<Quiz
+  question="En una entrevista te piden diseñar el backend de una fintech que arranca con 2 equipos y debe cumplir regulación con auditoría completa de movimientos. ¿Cuál es la respuesta más sólida?"
+  options={[
+    { text: 'Microservicios desde el día uno, porque las fintech necesitan escalar.', why: 'Nada en el contexto (2 equipos, inicio) justifica la prima de la distribución, y "escalar" no es un requisito concreto.' },
+    { text: 'Monolito modular; event sourcing solo en el contexto del libro de movimientos (donde la auditoría es el producto), CQRS para sus lecturas; el resto con estado actual; fitness functions para dependencias y compatibilidad de eventos; ADR con condiciones para extraer servicios.', correct: true, why: 'Exacto. Cada pieza está justificada por un factor del contexto: equipos pocos (monolito modular), auditoría (event sourcing acotado), y la decisión trae verificación y plan de evolución.' },
+    { text: 'Event sourcing en todo el sistema para tener auditoría completa.', why: 'Aplica una técnica costosa a contextos que no la necesitan (configuración, usuarios, notificaciones). La auditoría importa sobre todo en los movimientos.' },
+    { text: 'Un monolito en capas con una tabla de logs.', why: 'Puede ser un comienzo, pero una tabla de logs no garantiza una auditoría completa ni consistente con el estado, que es justo lo que pide la regulación.' },
+  ]}
+/>
+
+<Takeaways>
+
+- Deciden, en orden: organización, claridad del dominio, complejidad de reglas, atributos de calidad dominantes y madurez operativa. La moda no está en la lista.
+- Elige por tu contexto actual y por parte del sistema, no por el sistema entero ni por la empresa que esperas ser.
+- Por defecto: monolito modular; núcleo hexagonal donde hay reglas; servicios solo con razón concreta; event sourcing solo donde la historia es el negocio.
+- Una arquitectura evolutiva soporta cambio guiado e incremental: despliegue continuo, fronteras con contratos y fitness functions.
+- Convierte cada decisión importante en algo que falla el build: ArchUnit, dependency-cruiser, umbrales de k6, pruebas de contrato, permisos de base.
+- Diseña equipos y arquitectura juntos: equipos stream-aligned dueños de punta a punta, plataforma que reduce carga cognitiva y nunca más servicios de los que puedes operar.
+- Presenta decisiones con contexto, atributos, alternativas, razonamiento, verificación y condiciones de revisión.
+
+</Takeaways>
+
+## Fuentes y lecturas
+
+- Neal Ford, Rebecca Parsons, Patrick Kua y Pramod Sadalage, *Building Evolutionary Architectures*, 2.ª ed. (O'Reilly, 2022) y [evolutionaryarchitecture.com](https://evolutionaryarchitecture.com/).
+- Thoughtworks, [*Fitness function-driven development*](https://www.thoughtworks.com/insights/articles/fitness-function-driven-development) y la entrada del Technology Radar sobre [architectural fitness functions](https://www.thoughtworks.com/radar/techniques/architectural-fitness-function).
+- Mark Richards y Neal Ford, *Fundamentals of Software Architecture*, 2.ª ed. (O'Reilly, 2025).
+- [ArchUnit](https://www.archunit.org/) y [dependency-cruiser](https://github.com/sverweij/dependency-cruiser).
+- Matthew Skelton y Manuel Pais, [*Team Topologies*](https://teamtopologies.com/key-concepts) (IT Revolution, 2019).
+- Microsoft Azure Architecture Center, [Architecture styles](https://learn.microsoft.com/en-us/azure/architecture/guide/architecture-styles/).
+- Martin Fowler, [*MonolithFirst*](https://martinfowler.com/bliki/MonolithFirst.html) y [*MicroservicePrerequisites*](https://martinfowler.com/bliki/MicroservicePrerequisites.html).
+- Martin Fowler, [*Testing Strategies in a Microservice Architecture*](https://martinfowler.com/articles/microservice-testing/): pruebas de contrato dirigidas por el consumidor.

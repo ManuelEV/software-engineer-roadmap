@@ -1,0 +1,117 @@
+.gg-map {
+  display: block;
+  width: 100%;
+  max-width: 460px;
+  height: auto;
+  margin: 0 auto;
+  touch-action: none;
+  cursor: crosshair;
+  border-radius: var(--radius);
+}
+.gg-map:focus-visible {
+  outline: 2px solid var(--line-ink);
+  outline-offset: 3px;
+}
+.gg-ground {
+  fill: var(--paper);
+  stroke: var(--rule-strong);
+  stroke-width: 1.5;
+}
+.gg-grid {
+  stroke: var(--rule);
+  stroke-width: 1;
+}
+.gg-cell {
+  fill: var(--line-tint);
+  transition: fill 200ms var(--ease-out);
+}
+.gg-cell--home {
+  fill: var(--line-tint-2);
+}
+.gg-radius {
+  fill: none;
+  stroke: var(--line);
+  stroke-width: 2;
+  stroke-dasharray: 5 5;
+}
+.gg-driver {
+  fill: var(--paper);
+  stroke: var(--rule-strong);
+  stroke-width: 2;
+  transition:
+    fill 200ms var(--ease-out),
+    stroke 200ms var(--ease-out);
+}
+.gg-driver.is-read {
+  stroke: var(--ink-2);
+  fill: var(--paper-3);
+}
+.gg-driver.is-match {
+  stroke: var(--line);
+  stroke-width: 3;
+  fill: var(--paper);
+}
+.gg-link {
+  stroke: var(--line);
+  stroke-width: 4;
+  stroke-linecap: round;
+}
+.gg-rider circle {
+  fill: var(--paper);
+  stroke: var(--ink);
+  stroke-width: 3;
+}
+.gg-rider .gg-rider__dot {
+  fill: var(--ink);
+  stroke: none;
+}
+.gg-scale {
+  font-size: 13px;
+  font-weight: 600;
+  fill: var(--ink-3);
+}
+.gg-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+}
+.gg-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-3) var(--s-5);
+  margin-bottom: var(--s-3);
+}
+.gg-legend {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--s-2) var(--s-4);
+  list-style: none;
+  margin: var(--s-3) 0 0;
+  padding: 0;
+  font-size: var(--step--1);
+  color: var(--ink-2);
+}
+.gg-legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.gg-sw {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 2px solid var(--rule-strong);
+  background: var(--paper);
+}
+.gg-sw--rider {
+  border: 3px solid var(--ink);
+}
+.gg-sw--read {
+  border-color: var(--ink-2);
+  background: var(--paper-3);
+}
+.gg-sw--match {
+  border: 3px solid var(--line);
+}

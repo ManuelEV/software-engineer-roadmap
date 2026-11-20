@@ -1,0 +1,50 @@
+.fo {
+  display: grid;
+  gap: var(--s-4);
+}
+.fo-panel {
+  display: grid;
+  gap: var(--s-2);
+  padding: var(--s-3);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--card);
+}
+.fo-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-2);
+}
+.fo-title {
+  font-family: var(--font-sign);
+  font-weight: 700;
+  font-size: var(--step-0);
+  color: var(--ink);
+}
+.fo-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.fo-lbl {
+  font-size: 13px;
+  fill: var(--ink-3);
+}
+.fo-lbl-sm {
+  font-size: 13px;
+  font-weight: 700;
+  fill: var(--ink-2);
+}
+.fo-clock {
+  font-size: 14px;
+  font-weight: 700;
+  fill: var(--line-ink);
+  font-variant-numeric: tabular-nums;
+}
+.fo-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-3) var(--s-5);
+}

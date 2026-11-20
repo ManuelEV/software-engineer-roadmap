@@ -1,0 +1,175 @@
+.topo-pick {
+  display: grid;
+  gap: 4px;
+}
+.topo-pick select {
+  min-height: 40px;
+  padding: 0 10px;
+  border: 1.5px solid var(--rule-strong);
+  border-radius: 8px;
+  background: var(--card);
+  color: var(--ink);
+  font-family: var(--font-sign);
+  font-size: 0.95rem;
+}
+.topo-pick select:focus-visible {
+  outline: 2px solid var(--line-ink);
+  outline-offset: 1px;
+}
+
+.topo-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-width: 440px;
+}
+.topo-edge line {
+  stroke: var(--ink-3);
+  stroke-width: 1.75;
+  transition:
+    stroke 220ms var(--ease-out),
+    opacity 220ms var(--ease-out);
+}
+.topo-edge polygon {
+  fill: var(--ink-3);
+  transition:
+    fill 220ms var(--ease-out),
+    opacity 220ms var(--ease-out);
+}
+.topo-edge.is-cur line {
+  stroke: var(--line);
+  stroke-width: 3;
+}
+.topo-edge.is-cur polygon {
+  fill: var(--line);
+}
+.topo-edge.is-gone {
+  opacity: 0.22;
+}
+.topo-edge.is-gone line {
+  stroke-dasharray: 4 4;
+}
+
+.topo-node rect {
+  fill: var(--card);
+  stroke: var(--rule-strong);
+  stroke-width: 1.75;
+  transition:
+    fill 220ms var(--ease-out),
+    stroke 220ms var(--ease-out);
+}
+.topo-node > text {
+  font-family: var(--font-sign);
+  font-size: 15px;
+  font-weight: 700;
+  fill: var(--ink);
+  transition: fill 220ms var(--ease-out);
+}
+.topo-node.is-queued rect {
+  fill: var(--line-tint-2);
+  stroke: var(--line);
+  stroke-dasharray: 5 3;
+}
+.topo-node.is-enq rect {
+  stroke-dasharray: none;
+  stroke-width: 2.75;
+}
+.topo-node.is-cur rect {
+  fill: var(--line);
+  stroke: var(--line);
+}
+.topo-node.is-cur > text {
+  fill: var(--line-on);
+}
+.topo-node.is-done rect {
+  fill: var(--paper-3);
+  stroke: var(--rule-strong);
+}
+.topo-node.is-done > text {
+  fill: var(--ink-2);
+}
+.topo-node.is-stuck rect {
+  fill: color-mix(in oklab, var(--bad) 16%, var(--card));
+  stroke: var(--bad);
+  stroke-width: 2.25;
+}
+.topo-deg circle {
+  fill: var(--paper);
+  stroke: var(--ink-3);
+  stroke-width: 1.5;
+  transition:
+    fill 220ms var(--ease-out),
+    stroke 220ms var(--ease-out);
+}
+.topo-deg text {
+  font-family: var(--font-code);
+  font-size: 13px;
+  font-weight: 700;
+  fill: var(--ink);
+}
+.topo-deg.is-changed circle {
+  fill: var(--line-tint-2);
+  stroke: var(--line);
+}
+.topo-deg.is-zero circle {
+  fill: color-mix(in oklab, var(--ok) 22%, var(--card));
+  stroke: var(--ok);
+}
+
+.topo-lists {
+  display: grid;
+  gap: var(--s-3);
+}
+.topo-list {
+  display: grid;
+  gap: 6px;
+}
+.topo-list__title {
+  font-family: var(--font-code);
+  font-size: 0.8rem;
+  color: var(--ink-3);
+}
+.topo-list__items {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  min-height: 34px;
+}
+.topo-list__empty {
+  align-self: center;
+  font-family: var(--font-sign);
+  font-style: italic;
+  color: var(--ink-3);
+}
+.topo-chip {
+  padding: 5px 10px;
+  border: 1.5px solid var(--rule-strong);
+  border-radius: 6px;
+  background: var(--card);
+  font-family: var(--font-sign);
+  font-weight: 700;
+  font-size: 0.92rem;
+  color: var(--ink);
+  transition:
+    background-color 220ms var(--ease-out),
+    border-color 220ms var(--ease-out);
+}
+.topo-chip.is-next {
+  border-color: var(--line);
+  border-width: 2.5px;
+}
+.topo-chip.is-enq {
+  background: var(--line-tint-2);
+  border-color: var(--line);
+}
+.topo-chip.is-done {
+  background: var(--paper-3);
+}
+.topo-chip.is-cur {
+  background: var(--line);
+  border-color: var(--line);
+  color: var(--line-on);
+}

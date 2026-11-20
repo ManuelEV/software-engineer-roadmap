@@ -1,0 +1,612 @@
+import { UmlDiagram } from '../../components/widgets/patrones/UmlDiagram'
+import { CircuitBreaker } from '../../components/widgets/patrones/CircuitBreaker'
+import { RetryBackoff } from '../../components/widgets/patrones/RetryBackoff'
+import { Bulkhead } from '../../components/widgets/patrones/Bulkhead'
+
+Tu servicio de checkout llama a pagos, a inventario, a un proveedor de envíos y a Redis. Cada una de esas llamadas va a fallar algún día: lenta, con un 503, con la conexión colgada. La pregunta no es si falla, sino **qué le pasa a tu servicio cuando falla**. Sin defensas, una dependencia lenta agota tus hilos, tus conexiones y tu paciencia, y el problema de un servicio se convierte en la caída de todos.
+
+Los patrones de resiliencia son esas defensas, escritas en código: limitar cuánto esperas, reintentar con criterio, dejar de llamar a quien está caído, aislar los daños, degradar con elegancia. La mayoría se popularizó con *Release It!* de Michael Nygard (2007, 2.ª ed. 2018) y hoy aparece en el catálogo de patrones cloud de Microsoft Azure.
+
+Este tema es la vista de **código**: cómo se implementan, cómo se configuran en librerías reales y cómo se combinan. La teoría de sistemas distribuidos (SLOs, redundancia, failover) está en [Confiabilidad](/system-design/confiabilidad) y el caching a fondo en [Caching](/system-design/caching).
+
+## Timeout
+
+**Intención:** poner un límite máximo a cuánto esperas una respuesta, para que una dependencia lenta no te deje bloqueado indefinidamente.
+
+### El problema
+
+```python title="shipping.py (antes)"
+import requests
+
+def shipping_quote(order):
+    # Sin timeout: si el proveedor acepta la conexión y nunca responde,
+    # este hilo queda colgado. Con 50 peticiones así, se acabó el pool.
+    return requests.post("https://api.carrier.example/quotes", json=order.to_dict()).json()
+```
+
+La documentación de `requests` lo advierte: sin un `timeout` explícito, las peticiones no expiran. Muchos clientes HTTP vienen así o con valores de minutos. Una dependencia que **no responde** es peor que una que falla rápido, porque retiene recursos mientras tanto.
+
+### La solución
+
+<CodeTabs>
+
+```ts title="TypeScript"
+export async function shippingQuote(order: Order): Promise<Quote> {
+  const res = await fetch('https://api.carrier.example/quotes', {
+    method: 'POST',
+    body: JSON.stringify(order),
+    headers: { 'content-type': 'application/json' },
+    signal: AbortSignal.timeout(2_000),   // aborta a los 2 s y libera la conexión
+  })
+  if (!res.ok) throw new UpstreamError(res.status)
+  return res.json()
+}
+```
+
+```python title="Python"
+import httpx
+
+# Un cliente compartido con timeouts explícitos por fase
+client = httpx.Client(timeout=httpx.Timeout(2.0, connect=0.5))
+
+def shipping_quote(order: Order) -> Quote:
+    res = client.post("https://api.carrier.example/quotes", json=order.to_dict())
+    res.raise_for_status()
+    return Quote(**res.json())
+```
+
+</CodeTabs>
+
+### Cómo elegir el número
+
+- Parte de la **latencia observada** de la dependencia (p99 o p99.9), no de una corazonada. Un timeout por debajo del p99 convierte respuestas lentas pero válidas en errores.
+- Distingue **timeout de conexión** (corto: si no conecta en medio segundo, no va a conectar) de **timeout de lectura**.
+- **Propaga el deadline.** Si el usuario tiene 3 s de presupuesto y ya gastaste 2,5, no llames a la siguiente dependencia con un timeout de 2 s. gRPC propaga *deadlines* entre servicios por esta razón.
+
+**Cuándo no:** casi nunca debes omitirlo en llamadas de red. Lo que sí sobra es un timeout corto en operaciones que de verdad tardan (un reporte batch); ahí corresponde un patrón asíncrono, no un timeout de 30 minutos. **Relacionados:** Retry (cada intento necesita su timeout), Circuit Breaker (los timeouts cuentan como fallos).
+
+## Retry con backoff y jitter
+
+**Intención:** repetir automáticamente una operación que falló por una causa **transitoria**, esperando cada vez más entre intentos.
+
+### El problema
+
+```ts title="retry ingenuo"
+for (let i = 0; i < 5; i++) {
+  try { return await payments.charge(order) } catch { /* reintenta ya mismo */ }
+}
+```
+
+Tres errores en cuatro líneas: reintenta inmediatamente (a un servicio que quizá está saturado), reintenta cualquier error (incluido un 400 que nunca va a cambiar) y reintenta un **cobro**, que no es idempotente: puedes cobrar dos veces.
+
+### La solución
+
+1. **Solo errores transitorios:** timeouts, conexiones rechazadas, 502/503/504, 429 (respetando `Retry-After`). Nunca 400, 401, 404 o 422.
+2. **Backoff exponencial:** esperas `base × 2^intento`, con un tope.
+3. **Jitter:** un componente aleatorio para que miles de clientes no reintenten sincronizados. El artículo del AWS Architecture Blog *Exponential Backoff And Jitter* compara variantes y muestra que con **full jitter** (esperar un valor aleatorio entre 0 y el tope exponencial) el trabajo total del servidor baja mucho frente al backoff sin aleatoriedad.
+4. **Idempotencia:** si la operación tiene efectos, el servidor debe reconocer el reintento. Stripe, por ejemplo, acepta un encabezado `Idempotency-Key` para que el mismo cobro enviado dos veces se procese una sola vez.
+
+<RetryBackoff />
+
+Juega con el widget: con espera fija o exponencial **sin** jitter, las olas de reintentos llegan juntas y vuelven a tumbar al servicio justo cuando se levanta. Es la *thundering herd* (estampida). Con jitter, la misma cantidad de clientes se reparte en el tiempo y el servicio la absorbe.
+
+<CodeTabs>
+
+```ts title="TypeScript"
+const TRANSIENT = new Set([408, 429, 502, 503, 504])
+
+export async function withRetry<T>(
+  op: (attempt: number) => Promise<T>,
+  { maxAttempts = 4, baseMs = 200, capMs = 5_000 } = {},
+): Promise<T> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await op(attempt)
+    } catch (err) {
+      const retriable = err instanceof UpstreamError ? TRANSIENT.has(err.status) : isNetworkError(err)
+      if (!retriable || attempt >= maxAttempts) throw err
+      const ceiling = Math.min(capMs, baseMs * 2 ** (attempt - 1))
+      await sleep(Math.random() * ceiling)                 // full jitter
+    }
+  }
+}
+
+// El cobro lleva una clave de idempotencia estable entre intentos
+const key = `charge-${order.id}`
+await withRetry(() => payments.charge(order, { idempotencyKey: key }))
+```
+
+```python title="Python (tenacity)"
+from tenacity import retry, retry_if_exception, stop_after_attempt, wait_random_exponential
+import httpx
+
+def is_transient(exc: BaseException) -> bool:
+    if isinstance(exc, (httpx.TimeoutException, httpx.ConnectError)):
+        return True
+    return isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code in {408, 429, 502, 503, 504}
+
+@retry(
+    retry=retry_if_exception(is_transient),
+    stop=stop_after_attempt(4),
+    wait=wait_random_exponential(multiplier=0.2, max=5),   # espera aleatoria con techo exponencial
+    reraise=True,
+)
+def charge(order: Order) -> Receipt:
+    res = client.post("/charges", json=order.to_dict(),
+                      headers={"Idempotency-Key": f"charge-{order.id}"})
+    res.raise_for_status()
+    return Receipt(**res.json())
+```
+
+</CodeTabs>
+
+### Amplificación de reintentos
+
+Imagina tres capas: el BFF llama al checkout, que llama a pagos, que llama al banco. Si cada una hace hasta 4 intentos, un fallo persistente en el banco se convierte en hasta 4 × 4 × 4 = **64 llamadas** por cada petición del usuario, justo cuando el banco está en problemas. Las defensas:
+
+- **Reintenta en una sola capa**, idealmente la más cercana a la dependencia que falla, y haz que las demás fallen rápido.
+- Usa un **presupuesto de reintentos**: el *retry budget* de Envoy o el *retry throttling* de gRPC limitan los reintentos a una fracción del tráfico, así que en una caída masiva dejan de amplificar.
+- Combínalo con un **circuit breaker**, que corta los reintentos cuando el fallo deja de ser transitorio.
+
+<Quiz
+  question="Tu servicio reintenta con backoff exponencial (200 ms, 400 ms, 800 ms…) pero sin jitter. Tras una caída de 1 s, 5.000 clientes fallaron a la vez. ¿Qué es lo más probable?"
+  options={[
+    { text: 'Se recupera bien: el backoff exponencial ya espacia los reintentos.', why: 'Los espacia en el tiempo para cada cliente, pero todos los clientes siguen el mismo calendario: las olas llegan sincronizadas.' },
+    { text: 'Los 5.000 reintentos llegan en olas sincronizadas que pueden volver a saturar al servicio en cada intento.', correct: true, why: 'Exacto: sin aleatoriedad, todos esperan lo mismo. El jitter desincroniza a los clientes y reparte la carga.' },
+    { text: 'Falla porque el backoff exponencial no funciona con más de 1.000 clientes.', why: 'El número de clientes no rompe el algoritmo; lo que importa es que sus reintentos estén sincronizados.' },
+    { text: 'Nada cambia, porque el servidor siempre aplica rate limiting.', why: 'No puedes contar con eso; y aunque exista, rechazar en olas sigue desperdiciando recursos de ambos lados.' },
+  ]}
+/>
+
+## Circuit Breaker
+
+**Intención:** dejar de llamar a una dependencia que está fallando, fallar rápido mientras tanto y probar cada cierto tiempo si ya se recuperó.
+
+### El problema
+
+Pagos está caído. Cada petición de checkout espera su timeout de 2 s, reintenta tres veces y recién entonces falla: 8 segundos de un hilo ocupado por petición, y pagos recibe una avalancha de tráfico justo cuando intenta levantarse. Lo único que logras es caerte tú también.
+
+### La solución
+
+Nygard tomó la metáfora de los interruptores eléctricos. El *breaker* envuelve las llamadas y tiene tres estados, como describe Fowler en su bliki (2014):
+
+- **Cerrado:** las llamadas pasan. Se cuentan los fallos en una ventana.
+- **Abierto:** al superar el umbral, las llamadas fallan **inmediatamente** sin tocar a la dependencia.
+- **Semiabierto:** tras un tiempo de espera, se permite una (o unas pocas) llamadas de prueba. Si salen bien, se cierra; si fallan, vuelve a abrirse.
+
+<CircuitBreaker />
+
+Estructuralmente es un [Proxy](/patrones/estructurales): implementa la misma interfaz que el cliente real y decide si delegar o no.
+
+<UmlDiagram
+  caption="El circuit breaker como proxy: el checkout no sabe si habla con Stripe o con el breaker."
+  classes={[
+    { id: 'svc', name: 'CheckoutService', methods: ['checkout(cart)'], x: 0, y: 0, desc: 'Depende de la interfaz PaymentGateway. No sabe que hay un breaker en medio.' },
+    { id: 'pg', name: 'PaymentGateway', kind: 'interface', methods: ['charge(order)'], x: 1, y: 0, desc: 'La interfaz que comparten el proxy y el cliente real.' },
+    { id: 'cb', name: 'BreakerGateway', fields: ['- state', '- failures', '- openedAt'], methods: ['charge(order)'], x: 0.5, y: 1.35, tone: 'line', desc: 'Implementa PaymentGateway y envuelve al cliente real. Lleva la cuenta de fallos y decide si deja pasar la llamada.' },
+    { id: 'real', name: 'StripeGateway', methods: ['charge(order)'], x: 1.5, y: 1.35, desc: 'El cliente real, que hace la llamada de red.' },
+  ]}
+  relations={[
+    { from: 'svc', to: 'pg', kind: 'depends' },
+    { from: 'cb', to: 'pg', kind: 'implements' },
+    { from: 'real', to: 'pg', kind: 'implements' },
+    { from: 'cb', to: 'real', kind: 'composes', label: 'envuelve' },
+  ]}
+/>
+
+<CodeTabs>
+
+```ts title="TypeScript"
+type State = 'closed' | 'open' | 'half-open'
+
+export class BreakerGateway implements PaymentGateway {
+  private state: State = 'closed'
+  private failures = 0
+  private openedAt = 0
+
+  constructor(
+    private readonly inner: PaymentGateway,
+    private readonly failureThreshold = 5,
+    private readonly resetAfterMs = 30_000,
+  ) {}
+
+  async charge(order: Order): Promise<Receipt> {
+    if (this.state === 'open') {
+      if (Date.now() - this.openedAt < this.resetAfterMs) {
+        throw new CircuitOpenError('pagos')              // falla rápido
+      }
+      this.state = 'half-open'                           // hora de probar
+    }
+    try {
+      const receipt = await this.inner.charge(order)
+      this.state = 'closed'
+      this.failures = 0
+      return receipt
+    } catch (err) {
+      this.failures += 1
+      if (this.state === 'half-open' || this.failures >= this.failureThreshold) {
+        this.state = 'open'
+        this.openedAt = Date.now()
+      }
+      throw err
+    }
+  }
+}
+```
+
+```java title="Java (resilience4j)"
+CircuitBreakerConfig config = CircuitBreakerConfig.custom()
+    .failureRateThreshold(50)                          // % de fallos para abrir (50 es el default)
+    .slowCallRateThreshold(80)                         // las llamadas lentas también cuentan
+    .slowCallDurationThreshold(Duration.ofSeconds(2))
+    .slidingWindowType(SlidingWindowType.COUNT_BASED)  // o TIME_BASED
+    .slidingWindowSize(20)
+    .minimumNumberOfCalls(10)                          // no juzgar con 2 llamadas
+    .waitDurationInOpenState(Duration.ofSeconds(30))
+    .permittedNumberOfCallsInHalfOpenState(3)
+    .build();
+
+CircuitBreaker breaker = CircuitBreaker.of("payments", config);
+Supplier<Receipt> guarded = CircuitBreaker.decorateSupplier(breaker, () -> stripe.charge(order));
+
+try {
+    return guarded.get();
+} catch (CallNotPermittedException open) {
+    return Receipt.queuedForLater(order);              // fallback mientras está abierto
+}
+```
+
+</CodeTabs>
+
+La versión a mano cuenta fallos **consecutivos**; las librerías de producción usan una **ventana deslizante** (por cantidad de llamadas o por tiempo) y una **tasa** de fallo, con un mínimo de llamadas antes de juzgar. En resilience4j el umbral por defecto es 50 %; en Polly (.NET) el default de `FailureRatio` es 10 % con un mínimo de 100 ejecuciones en 30 s. En Node tienes **opossum** o **cockatiel**; en Python, **pybreaker**. Hystrix, de Netflix, fue la referencia durante años, pero está en modo mantenimiento y su README recomienda resilience4j.
+
+### Retry vs Circuit Breaker
+
+Retry y circuit breaker parecen opuestos y son complementarios: **retry** apuesta a que el fallo es transitorio; **circuit breaker** detecta que dejó de serlo y corta. Juntos: reintenta unas pocas veces, y si el breaker está abierto, ni lo intentes.
+
+**Cuándo no:** para dependencias locales y baratas (un cálculo en memoria) o cuando cada petición va a un recurso distinto (un breaker por destino tiene más sentido que uno global). Cuidado con un breaker compartido entre operaciones con perfiles muy distintos: un endpoint lento de reportes puede abrir el circuito para los cobros. **Relacionados:** Proxy, State (el breaker es una máquina de estados, ver [Comportamiento I](/patrones/comportamiento-1)), Retry, Fallback.
+
+## Bulkhead
+
+**Intención:** separar los recursos (hilos, conexiones, memoria) en compartimentos independientes, para que el fallo de una parte no hunda a las demás.
+
+### El problema
+
+El nombre viene de los mamparos de un barco: si se inunda un compartimento, los demás siguen secos. En software, el escenario típico es un pool compartido. Tu servicio tiene 9 conexiones salientes para todo; el servicio de recomendaciones se pone lento (4 s por respuesta) y sus peticiones acaparan las 9 conexiones. Ahora pagos y catálogo, que están perfectos, no consiguen conexión. Una funcionalidad **secundaria** tumbó a la **crítica**.
+
+<Bulkhead />
+
+### La solución
+
+Limita la concurrencia **por dependencia**. Cuando el compartimento de recomendaciones se llena, sus peticiones se rechazan rápido (y muestras la página sin recomendaciones), mientras pagos sigue con sus propias conexiones.
+
+<CodeTabs>
+
+```ts title="TypeScript"
+// Un semáforo mínimo: como mucho `limit` llamadas en vuelo
+export class Bulkhead {
+  private active = 0
+  constructor(private readonly name: string, private readonly limit: number) {}
+
+  async run<T>(op: () => Promise<T>): Promise<T> {
+    if (this.active >= this.limit) throw new BulkheadFullError(this.name) // rechaza, no encola
+    this.active++
+    try {
+      return await op()
+    } finally {
+      this.active--
+    }
+  }
+}
+
+const recosBulkhead = new Bulkhead('recomendaciones', 3)
+const paymentsBulkhead = new Bulkhead('pagos', 10)
+
+const recos = await recosBulkhead.run(() => recoClient.forUser(userId)).catch(() => [])  // degradar
+```
+
+```python title="Python (asyncio)"
+import asyncio
+
+class Bulkhead:
+    def __init__(self, name: str, limit: int) -> None:
+        self.name = name
+        self._sem = asyncio.Semaphore(limit)
+
+    async def run(self, coro_fn):
+        if self._sem.locked():                         # sin permisos libres: falla rápido
+            raise BulkheadFull(self.name)
+        async with self._sem:
+            return await coro_fn()
+
+recos_bulkhead = Bulkhead("recomendaciones", 3)
+
+async def product_page(user_id: str) -> Page:
+    try:
+        recos = await recos_bulkhead.run(lambda: reco_client.for_user(user_id))
+    except (BulkheadFull, httpx.HTTPError):
+        recos = []                                     # la página sale igual
+    return Page(products=await catalog.list(), recos=recos)
+```
+
+</CodeTabs>
+
+**Dónde lo ves:** los thread pools por dependencia de Hystrix, el `Bulkhead` y `ThreadPoolBulkhead` de resilience4j, los pools de conexiones separados por base de datos, colas y workers distintos para trabajos críticos y secundarios, los límites de CPU y memoria por contenedor en Kubernetes. **Cuándo no:** con pocas dependencias y tráfico bajo, dividir un pool pequeño en compartimentos aún más pequeños puede rechazar tráfico legítimo. Dimensiona con datos (concurrencia ≈ tasa de llegada × latencia, la ley de Little). **Relacionados:** Circuit Breaker, Rate Limiting, Queue-Based Load Leveling.
+
+## Componer las políticas: el orden importa
+
+En producción no usas una política sola: usas una **pila**. Cada una envuelve a la siguiente, como capas de [Decorator](/patrones/estructurales), y el orden cambia el comportamiento.
+
+El *standard resilience handler* de .NET (construido sobre Polly) aplica, de afuera hacia adentro: **rate limiter → timeout total → retry → circuit breaker → timeout por intento**. resilience4j, por su parte, aplica por defecto en Spring `Retry(CircuitBreaker(RateLimiter(TimeLimiter(Bulkhead(función)))))`. Las dos coinciden en lo esencial:
+
+- **Timeout por intento, adentro.** Cada intento queda acotado y, si expira, el breaker lo cuenta como fallo.
+- **Circuit breaker, dentro del retry.** Cada intento queda registrado en el breaker; cuando se abre, el retry recibe un error inmediato. Configura el retry para no reintentar ese error (o para esperar el tiempo que indica), o quemará sus intentos en microsegundos.
+- **Timeout total, afuera del retry.** Acota cuánto espera el usuario en total, sumando todos los intentos y esperas.
+- **Fallback, lo más afuera.** Es la última palabra: si todo lo demás falló, devuelves un valor degradado.
+
+<CodeTabs>
+
+```ts title="TypeScript (cockatiel)"
+import {
+  ConsecutiveBreaker, ExponentialBackoff, TimeoutStrategy,
+  circuitBreaker, fallback, handleAll, retry, timeout, wrap,
+} from 'cockatiel'
+
+const perAttempt = timeout(2_000, TimeoutStrategy.Aggressive)
+const breaker = circuitBreaker(handleAll, { halfOpenAfter: 30_000, breaker: new ConsecutiveBreaker(5) })
+const retries = retry(handleAll, { maxAttempts: 3, backoff: new ExponentialBackoff() })
+const degrade = fallback(handleAll, () => ({ carrier: 'estándar', price: FLAT_RATE }))
+
+// wrap(a, b, c) === a.execute(() => b.execute(() => c.execute(fn)))
+const shippingPolicy = wrap(degrade, retries, breaker, perAttempt)
+
+const quote = await shippingPolicy.execute(({ signal }) => carrier.quote(order, { signal }))
+```
+
+```csharp title="C# (Polly v8)"
+// En Polly, la primera estrategia agregada es la más externa
+ResiliencePipeline<Quote> pipeline = new ResiliencePipelineBuilder<Quote>()
+    .AddFallback(new FallbackStrategyOptions<Quote>
+    {
+        FallbackAction = _ => Outcome.FromResultAsValueTask(Quote.FlatRate())
+    })
+    .AddTimeout(TimeSpan.FromSeconds(10))                       // timeout total
+    .AddRetry(new RetryStrategyOptions<Quote>
+    {
+        MaxRetryAttempts = 3,
+        BackoffType = DelayBackoffType.Exponential,
+        UseJitter = true,
+    })
+    .AddCircuitBreaker(new CircuitBreakerStrategyOptions<Quote>
+    {
+        FailureRatio = 0.5,
+        MinimumThroughput = 20,
+        SamplingDuration = TimeSpan.FromSeconds(30),
+        BreakDuration = TimeSpan.FromSeconds(15),
+    })
+    .AddTimeout(TimeSpan.FromSeconds(2))                        // timeout por intento
+    .Build();
+
+Quote quote = await pipeline.ExecuteAsync(async ct => await carrier.QuoteAsync(order, ct), cancellationToken);
+```
+
+</CodeTabs>
+
+<Callout type="warn" title="Fallbacks que mienten">
+
+Un fallback debe ser **honesto** y **barato**. Mostrar recomendaciones cacheadas o una tarifa de envío plana está bien. Devolver "pago aprobado" porque pagos no responde es un desastre. Y un fallback que llama a *otra* dependencia frágil solo mueve el problema de lugar. Además, regístralo en métricas: un fallback silencioso puede esconder una caída durante días.
+
+</Callout>
+
+<Quiz
+  question="Pones un único timeout de 2 s AFUERA del retry (que hace 3 intentos con backoff). ¿Qué pasa cuando la dependencia tarda 1,8 s por respuesta y falla de forma intermitente?"
+  options={[
+    { text: 'Cada intento tiene 2 s, así que hay hasta 6 s para los 3 intentos.', why: 'Eso ocurriría con el timeout por intento, adentro del retry. Afuera, los 2 s cubren todos los intentos juntos.' },
+    { text: 'El primer intento consume casi todo el presupuesto; el retry prácticamente nunca llega a ejecutarse.', correct: true, why: 'El timeout externo acota el total. Por eso las pilas reales usan dos timeouts: uno por intento (adentro) y uno total (afuera), con el total mayor que la suma esperada.' },
+    { text: 'El circuit breaker se abre inmediatamente.', why: 'No hay breaker en esta configuración, y aunque lo hubiera, necesitaría varios fallos en su ventana para abrirse.' },
+    { text: 'Es equivalente a ponerlo adentro; el orden no importa.', why: 'El orden de las políticas cambia por completo el comportamiento; justamente esa es la lección.' },
+  ]}
+/>
+
+## Sidecar y Ambassador
+
+Hasta aquí todo vive **dentro** de tu proceso, como librería. Esa opción tiene un costo: cada lenguaje necesita su librería, y cada equipo la configura a su manera. Los patrones de despliegue mueven esas preocupaciones **fuera** del proceso.
+
+**Sidecar.** *Intención:* desplegar una funcionalidad auxiliar en un proceso o contenedor separado que vive junto a la aplicación (mismo pod, mismo host) y comparte su ciclo de vida. Ejemplos: un agente que envía logs (Fluent Bit), un proxy de red (Envoy), un runtime de bloques reutilizables (Dapr).
+
+**Ambassador.** *Intención:* un sidecar especializado en las llamadas **salientes**: la app habla con `localhost` y el ambassador se encarga de reintentos, timeouts, circuit breaking, TLS y descubrimiento de servicios hacia el destino real. El catálogo de Azure lo describe como un servicio auxiliar que envía peticiones de red en nombre de la aplicación consumidora.
+
+<FlowDiagram
+  caption="Un service mesh: cada servicio tiene un proxy sidecar que aplica las políticas de red. El código de la app solo llama a localhost."
+  nodes={[
+    { id: 'app', label: 'checkout', kind: 'service', x: 0, y: 0, sub: 'tu código' },
+    { id: 'sc1', label: 'Envoy', kind: 'network', x: 1, y: 0, sub: 'sidecar, mismo pod' },
+    { id: 'sc2', label: 'Envoy', kind: 'network', x: 3, y: 0, sub: 'sidecar, mismo pod' },
+    { id: 'pay', label: 'pagos', kind: 'payment', x: 4, y: 0 },
+    { id: 'cp', label: 'Control plane', kind: 'core', x: 2, y: 1.3, sub: 'Istio / Linkerd' },
+  ]}
+  edges={[
+    { from: 'app', to: 'sc1', label: 'localhost' },
+    { from: 'sc1', to: 'sc2', label: 'mTLS' },
+    { from: 'sc2', to: 'pay' },
+    { from: 'cp', to: 'sc1', dashed: true },
+    { from: 'cp', to: 'sc2', dashed: true },
+  ]}
+  steps={[
+    { title: 'La app llama a localhost', body: 'El código de checkout no sabe de reintentos ni certificados: hace una petición HTTP simple a su sidecar.', active: ['app', 'sc1'], flow: ['app-sc1'] },
+    { title: 'El sidecar aplica políticas', body: 'Envoy aplica timeout, reintentos con presupuesto, circuit breaking y balanceo, según la configuración que recibió del control plane.', active: ['sc1', 'cp'], flow: ['cp-sc1'] },
+    { title: 'Tráfico cifrado entre proxies', body: 'Los dos sidecars se autentican con mTLS. El cifrado es una decisión de plataforma, no de cada equipo.', active: ['sc1', 'sc2'], flow: ['sc1-sc2'] },
+    { title: 'Entrega al servicio', body: 'El sidecar de pagos recibe, aplica sus propias políticas de entrada y entrega la petición en localhost.', active: ['sc2', 'pay'], flow: ['sc2-pay'] },
+  ]}
+/>
+
+Con Dapr, por ejemplo, invocar otro servicio es una llamada HTTP al sidecar local; Dapr resuelve el destino y aplica las políticas de resiliencia configuradas:
+
+```ts title="checkout/pay.ts"
+// El sidecar de Dapr escucha en un puerto local (3500 en los ejemplos de su documentación)
+const res = await fetch('http://localhost:3500/v1.0/invoke/payments/method/charge', {
+  method: 'POST',
+  body: JSON.stringify({ orderId, amount }),
+  signal: AbortSignal.timeout(3_000),
+})
+```
+
+**Trade-offs:** ganas consistencia entre lenguajes y sacas código de infraestructura de tu app. Pagas con un salto de red extra por llamada, CPU y memoria por cada pod, y una plataforma más que operar. Y un riesgo concreto: si tu librería reintenta **y** el sidecar reintenta, vuelves a la amplificación. Decide en qué capa vive cada política. **Cuándo no:** con pocos servicios en un solo lenguaje, una librería bien configurada es más simple. **Relacionados:** Proxy, Decorator, Gateway Offloading.
+
+## Strangler Fig
+
+**Intención:** reemplazar un sistema legado de a poco, interceptando las peticiones y redirigiendo funcionalidad por funcionalidad hacia el sistema nuevo, hasta que el viejo se pueda apagar.
+
+Fowler tomó el nombre de las higueras estranguladoras que vio en los bosques de Queensland: germinan sobre un árbol, bajan raíces hasta el suelo y, con los años, lo envuelven y reemplazan manteniendo su forma. La alternativa, la reescritura completa con fecha de corte, tiene una historia larga de proyectos que nunca llegaron a la fecha.
+
+<FlowDiagram
+  caption="Strangler Fig: un router delante del monolito desvía funcionalidad al sistema nuevo paso a paso."
+  nodes={[
+    { id: 'u', label: 'Clientes', kind: 'users', x: 0, y: 1 },
+    { id: 'r', label: 'Router', kind: 'gateway', x: 1, y: 1, sub: 'proxy / API gateway' },
+    { id: 'old', label: 'Monolito', kind: 'server', x: 3, y: 0, sub: 'legado' },
+    { id: 'new', label: 'Checkout nuevo', kind: 'service', x: 3, y: 2, tone: 'line' },
+    { id: 'olddb', label: 'BD legado', kind: 'db', x: 4, y: 0 },
+    { id: 'newdb', label: 'BD checkout', kind: 'db', x: 4, y: 2 },
+  ]}
+  edges={[
+    { from: 'u', to: 'r' },
+    { from: 'r', to: 'old' },
+    { from: 'r', to: 'new' },
+    { from: 'old', to: 'olddb' },
+    { from: 'new', to: 'newdb' },
+    { from: 'new', to: 'old', dashed: true, label: 'ACL' },
+  ]}
+  steps={[
+    { title: '1. Interceptar', body: 'Pones un router delante del monolito. Al principio reenvía todo: nadie nota el cambio, pero ya tienes el punto de control.', active: ['u', 'r', 'old'], flow: ['u-r', 'r-old'] },
+    { title: '2. Construir una pieza', body: 'Construyes el checkout nuevo con su propia base. Lee lo que necesita del legado a través de una capa anticorrupción, para no heredar su modelo.', active: ['new', 'newdb', 'old'], flow: ['new-old', 'new-newdb'] },
+    { title: '3. Desviar gradualmente', body: 'El router manda POST /checkout al servicio nuevo, primero a un porcentaje pequeño de usuarios, luego a todos. Si algo sale mal, vuelves la ruta atrás en segundos.', active: ['r', 'new'], flow: ['u-r', 'r-new'] },
+    { title: '4. Repetir y apagar', body: 'Funcionalidad por funcionalidad, el monolito recibe cada vez menos tráfico. Cuando no le queda nada, lo apagas.', active: ['old', 'olddb'], flow: [] },
+  ]}
+/>
+
+```ts title="router/strangler.ts"
+// Un router mínimo: rutas migradas van al sistema nuevo, con rollout por porcentaje
+const migrated: { prefix: string; target: string; rollout: number }[] = [
+  { prefix: '/checkout', target: 'http://checkout-svc', rollout: 100 },
+  { prefix: '/shipping/quote', target: 'http://shipping-svc', rollout: 10 },   // canary al 10 %
+]
+
+export function pickUpstream(path: string, userId: string): string {
+  const route = migrated.find((r) => path.startsWith(r.prefix))
+  if (route && bucketOf(userId) < route.rollout) return route.target   // bucket estable 0–99 por usuario
+  return 'http://legacy-monolith'
+}
+```
+
+**Cuándo no:** si el sistema es pequeño, reescribirlo puede ser más barato que mantener dos sistemas en paralelo durante meses. Necesitas un punto de entrada interceptable (HTTP, una cola); si el legado es un batch que escribe directo a la base de otros, primero hay que crear esa costura. Y no te quedes a medias: un estrangulamiento eterno es pagar dos sistemas para siempre. La capa anticorrupción se explica en [DDD estratégico](/arquitectura/ddd-estrategico) y la migración hacia servicios en [Microservicios](/arquitectura/microservicios). **Relacionados:** Facade, Anti-Corruption Layer, Branch by Abstraction.
+
+## Cache-Aside
+
+**Intención:** que la aplicación cargue datos en la cache **bajo demanda**: busca primero en la cache y, si no están, los lee de la fuente y los guarda para la próxima vez.
+
+<FlowDiagram
+  caption="Cache-aside: la aplicación coordina la cache y la base; la cache no sabe nada de la base."
+  nodes={[
+    { id: 'c', label: 'Cliente', kind: 'client', x: 0, y: 1 },
+    { id: 'app', label: 'Catálogo', kind: 'service', x: 1.5, y: 1 },
+    { id: 'redis', label: 'Redis', kind: 'cache', x: 3, y: 0 },
+    { id: 'db', label: 'Postgres', kind: 'db', x: 3, y: 2 },
+  ]}
+  edges={[
+    { from: 'c', to: 'app' },
+    { from: 'app', to: 'redis' },
+    { from: 'app', to: 'db' },
+  ]}
+  steps={[
+    { title: 'Lectura con hit', body: <>La app pide <code>product:42</code> a Redis. Está: responde sin tocar la base.</>, active: ['app', 'redis'], flow: ['c-app', 'app-redis'] },
+    { title: 'Lectura con miss', body: 'No está en Redis. La app lee de Postgres y guarda el resultado en Redis con un TTL.', active: ['app', 'db', 'redis'], flow: ['app-db', 'app-redis'] },
+    { title: 'Escritura', body: <>Al cambiar el precio, la app actualiza Postgres y <b>borra</b> la clave en Redis. La siguiente lectura la recarga fresca.</>, active: ['app', 'db', 'redis'], flow: ['app-db', 'app-redis'] },
+  ]}
+/>
+
+<CodeTabs>
+
+```ts title="TypeScript"
+const TTL_SECONDS = 300
+
+export async function getProduct(id: string): Promise<Product | null> {
+  const key = `product:${id}`
+  const cached = await redis.get(key)
+  if (cached) return JSON.parse(cached)                       // hit
+
+  const product = await db.products.findById(id)              // miss: fuente de verdad
+  if (product) await redis.set(key, JSON.stringify(product), 'EX', TTL_SECONDS)
+  return product
+}
+
+export async function updatePrice(id: string, price: Money) {
+  await db.products.updatePrice(id, price)                    // 1. primero la base
+  await redis.del(`product:${id}`)                            // 2. después invalidar (no actualizar)
+}
+```
+
+```python title="Python"
+import json
+
+TTL_SECONDS = 300
+
+def get_product(product_id: str) -> dict | None:
+    key = f"product:{product_id}"
+    if (cached := r.get(key)) is not None:
+        return json.loads(cached)                       # hit
+
+    product = repo.get(product_id)                      # miss
+    if product is not None:
+        r.set(key, json.dumps(product), ex=TTL_SECONDS)
+    return product
+
+def update_price(product_id: str, price: Decimal) -> None:
+    repo.update_price(product_id, price)                # primero la base
+    r.delete(f"product:{product_id}")                   # después invalidar
+```
+
+</CodeTabs>
+
+Tres detalles que separan una cache que ayuda de una que miente:
+
+- **Invalida, no actualices.** Si dos escrituras concurrentes actualizan la cache en distinto orden que la base, la cache queda con el valor viejo para siempre. Borrar la clave es más seguro; el TTL es la red de seguridad para lo que se escape.
+- **Estampida de cache.** Cuando una clave muy popular expira, cientos de peticiones hacen *miss* a la vez y golpean la base. Mitigaciones: que una sola petición recargue (*single flight* o un lock corto), TTL con jitter para que no expiren todas juntas, o refresco anticipado.
+- **La cache no es la fuente de verdad.** Si Redis se cae, la app debe seguir funcionando contra la base (más lenta). Si no puede, tu cache se volvió una dependencia crítica y necesita sus propias defensas.
+
+**Cuándo no:** datos que cambian en cada lectura o que deben ser estrictamente consistentes (un saldo), y datos estáticos que caben en memoria local del proceso. Las otras estrategias (read-through, write-through, write-behind) están en [Caching](/system-design/caching). **Relacionados:** Proxy (una cache transparente es un proxy), Memoization, Materialized View.
+
+<Quiz
+  question="En cache-aside, al actualizar el precio de un producto, ¿qué orden es más seguro?"
+  options={[
+    { text: 'Actualizar la cache con el precio nuevo y después la base.', why: 'Si la escritura a la base falla, la cache sirve un precio que no existe. Y con escrituras concurrentes, el orden puede quedar invertido.' },
+    { text: 'Actualizar la base y después borrar la clave de la cache.', correct: true, why: 'La base es la fuente de verdad y queda bien primero. Borrar (en vez de escribir) evita carreras entre escrituras; la próxima lectura recarga el valor correcto, y el TTL cubre los casos raros.' },
+    { text: 'Borrar la cache, actualizar la base y no hacer nada más.', why: 'Entre el borrado y la escritura, una lectura concurrente puede recargar el precio viejo en la cache. Si borras antes, también conviene borrar después.' },
+    { text: 'No importa el orden si el TTL es corto.', why: 'Un TTL corto reduce la ventana del error pero no lo elimina, y te cuesta muchos más misses.' },
+  ]}
+/>
+
+<Takeaways>
+
+- Toda llamada de red necesita **timeout**, elegido a partir de la latencia observada y propagando el presupuesto restante.
+- **Retry** solo para fallos transitorios, con backoff exponencial, **jitter** e **idempotencia**. Reintenta en una sola capa para no amplificar.
+- **Circuit breaker** deja de golpear a quien está caído: cerrado, abierto, semiabierto. Es un proxy con una máquina de estados.
+- **Bulkhead** aísla recursos por dependencia para que una funcionalidad secundaria lenta no tumbe a la crítica.
+- El **orden** de la pila importa: timeout por intento adentro, breaker dentro del retry, timeout total afuera, fallback al final.
+- **Sidecar y Ambassador** sacan estas políticas del proceso; **Strangler Fig** migra un legado por partes; **Cache-Aside** carga bajo demanda e invalida al escribir.
+
+</Takeaways>
+
+## Fuentes y lecturas
+
+- Michael T. Nygard, [Release It! Design and Deploy Production-Ready Software, 2nd ed.](https://pragprog.com/titles/mnee2/release-it-second-edition/) (Pragmatic Bookshelf, 2018).
+- Martin Fowler, [CircuitBreaker](https://martinfowler.com/bliki/CircuitBreaker.html) (2014) y [Strangler Fig](https://martinfowler.com/bliki/StranglerFigApplication.html).
+- Marc Brooker, [Exponential Backoff And Jitter](https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter/), AWS Architecture Blog.
+- Microsoft Azure Architecture Center: [Retry](https://learn.microsoft.com/en-us/azure/architecture/patterns/retry), [Circuit Breaker](https://learn.microsoft.com/en-us/azure/architecture/patterns/circuit-breaker), [Bulkhead](https://learn.microsoft.com/en-us/azure/architecture/patterns/bulkhead), [Sidecar](https://learn.microsoft.com/en-us/azure/architecture/patterns/sidecar), [Ambassador](https://learn.microsoft.com/en-us/azure/architecture/patterns/ambassador), [Strangler Fig](https://learn.microsoft.com/en-us/azure/architecture/patterns/strangler-fig), [Cache-Aside](https://learn.microsoft.com/en-us/azure/architecture/patterns/cache-aside).
+- Microsoft Learn, [Build resilient HTTP apps](https://learn.microsoft.com/en-us/dotnet/core/resilience/http-resilience) (orden del standard resilience handler).
+- [resilience4j: CircuitBreaker](https://resilience4j.readme.io/docs/circuitbreaker) y [orden de los aspectos en Spring Boot](https://resilience4j.readme.io/docs/getting-started-3).
+- [Polly: Circuit breaker](https://www.pollydocs.org/strategies/circuit-breaker.html) y [pipelines](https://www.pollydocs.org/pipelines/index.html).
+- [cockatiel](https://github.com/connor4312/cockatiel) y [opossum](https://github.com/nodeshift/opossum) para Node; [tenacity](https://tenacity.readthedocs.io/en/latest/) para Python.
+- [Netflix Hystrix](https://github.com/Netflix/Hystrix) (README con el estado de mantenimiento).
+- [Dapr: service invocation](https://docs.dapr.io/developing-applications/building-blocks/service-invocation/service-invocation-overview/).
+- Stripe, [Idempotent requests](https://docs.stripe.com/api/idempotent_requests).

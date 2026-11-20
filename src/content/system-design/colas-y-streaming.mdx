@@ -1,0 +1,262 @@
+import { KafkaPartitions } from '../../components/widgets/system-design/KafkaPartitions'
+import { DeliverySemantics } from '../../components/widgets/system-design/DeliverySemantics'
+
+Cuando el servicio de pedidos llama por HTTP al de inventario, que llama al de pagos, que llama al de notificaciones, la disponibilidad de la cadena es el producto de las disponibilidades de cada eslabón, y la latencia es la suma. Si notificaciones se cae, nadie puede comprar. Poner un **intermediario de mensajes** en el medio corta esa dependencia: el productor deja un mensaje y sigue; los consumidores lo procesan a su ritmo.
+
+Esa idea simple trae preguntas difíciles, y son justo las que hace un entrevistador: ¿qué pasa si el consumidor muere a mitad de procesar? ¿Puede llegar un mensaje dos veces? ¿En qué orden llegan? ¿Qué haces con un mensaje que siempre falla? ¿Y si los productores escriben más rápido de lo que los consumidores leen?
+
+En este tema vas a ver los tres modelos de mensajería (cola, pub/sub y log), cómo funciona Kafka por dentro, las garantías de entrega con sus trampas, idempotencia, el patrón outbox, colas de mensajes muertos y backpressure.
+
+## Por qué poner algo en el medio (y cuándo no)
+
+Un intermediario te da cuatro cosas:
+
+- **Desacoplamiento en el tiempo.** El productor no espera al consumidor. Si el consumidor está caído, los mensajes esperan.
+- **Nivelación de carga.** Un pico de 10× en pedidos no tiene que tumbar al servicio de facturación: la cola absorbe el pico y el consumidor lo procesa a ritmo constante.
+- **Fan-out.** Un evento `PedidoCreado` lo consumen inventario, email, analítica y antifraude, sin que el servicio de pedidos sepa que existen.
+- **Reintentos.** Si procesar falla, el mensaje sigue ahí y se reintenta.
+
+Y tiene costos que debes nombrar: el sistema pasa a ser **eventualmente consistente** (el email llega segundos después), aparecen **duplicados y desorden**, depurar un flujo asíncrono es más difícil que leer una traza HTTP, y operas una pieza de infraestructura más.
+
+No uses una cola cuando el usuario **necesita la respuesta ahora** para continuar (validar una tarjeta antes de confirmar la compra), cuando el volumen es bajo y la llamada directa es simple y confiable, o cuando solo lo haces "porque escala". Una regla útil: si el trabajo puede terminar después de responderle al usuario, es candidato a ir por una cola.
+
+## Tres modelos: cola, pub/sub y log
+
+<Compare>
+<Option title="Cola de trabajo" verdict="Repartir tareas">
+
+Cada mensaje lo procesa **un** consumidor (consumidores en competencia). Se borra al confirmar (*ack*). Si el consumidor no confirma a tiempo, el mensaje vuelve a ser visible para otro.
+
+Ejemplos: Amazon SQS, RabbitMQ. Ideal para jobs: redimensionar imágenes, enviar emails. Sin replay: lo procesado desaparece.
+
+</Option>
+<Option title="Pub/sub" verdict="Avisar a muchos">
+
+Cada mensaje publicado en un tópico llega a **todas** las suscripciones. Cada suscripción suele tener su propia cola.
+
+Ejemplos: Amazon SNS (a menudo con SQS detrás de cada suscripción), Google Cloud Pub/Sub, exchanges fanout de RabbitMQ.
+
+</Option>
+<Option title="Log" verdict="Streaming y replay">
+
+Un registro **append-only** particionado. Los mensajes no se borran al leerse: se retienen por tiempo o tamaño. Cada consumidor lleva su posición (*offset*) y puede releer desde cualquier punto.
+
+Ejemplos: Apache Kafka, Amazon Kinesis, Redpanda. Ideal para eventos de dominio, pipelines de datos, event sourcing.
+
+</Option>
+</Compare>
+
+La diferencia clave entre una cola y un log es **quién recuerda qué se procesó**. En una cola, el broker borra el mensaje cuando lo confirmas. En un log, el broker solo guarda los mensajes y cada grupo de consumidores guarda su offset. Por eso un log permite que un servicio nuevo consuma el historial completo, o que reproduzcas los eventos de ayer después de arreglar un bug.
+
+A cambio, en un log el orden y el paralelismo están atados a las particiones (lo ves en la siguiente sección), y un mensaje que falla bloquea a los que vienen detrás en su partición. En una cola, cualquier consumidor libre toma el siguiente mensaje y uno lento o fallido no frena al resto.<Sidenote>Kafka 4.x incorpora *share groups* (KIP-932), que permiten consumir un tópico con semántica de cola: varios consumidores leen de la misma partición y confirman mensajes individualmente.</Sidenote>
+
+## Kafka por dentro: particiones, offsets y grupos
+
+Un **tópico** de Kafka se divide en **particiones**. Cada partición es un log ordenado e inmutable; cada mensaje tiene un **offset**, su posición en ese log. El orden está garantizado **solo dentro de una partición**, no en el tópico completo.
+
+¿A qué partición va un mensaje? Si tiene **clave**, el productor hashea la clave y elige la partición con ese hash, así que **todos los mensajes con la misma clave van a la misma partición** y conservan su orden. Si usas el `pedido_id` como clave, los eventos `creado → pagado → enviado` de un pedido se leen en orden. Sin clave, los mensajes se reparten entre particiones para equilibrar la carga.
+
+Cada partición se **replica** en varios brokers (factor de replicación típico: 3). Una réplica es líder de la partición y las demás la siguen. Con `acks=all`, el productor espera a que todas las réplicas sincronizadas (*in-sync replicas*) tengan el mensaje; combinado con `min.insync.replicas=2`, una escritura confirmada sobrevive a la caída de un broker.
+
+Del lado del consumo, un **grupo de consumidores** reparte las particiones entre sus miembros: **cada partición la lee un solo consumidor del grupo** a la vez. Eso tiene consecuencias directas:
+
+- El **paralelismo máximo** de un grupo es el número de particiones. Con 4 particiones, el quinto consumidor no recibe nada.
+- Grupos distintos son independientes: el grupo de facturación y el de analítica leen el mismo tópico, cada uno con sus propios offsets.
+- Cuando un consumidor entra o sale, el grupo hace un **rebalanceo**. En el protocolo clásico *eager*, todos sueltan sus particiones y el consumo se detiene hasta acordar la nueva asignación. El rebalanceo **cooperativo** (incremental) solo mueve las particiones que cambian de dueño. Desde Kafka 4.0, el nuevo protocolo de grupos (KIP-848), donde el broker coordina la asignación de forma incremental, está disponible para producción.
+
+<KafkaPartitions />
+
+Haz la prueba: con 4 particiones y producción de 8 msg/s, un consumidor no da abasto y el lag crece. Agrega consumidores hasta 4 y el lag baja; agrega un quinto y quedará inactivo. Después cambia a rebalanceo eager y compara las pausas.
+
+### Elegir el número de particiones
+
+Es una decisión que conviene tomar con margen. Más particiones permiten más consumidores en paralelo y más throughput, pero cuestan memoria y archivos en los brokers y alargan los rebalanceos. Puedes agregar particiones a un tópico existente, pero **no reducirlas**, y al agregarlas cambia el resultado de `hash(clave) % particiones`: los mensajes nuevos de una clave pueden ir a otra partición y se rompe el orden respecto de los viejos. Si el orden por clave importa, sobredimensiona desde el principio.
+
+El indicador operativo más importante es el **consumer lag**: cuántos mensajes hay entre el último offset escrito y el último offset confirmado por el grupo. Si crece sostenidamente, el consumo no da abasto.
+
+<Quiz
+  question="Un tópico de Kafka tiene 6 particiones y tu grupo tiene 6 consumidores. El lag crece. Agregas 6 consumidores más y el lag sigue igual. ¿Por qué?"
+  options={[
+    { text: 'Los consumidores nuevos tardan en calentar la caché.', why: 'Podría afectar unos segundos, no explicar que el lag no cambie en absoluto.' },
+    { text: 'Cada partición se asigna a un solo consumidor del grupo; con 6 particiones, los 6 consumidores extra quedan inactivos. Hay que aumentar las particiones u optimizar el procesamiento.', correct: true, why: 'El paralelismo de un grupo está limitado por el número de particiones. Más particiones (con el cuidado del orden por clave) o procesar más rápido cada mensaje (lotes, menos E/S) es la salida.' },
+    { text: 'Kafka limita el throughput por tópico.', why: 'El throughput escala con particiones y brokers; no hay un límite fijo por tópico que explique esto.' },
+    { text: 'Hay que pasar a acks=all.', why: 'acks afecta la durabilidad del lado del productor, no la velocidad de consumo.' },
+  ]}
+/>
+
+<Callout type="interview" title="Qué decir cuando introduces Kafka">
+
+No basta con dibujar una caja que dice "Kafka". Di las tres decisiones: *"Particiono el tópico por `pedido_id` para mantener el orden de los eventos de cada pedido; con 32 particiones puedo escalar hasta 32 consumidores por grupo; uso `acks=all` con factor de replicación 3 para no perder eventos confirmados, y los consumidores son idempotentes porque la entrega es al menos una vez"*. Eso cubre orden, escala, durabilidad y duplicados en una frase.
+
+</Callout>
+
+## Garantías de entrega
+
+Hay tres niveles, y la diferencia está en **qué pasa cuando algo falla a mitad de camino**:
+
+- **At-most-once** (como mucho una vez): nunca hay duplicados, pero un mensaje se puede perder. Pasa si el consumidor confirma el offset *antes* de procesar y muere en el medio, o si el productor no reintenta.
+- **At-least-once** (al menos una vez): nunca se pierde un mensaje, pero puede procesarse más de una vez. Pasa si el consumidor procesa y muere *antes* de confirmar: al reiniciar, vuelve a recibir el mismo mensaje. Del lado del productor, si se pierde el ACK del broker, el productor reintenta y el mensaje queda escrito dos veces.
+- **Exactly-once** (exactamente una vez): el efecto ocurre una sola vez. Es lo que quieres y lo que más cuesta.
+
+Elige dónde muere el consumidor y cuenta cuántas veces se cobra al cliente:
+
+<DeliverySemantics />
+
+### La verdad sobre exactly-once
+
+Kafka ofrece exactly-once con dos piezas. El **productor idempotente** (`enable.idempotence=true`, activado por defecto en versiones recientes) asigna números de secuencia por partición para que el broker descarte reintentos duplicados. Las **transacciones** (introducidas en Kafka 0.11) permiten escribir en varias particiones y confirmar los offsets consumidos de forma atómica. Juntas dan exactly-once para flujos **Kafka → procesamiento → Kafka**, que es lo que usa Kafka Streams.
+
+Pero esa garantía termina en el borde de Kafka. Si tu consumidor cobra una tarjeta, manda un email o escribe en Postgres, Kafka no puede hacer atómico ese efecto con su offset. La receta universal es:
+
+> **Exactly-once en la práctica = entrega at-least-once + procesamiento idempotente.**
+
+Lo mismo con Amazon SQS FIFO: deduplica los envíos repetidos dentro de una ventana de 5 minutos, pero si tu consumidor procesa y muere antes de borrar el mensaje, lo vuelve a recibir. El consumidor tiene que ser idempotente igual.
+
+<Quiz
+  question="Tu consumidor lee un evento, inserta una fila en Postgres y luego hace commit del offset en Kafka. Si muere entre el insert y el commit, ¿qué pasa y cómo lo arreglas?"
+  options={[
+    { text: 'Se pierde el evento; hay que hacer commit antes del insert.', why: 'Hacer commit antes convierte el sistema en at-most-once: si muere entre el commit y el insert, el evento sí se pierde.' },
+    { text: 'El evento se vuelve a entregar y la fila se inserta dos veces. Guarda el id del evento con una restricción única (o en una tabla de procesados) en la misma transacción del insert.', correct: true, why: 'Es at-least-once: el reintento es seguro si el efecto es idempotente. La restricción única o la tabla de deduplicación en la misma transacción convierten el duplicado en un no-op.' },
+    { text: 'Activa las transacciones de Kafka y queda resuelto.', why: 'Las transacciones de Kafka cubren escrituras en Kafka y offsets, no una base de datos externa.' },
+    { text: 'Usa acks=all en el productor.', why: 'acks protege contra pérdidas al producir; no cambia lo que pasa cuando el consumidor muere.' },
+  ]}
+/>
+
+## Idempotencia y el patrón outbox
+
+Una operación es **idempotente** si aplicarla dos veces deja el mismo resultado que aplicarla una. `saldo = 100` es idempotente; `saldo = saldo + 10` no. Técnicas, de la más simple a la más general:
+
+- **Hacerla idempotente por naturaleza**: escribir valores absolutos en lugar de incrementos, o usar *upserts*.
+- **Restricción única**: el id del evento (o una clave de negocio como `suscripcion_id + fecha`) como clave única. El duplicado falla y lo ignoras.
+- **Tabla de mensajes procesados** en la misma transacción que el efecto.
+- **Claves de idempotencia hacia APIs externas**: proveedores de pagos como Stripe aceptan una clave por petición y devuelven el mismo resultado si la repites.
+- **Escrituras condicionales** con versión: `UPDATE … WHERE version = 7`.
+
+```ts title="consumers/charge-subscription.ts" {5-10}
+async function handle(event: SubscriptionDue) {
+  await db.transaction(async (tx) => {
+    // Si ya procesamos este evento, la inserción choca con la clave única
+    // y salimos sin cobrar. Ambas escrituras se confirman juntas o ninguna.
+    const inserted = await tx.query(
+      `INSERT INTO processed_events (event_id) VALUES ($1)
+       ON CONFLICT (event_id) DO NOTHING`,
+      [event.id],
+    )
+    if (inserted.rowCount === 0) return // duplicado: no-op
+    await tx.query(
+      `INSERT INTO charges (subscription_id, period, amount_cents, idempotency_key)
+       VALUES ($1, $2, $3, $4)`,
+      [event.subscriptionId, event.period, event.amountCents, event.id],
+    )
+  })
+  // El cobro real al proveedor se hace con la misma idempotency_key,
+  // así un reintento no genera un segundo cargo.
+}
+```
+
+### El problema de la doble escritura
+
+El caso inverso es igual de traicionero. El servicio de pedidos guarda el pedido en su base y publica `PedidoCreado` en Kafka. Son dos sistemas: si guarda y muere antes de publicar, el evento se pierde; si publica y la transacción de la base falla, anunciaste un pedido que no existe. No hay transacción que abarque ambos.
+
+El **patrón outbox** lo resuelve escribiendo el evento en una tabla `outbox` de la misma base, **en la misma transacción** que el pedido. Un proceso aparte lee esa tabla y publica:
+
+<FlowDiagram
+  caption="Patrón outbox: el evento se guarda en la misma transacción que el dato y un relay lo publica con entrega al menos una vez."
+  nodes={[
+    { id: 'api', label: 'Servicio pedidos', kind: 'service', x: 0, y: 0 },
+    { id: 'db', label: 'Postgres', kind: 'db', x: 1.3, y: 1, sub: 'orders + outbox' },
+    { id: 'relay', label: 'Relay', kind: 'worker', x: 2.6, y: 0, sub: 'Debezium o poller' },
+    { id: 'k', label: 'Kafka', kind: 'stream', x: 4, y: 0, sub: 'pedidos.eventos' },
+    { id: 'inv', label: 'Inventario', kind: 'service', x: 2.6, y: 2 },
+    { id: 'mail', label: 'Emails', kind: 'mail', x: 4, y: 1.3 },
+    { id: 'dlq', label: 'DLQ', kind: 'queue', x: 4, y: 2.6, sub: 'mensajes fallidos', tone: 'warn' },
+  ]}
+  edges={[
+    { from: 'api', to: 'db', label: '1 transacción' },
+    { from: 'db', to: 'relay', label: 'lee outbox' },
+    { from: 'relay', to: 'k' },
+    { from: 'k', to: 'inv', route: 'vh' },
+    { from: 'k', to: 'mail' },
+    { from: 'mail', to: 'dlq', dashed: true },
+  ]}
+  steps={[
+    { title: 'Una sola transacción', body: <>El servicio inserta el pedido y una fila en <code>outbox</code> con el evento <code>PedidoCreado</code>. O se guardan ambos o ninguno: ya no hay doble escritura.</>, active: ['api', 'db'], flow: ['api-db'] },
+    { title: 'El relay publica', body: 'Un proceso lee la outbox, ya sea consultándola periódicamente o leyendo el log de cambios de la base (CDC con Debezium), y publica en Kafka. Si muere después de publicar y antes de marcar la fila, la republica: entrega al menos una vez.', active: ['db', 'relay', 'k'], flow: ['db-relay', 'relay-k'] },
+    { title: 'Consumidores idempotentes', body: 'Inventario y emails consumen el evento. Como puede llegar dos veces, cada uno deduplica por el id del evento.', active: ['k', 'inv', 'mail'], flow: ['k-inv', 'k-mail'] },
+    { title: 'Mensajes que siempre fallan', body: 'Si el servicio de emails falla con un mensaje una y otra vez (un dato malformado), tras N intentos lo manda a una cola de mensajes muertos y dispara una alerta, para no bloquear a los demás.', active: ['mail', 'dlq'], flow: ['mail-dlq'] },
+  ]}
+/>
+
+El patrón outbox y sus variantes (sagas, CDC) se desarrollan en la línea de *Arquitectura de software*. Para system design, lo importante es reconocer la doble escritura y nombrar la solución.
+
+## Cuando algo sale mal: DLQ, orden y backpressure
+
+### Mensajes venenosos y colas de mensajes muertos
+
+Un mensaje que falla siempre (JSON malformado, un bug con cierto dato, una referencia a algo que no existe) es un **mensaje venenoso**. Si lo reintentas para siempre, consume recursos y, en un log, **bloquea a todos los mensajes detrás de él en su partición**.
+
+La solución es una **dead-letter queue** (DLQ): después de N intentos, el mensaje se aparta a otra cola para inspeccionarlo. En SQS se configura con una *redrive policy* y el parámetro `maxReceiveCount` (cuántas veces se puede recibir un mensaje antes de moverlo). Kafka no tiene DLQ en el broker; se implementa en el consumidor publicando en un tópico de reintentos o de mensajes muertos (Kafka Connect lo trae como configuración).
+
+Una DLQ sin alarma es un basurero. Necesitas: una alerta cuando recibe mensajes, guardar el error y el contexto con cada mensaje, y una forma de reinyectarlos (*redrive*) después de arreglar el bug. Distingue también errores **transitorios** (timeout de una dependencia: reintenta con backoff) de **permanentes** (dato inválido: directo a la DLQ). Los reintentos con backoff exponencial y jitter están en *Confiabilidad*.
+
+### Orden
+
+- El orden solo existe dentro de una partición (Kafka) o de un grupo de mensajes (SQS FIFO). Un **orden total** en todo el tópico requiere una sola partición, que no escala.
+- Pregúntate qué necesita orden de verdad. Casi siempre es "por entidad": por pedido, por usuario, por cuenta. Usa esa entidad como clave.
+- Los reintentos pueden **desordenar**: si apartas un mensaje fallido para reintentarlo después, los siguientes de la misma clave pasan antes. Si el orden importa, o bloqueas la clave hasta resolverlo, o haces que el consumidor tolere el desorden (por ejemplo, ignorando eventos con una versión menor a la que ya aplicó).
+
+### Backpressure
+
+Si los productores escriben más rápido de lo que los consumidores procesan, algo tiene que ceder. Opciones:
+
+1. **Escalar consumidores** (hasta el número de particiones) u optimizar el procesamiento: lotes, menos E/S por mensaje.
+2. **Dejar que el buffer absorba** si es un pico temporal. Un log aguanta mucho, pero tiene un límite: la **retención**. Si el lag supera la retención, los mensajes se borran antes de leerse.
+3. **Frenar al productor**: colas acotadas que rechazan o bloquean al llenarse; hacia afuera, responder 429 a los clientes.
+4. **Descartar o degradar**: soltar trabajo de baja prioridad (métricas de detalle) para proteger lo importante.
+
+Una cola sin límite no elimina la sobrecarga: la esconde hasta que se agota la memoria o el disco. Toda cola en un diseño debería tener un tamaño máximo y una respuesta definida para cuando se llena.
+
+<Callout type="interview" title="Las preguntas de profundización que vas a recibir">
+
+Prepara una respuesta corta para cada una: **¿duplicados?** At-least-once y consumidores idempotentes con el id del evento. **¿Orden?** Clave de partición por entidad; orden solo dentro de la partición. **¿Mensajes que fallan?** Reintentos con backoff para errores transitorios, DLQ con alerta para permanentes. **¿Consumidores lentos?** Monitorear el lag, escalar hasta el número de particiones, y backpressure si no alcanza. **¿Doble escritura?** Outbox.
+
+</Callout>
+
+<Quiz
+  question="Un consumidor de Kafka encuentra un mensaje con un formato que no puede parsear. Reintenta indefinidamente. ¿Cuál es el efecto y la mejor respuesta?"
+  options={[
+    { text: 'Solo ese mensaje se retrasa; los demás siguen procesándose.', why: 'En una cola como SQS sería así, pero en Kafka el consumidor avanza en orden por partición: el mensaje bloquea a todos los que vienen detrás en esa partición.' },
+    { text: 'Bloquea su partición y el lag crece. Hay que clasificar el error como permanente, mandar el mensaje a un tópico DLQ con el error, alertar y seguir con el siguiente offset.', correct: true, why: 'Un error de formato no se arregla reintentando. Apartarlo protege el resto de la partición, y la alerta más el redrive permiten recuperarlo después de corregir el bug.' },
+    { text: 'Kafka lo descarta automáticamente después de 3 intentos.', why: 'Kafka no tiene reintentos ni DLQ en el broker; esa lógica vive en el consumidor (o en frameworks como Kafka Connect).' },
+    { text: 'Hay que borrar el mensaje del tópico.', why: 'Un log de Kafka es inmutable: no se borran mensajes individuales. Se avanza el offset.' },
+  ]}
+/>
+
+## Cómo elegir
+
+- **Repartir trabajo entre workers**, sin necesidad de replay ni orden estricto: una cola (SQS, RabbitMQ). Simple, con reintentos y DLQ incluidos.
+- **Notificar a varios sistemas** de un mismo evento: pub/sub (SNS + SQS, Google Pub/Sub), o un tópico de Kafka con un grupo por consumidor.
+- **Eventos de dominio que varios servicios consumen, orden por entidad, replay, alto volumen**: un log (Kafka, Kinesis).
+- **Tareas programadas o con reintentos largos y estado** (un flujo de onboarding de varios días): un orquestador de workflows, no una cola cruda.
+
+<Takeaways>
+
+- Un intermediario desacopla en el tiempo, nivela picos y permite fan-out, a cambio de consistencia eventual, duplicados y más operación. Úsalo cuando el trabajo puede terminar después de responder.
+- Cola: cada mensaje lo procesa un consumidor y se borra. Pub/sub: cada suscriptor recibe una copia. Log: mensajes retenidos, offsets por grupo y replay.
+- En Kafka, el orden es por partición, la clave decide la partición y el paralelismo de un grupo está limitado por el número de particiones.
+- La entrega real es at-least-once: el consumidor tiene que ser idempotente. Exactly-once de punta a punta = at-least-once + idempotencia.
+- La doble escritura (base + broker) se resuelve con el patrón outbox.
+- Los mensajes venenosos van a una DLQ con alerta y redrive; separa errores transitorios de permanentes.
+- Toda cola necesita un límite y un plan de backpressure; el lag es la métrica que te avisa.
+
+</Takeaways>
+
+## Fuentes y lecturas
+
+- Martin Kleppmann y Chris Riccomini, [*Designing Data-Intensive Applications*, 2.ª ed.](https://www.oreilly.com/library/view/designing-data-intensive-applications/9781098119058/) (O'Reilly, 2026). Capítulo de procesamiento de streams.
+- Apache Kafka, [documentación oficial](https://kafka.apache.org/documentation/) y la explicación de [garantías de entrega](https://docs.confluent.io/kafka/design/delivery-semantics.html) (copia editada por Confluent de la sección de diseño).
+- Confluent, [Exactly-Once Semantics Are Possible: Here's How Kafka Does It](https://www.confluent.io/blog/exactly-once-semantics-are-possible-heres-how-apache-kafka-does-it/).
+- Apache Kafka, [KIP-679: Producer will enable the strongest delivery guarantee by default](https://cwiki.apache.org/confluence/spaces/KAFKA/pages/165221843/KIP-679+Producer+will+enable+the+strongest+delivery+guarantee+by+default).
+- Apache Kafka, [KIP-848: The Next Generation of the Consumer Rebalance Protocol](https://cwiki.apache.org/confluence/display/KAFKA/KIP-848:+The+Next+Generation+of+the+Consumer+Rebalance+Protocol) y [KIP-932: Queues for Kafka](https://cwiki.apache.org/confluence/spaces/KAFKA/pages/255070434/KIP-932+Queues+for+Kafka).
+- AWS, [Using dead-letter queues in Amazon SQS](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-dead-letter-queues.html) y [Exactly-once processing in Amazon SQS](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/FIFO-queues-exactly-once-processing.html).
+- Chris Richardson, [Pattern: Transactional outbox](https://microservices.io/patterns/data/transactional-outbox).

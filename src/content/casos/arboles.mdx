@@ -1,0 +1,800 @@
+import { TreeTraversal } from '../../components/widgets/entrevistas/TreeTraversal'
+import { ValidateBst } from '../../components/widgets/entrevistas/ValidateBst'
+
+Los árboles están en todos lados aunque no los veas: el sistema de archivos, el DOM del navegador, el árbol sintáctico que arma tu compilador, los índices de tu base de datos (árboles B, que repasamos en [estructuras de datos](/casos/estructuras-de-datos)). En entrevistas, el **árbol binario** es probablemente la estructura más preguntada después de los arreglos y los diccionarios.
+
+La buena noticia es que casi todos los problemas de árboles se resuelven con la misma herramienta: **una función recursiva que resuelve un subárbol** y combina lo que le devuelven sus hijos. Si aprendes a hacerte las tres preguntas correctas (qué devuelve la función, cuál es el caso base y cómo se combinan los hijos), la mayoría de estos problemas pasan de "no sé por dónde empezar" a cinco líneas. Este tema te da esa forma de pensar, los cuatro recorridos que tienes que saber escribir dormido, y los problemas de BST y de ancestro común que más se repiten.
+
+<Sketch
+  width={640}
+  height={300}
+  caption="La forma de pensar todo el tema: la función ya resolvió cada subárbol (el salto de fe); solo falta combinar sus respuestas en el nodo."
+  items={[
+    { type: 'circle', x: 200, y: 54, r: 24, label: '3', font: 'code', tone: 'line' },
+    { type: 'line', points: [[184, 72], [140, 108]] },
+    { type: 'line', points: [[216, 72], [260, 108]], with: true },
+    { type: 'path', d: 'M 130 110 L 66 236 L 194 236 Z', len: 400 },
+    { type: 'path', d: 'M 270 110 L 210 236 L 330 236 Z', len: 380, with: true },
+    { type: 'text', x: 130, y: 214, text: 'altura 2', size: 20, anchor: 'middle' },
+    { type: 'text', x: 270, y: 214, text: 'altura 1', size: 20, anchor: 'middle' },
+    { type: 'arrow', from: [96, 160], to: [172, 46], bend: -30, tone: 'line', label: 'devuelve 2', labelAt: [62, 100] },
+    { type: 'arrow', from: [304, 160], to: [228, 46], bend: 30, tone: 'line', label: 'devuelve 1', labelAt: [340, 100] },
+    { type: 'text', x: 400, y: 60, text: '1 + max(2, 1) = 3', size: 20, font: 'code', tone: 'line' },
+    { type: 'underline', x: 400, y: 72, w: 200 },
+    { type: 'text', x: 400, y: 128, text: '1. ¿qué devuelve f?', size: 20 },
+    { type: 'text', x: 400, y: 166, text: '2. caso base: None', size: 20 },
+    { type: 'text', x: 400, y: 204, text: '3. combinar los hijos', size: 20 },
+    { type: 'text', x: 24, y: 284, text: 'confía en que la recursión ya resolvió cada hijo', size: 19, tone: 'pencil' },
+  ]}
+/>
+
+## Pensar recursivamente
+
+Un árbol binario es un nodo con un valor y dos hijos, cada uno de los cuales es otro árbol binario (o `None`). Esa definición es recursiva, y por eso las soluciones también lo son.
+
+<CodeTabs>
+
+```java title="Java"
+class TreeNode {
+    int val;
+    TreeNode left, right;
+    TreeNode() {}
+    TreeNode(int val) { this.val = val; }
+    TreeNode(int val, TreeNode left, TreeNode right) {
+        this.val = val;
+        this.left = left;
+        this.right = right;
+    }
+}
+```
+
+```python title="Python"
+class TreeNode:
+    def __init__(self, val: int = 0, left: "TreeNode | None" = None, right: "TreeNode | None" = None):
+        self.val = val
+        self.left = left
+        self.right = right
+```
+
+```ts title="TypeScript"
+class TreeNode {
+  constructor(
+    public val: number = 0,
+    public left: TreeNode | null = null,
+    public right: TreeNode | null = null,
+  ) {}
+}
+```
+
+</CodeTabs>
+
+La receta para cualquier problema de árbol:
+
+1. **¿Qué devuelve la función para un subárbol?** Escríbelo en una frase antes de codificar: "devuelve la altura de este subárbol", "devuelve si este subárbol es un BST". Si no puedes decirlo, todavía no entiendes el problema.
+2. **¿Cuál es el caso base?** Casi siempre el árbol vacío (`None`). ¿Qué es la altura de un árbol vacío? 0. ¿Es un BST? Sí.
+3. **¿Cómo combino lo que devuelven los hijos?** Confía en que la llamada recursiva ya resolvió cada hijo (el "salto de fe") y piensa solo en el nodo actual.
+
+<Callout type="idea" title="La señal para reconocer el patrón">
+
+Si el problema habla de un **árbol** y la respuesta para un nodo se puede armar con las respuestas de sus hijos (altura, suma, ¿es válido?, ¿contiene a x?), piensa en **DFS recursivo** y en "qué devuelve la función". Si habla de **niveles**, de "lo más cercano a la raíz", del "lado derecho" o del **camino más corto**, piensa en **BFS con una cola**. Si dice **BST**, piensa en qué te regala el orden: el inorden sale ordenado y puedes descartar un lado completo en cada paso.
+
+</Callout>
+
+### Maximum Depth of Binary Tree
+
+**Enunciado.** Devuelve la profundidad máxima: la cantidad de nodos en el camino más largo de la raíz a una hoja. Ejemplo: `[3, 9, 20, null, null, 15, 7]` → `3`.
+
+**Las tres preguntas.** La función devuelve la profundidad del subárbol. Caso base: un árbol vacío tiene profundidad 0. Combinación: 1 (este nodo) más la mayor de las profundidades de los hijos.
+
+<CodeTabs>
+
+```java title="Java"
+public int maxDepth(TreeNode root) {
+    if (root == null) return 0;
+    return 1 + Math.max(maxDepth(root.left), maxDepth(root.right));
+}
+```
+
+```python title="Python"
+def max_depth(root: TreeNode | None) -> int:
+    if root is None:
+        return 0
+    return 1 + max(max_depth(root.left), max_depth(root.right))
+```
+
+```ts title="TypeScript"
+function maxDepth(root: TreeNode | null): number {
+  if (root === null) return 0
+  return 1 + Math.max(maxDepth(root.left), maxDepth(root.right))
+}
+```
+
+</CodeTabs>
+
+O(n) tiempo (cada nodo una vez) y O(h) memoria, donde `h` es la altura: es la profundidad máxima de la pila de llamadas. También se puede hacer con BFS contando niveles. **Variante:** Minimum Depth, donde el error típico es tomar `min` de los dos hijos sin notar que un hijo `None` no es una hoja: un nodo con un solo hijo no termina ahí el camino.
+
+### Invert Binary Tree
+
+**Enunciado.** Espeja el árbol: cada nodo intercambia su hijo izquierdo con el derecho.
+
+**Las tres preguntas.** Devuelve la raíz del subárbol ya invertido. Caso base: `None` invertido es `None`. Combinación: el nuevo izquierdo es el derecho invertido, y viceversa.
+
+<CodeTabs>
+
+```java title="Java"
+public TreeNode invertTree(TreeNode root) {
+    if (root == null) return null;
+    TreeNode left = invertTree(root.left);   // guardar antes de pisar root.left
+    root.left = invertTree(root.right);
+    root.right = left;
+    return root;
+}
+```
+
+```python title="Python"
+def invert_tree(root: TreeNode | None) -> TreeNode | None:
+    if root is None:
+        return None
+    root.left, root.right = invert_tree(root.right), invert_tree(root.left)
+    return root
+```
+
+```ts title="TypeScript"
+function invertTree(root: TreeNode | null): TreeNode | null {
+  if (root === null) return null
+  const left = invertTree(root.left)
+  root.left = invertTree(root.right)
+  root.right = left
+  return root
+}
+```
+
+</CodeTabs>
+
+O(n) tiempo, O(h) memoria. En Java y TypeScript ojo con el orden: si asignas `root.left` antes de guardar el resultado del lado izquierdo, pierdes ese subárbol. En Python la asignación múltiple evalúa todo el lado derecho primero, así que el problema no aparece.
+
+### Same Tree y Subtree of Another Tree
+
+**Same Tree** pregunta si dos árboles son idénticos en forma y valores. La función devuelve si dos subárboles son iguales; el caso base es el más delicado: si alguno es `None`, son iguales solo si **los dos** lo son.
+
+**Subtree of Another Tree** pregunta si `sub` aparece como subárbol completo dentro de `root`. Recorres `root` y, en cada nodo, preguntas si el subárbol que nace ahí es igual a `sub`.
+
+<CodeTabs>
+
+```java title="Java"
+public boolean isSameTree(TreeNode p, TreeNode q) {
+    if (p == null || q == null) return p == q;   // ambos vacíos: true; uno solo: false
+    return p.val == q.val && isSameTree(p.left, q.left) && isSameTree(p.right, q.right);
+}
+
+public boolean isSubtree(TreeNode root, TreeNode sub) {
+    if (root == null) return sub == null;
+    return isSameTree(root, sub) || isSubtree(root.left, sub) || isSubtree(root.right, sub);
+}
+```
+
+```python title="Python"
+def is_same_tree(p: TreeNode | None, q: TreeNode | None) -> bool:
+    if p is None or q is None:
+        return p is q                      # ambos vacíos: True; uno solo: False
+    return p.val == q.val and is_same_tree(p.left, q.left) and is_same_tree(p.right, q.right)
+
+
+def is_subtree(root: TreeNode | None, sub: TreeNode | None) -> bool:
+    if root is None:
+        return sub is None
+    return is_same_tree(root, sub) or is_subtree(root.left, sub) or is_subtree(root.right, sub)
+```
+
+```ts title="TypeScript"
+function isSameTree(p: TreeNode | null, q: TreeNode | null): boolean {
+  if (p === null || q === null) return p === q
+  return p.val === q.val && isSameTree(p.left, q.left) && isSameTree(p.right, q.right)
+}
+
+function isSubtree(root: TreeNode | null, sub: TreeNode | null): boolean {
+  if (root === null) return sub === null
+  return isSameTree(root, sub) || isSubtree(root.left, sub) || isSubtree(root.right, sub)
+}
+```
+
+</CodeTabs>
+
+Same Tree es O(n). Subtree es O(n · m) en el peor caso, porque puede comparar `sub` completo desde cada nodo. **Repregunta:** "¿se puede en O(n + m)?". Sí: serializa los dos árboles en preorden con marcadores de `None` y busca una cadena dentro de la otra con KMP, o calcula un hash por subárbol. Basta con mencionarlo.
+
+## Recorridos en profundidad: pre, in y post
+
+Un DFS baja por una rama hasta el fondo antes de pasar a la siguiente. Hay tres órdenes, y la diferencia es **una sola línea**: en qué momento visitas el nodo respecto de sus hijos.
+
+- **Preorden** (nodo, izquierda, derecha): visitas antes de bajar. Sirve para **copiar** o **serializar** un árbol, porque la raíz sale primero y puedes reconstruirlo en el mismo orden.
+- **Inorden** (izquierda, nodo, derecha): visitas entre los dos subárboles. En un **BST sale ordenado**, y eso resuelve medio capítulo de problemas.
+- **Postorden** (izquierda, derecha, nodo): visitas después de los dos hijos. Es el orden de todo lo que **se calcula a partir de los hijos**: alturas, tamaños, borrar un árbol, el path sum máximo.
+
+En el widget, cambia entre los cuatro modos con el mismo árbol. Fíjate en que la recursión es idéntica en pre, in y post (la pila de llamadas crece y se vacía igual); solo se mueve la línea que agrega a la salida. Prueba el árbol degenerado para ver cómo la pila llega a tener tantas llamadas como nodos, y el inorden de un BST para ver la salida ordenada.
+
+<TreeTraversal />
+
+### La versión iterativa
+
+Te pueden pedir el recorrido sin recursión, ya sea como repregunta ("¿y si el árbol tiene un millón de niveles?") o directamente. La idea es reemplazar la pila de llamadas por una pila explícita.
+
+**Preorden iterativo:** sacas un nodo, lo visitas y apilas sus hijos, **primero el derecho** para que el izquierdo salga antes. **Inorden iterativo:** bajas todo lo que puedas a la izquierda apilando, sacas uno, lo visitas y pasas a su subárbol derecho.
+
+<CodeTabs>
+
+```java title="Java"
+public List<Integer> preorder(TreeNode root) {
+    List<Integer> out = new ArrayList<>();
+    Deque<TreeNode> stack = new ArrayDeque<>();   // ArrayDeque, no Stack
+    if (root != null) stack.push(root);
+    while (!stack.isEmpty()) {
+        TreeNode node = stack.pop();
+        out.add(node.val);
+        if (node.right != null) stack.push(node.right);   // derecho primero: sale después
+        if (node.left != null) stack.push(node.left);
+    }
+    return out;
+}
+
+public List<Integer> inorder(TreeNode root) {
+    List<Integer> out = new ArrayList<>();
+    Deque<TreeNode> stack = new ArrayDeque<>();
+    TreeNode node = root;
+    while (!stack.isEmpty() || node != null) {
+        while (node != null) {          // bajar todo a la izquierda
+            stack.push(node);
+            node = node.left;
+        }
+        node = stack.pop();             // el más a la izquierda pendiente
+        out.add(node.val);
+        node = node.right;              // y ahora su subárbol derecho
+    }
+    return out;
+}
+```
+
+```python title="Python"
+def preorder(root: TreeNode | None) -> list[int]:
+    out: list[int] = []
+    stack = [root] if root else []
+    while stack:
+        node = stack.pop()
+        out.append(node.val)
+        if node.right:                 # derecho primero: sale después
+            stack.append(node.right)
+        if node.left:
+            stack.append(node.left)
+    return out
+
+
+def inorder(root: TreeNode | None) -> list[int]:
+    out: list[int] = []
+    stack: list[TreeNode] = []
+    node = root
+    while stack or node:
+        while node:                    # bajar todo a la izquierda
+            stack.append(node)
+            node = node.left
+        node = stack.pop()             # el más a la izquierda pendiente
+        out.append(node.val)
+        node = node.right              # y ahora su subárbol derecho
+    return out
+```
+
+```ts title="TypeScript"
+function preorder(root: TreeNode | null): number[] {
+  const out: number[] = []
+  const stack: TreeNode[] = root ? [root] : []
+  while (stack.length) {
+    const node = stack.pop()!
+    out.push(node.val)
+    if (node.right) stack.push(node.right) // derecho primero
+    if (node.left) stack.push(node.left)
+  }
+  return out
+}
+
+function inorder(root: TreeNode | null): number[] {
+  const out: number[] = []
+  const stack: TreeNode[] = []
+  let node = root
+  while (stack.length || node) {
+    while (node) {
+      stack.push(node)
+      node = node.left
+    }
+    node = stack.pop()!
+    out.push(node.val)
+    node = node.right
+  }
+  return out
+}
+```
+
+</CodeTabs>
+
+<Callout type="tip" title="En Java">
+
+Usa `ArrayDeque` como pila (`push`, `pop`) y como cola (`offer`, `poll`). La clase `Stack` es una reliquia: hereda de `Vector`, sincroniza cada operación, y su propia documentación recomienda usar `Deque` en su lugar.
+
+</Callout>
+
+El **postorden iterativo** es el más incómodo. El truco más usado: haz un preorden "espejo" (nodo, derecha, izquierda) y da vuelta el resultado al final. Sale izquierda, derecha, nodo.
+
+## BFS por niveles
+
+Un BFS (búsqueda en anchura) visita el árbol **nivel por nivel**, de arriba hacia abajo. La herramienta es una **cola**: como lo primero que entra es lo primero que sale, los hijos de un nivel salen todos después de los nodos de ese nivel.
+
+### Binary Tree Level Order Traversal
+
+**Enunciado.** Devuelve los valores agrupados por nivel. Ejemplo: `[3, 9, 20, null, null, 15, 7]` → `[[3], [9, 20], [15, 7]]`.
+
+**Qué preguntar.** ¿El árbol puede ser vacío? (Devuelve `[]`.) ¿Izquierda a derecha en cada nivel?
+
+**Idea clave.** Al empezar cada vuelta del `while`, la cola tiene **exactamente** los nodos de un nivel. Si guardas ese tamaño antes del `for`, procesas justo ese nivel aunque mientras tanto entren los hijos al final de la cola. Vuelve al widget de arriba en modo BFS para verlo.
+
+<CodeTabs>
+
+```java title="Java"
+public List<List<Integer>> levelOrder(TreeNode root) {
+    List<List<Integer>> out = new ArrayList<>();
+    if (root == null) return out;
+    Deque<TreeNode> q = new ArrayDeque<>();
+    q.offer(root);
+    while (!q.isEmpty()) {
+        int size = q.size();                 // el tamaño del nivel, fijado antes del for
+        List<Integer> level = new ArrayList<>(size);
+        for (int i = 0; i < size; i++) {
+            TreeNode node = q.poll();
+            level.add(node.val);
+            if (node.left != null) q.offer(node.left);
+            if (node.right != null) q.offer(node.right);
+        }
+        out.add(level);
+    }
+    return out;
+}
+```
+
+```python title="Python"
+from collections import deque
+
+def level_order(root: TreeNode | None) -> list[list[int]]:
+    if root is None:
+        return []
+    out: list[list[int]] = []
+    q = deque([root])
+    while q:
+        level = []
+        for _ in range(len(q)):        # len(q) se evalúa una vez: el tamaño del nivel
+            node = q.popleft()
+            level.append(node.val)
+            if node.left:
+                q.append(node.left)
+            if node.right:
+                q.append(node.right)
+        out.append(level)
+    return out
+```
+
+```ts title="TypeScript"
+function levelOrder(root: TreeNode | null): number[][] {
+  if (root === null) return []
+  const out: number[][] = []
+  let level: TreeNode[] = [root]
+  while (level.length) {
+    out.push(level.map((n) => n.val))
+    const next: TreeNode[] = []
+    for (const n of level) {
+      if (n.left) next.push(n.left)
+      if (n.right) next.push(n.right)
+    }
+    level = next
+  }
+  return out
+}
+```
+
+</CodeTabs>
+
+**Complejidad.** O(n) tiempo. La memoria es O(w), el ancho máximo del árbol: en un árbol completo el último nivel tiene unos n/2 nodos.
+
+**Errores típicos.** Usar una lista de Python con `pop(0)` o `Array.shift()` en JavaScript como cola: cada uno es O(n), y el BFS completo se vuelve O(n²) en el peor caso. Usa `deque` en Python, `ArrayDeque` con `offer` y `poll` en Java, o en TypeScript arma el siguiente nivel en un arreglo nuevo, como arriba.
+
+**Variantes que salen de este mismo código.** Binary Tree Right Side View (el último de cada nivel), Zigzag Level Order (invertir los niveles impares), Average of Levels, y Minimum Depth (el primer nivel donde aparece una hoja; BFS lo encuentra sin recorrer todo el árbol).
+
+<Quiz
+  question="En level_order, ¿por qué se guarda len(q) antes del for en vez de iterar mientras la cola no esté vacía?"
+  options={[
+    { text: 'Por eficiencia: len(q) es O(n) en un deque.', why: 'len de un deque es O(1). El motivo es de corrección, no de velocidad.' },
+    { text: 'Porque los hijos se encolan durante el for, y sin el tamaño fijo se mezclarían con el nivel actual.', correct: true, why: 'Al empezar la vuelta, la cola contiene exactamente un nivel. Procesar ese número de nodos, y no más, es lo que separa los niveles en la salida.' },
+    { text: 'Porque si no, el bucle no termina nunca.', why: 'Terminaría igual, porque cada nodo entra una sola vez; pero todos los valores quedarían en un único nivel.' },
+  ]}
+/>
+
+## Árboles binarios de búsqueda (BST)
+
+Un BST cumple que, para **todo** nodo, todos los valores de su subárbol izquierdo son menores y todos los de su subárbol derecho son mayores. Esa propiedad te da dos regalos: buscar es como una búsqueda binaria (O(h)), y el inorden sale ordenado.
+
+### Validate Binary Search Tree
+
+**Enunciado.** ¿El árbol es un BST válido? (Con desigualdades estrictas: sin repetidos.)
+
+**Qué preguntar.** ¿Se permiten valores repetidos y, si sí, de qué lado van? ¿Los valores pueden ser los extremos del entero, como −2³¹? (Importa para elegir los centinelas iniciales.)
+
+**La solución ingenua y por qué falla.** La tentación es comprobar que cada nodo sea mayor que su hijo izquierdo y menor que su hijo derecho. Pero la propiedad dice **todo el subárbol**, no solo el hijo. En el árbol `[5, 1, 7, null, null, 4, 8]`, el 4 es hijo izquierdo de 7 (bien, 4 < 7), pero está en el subárbol derecho de 5, así que debería ser mayor que 5. La comparación padre-hijo nunca enfrenta a 4 con 5.
+
+**Idea clave.** Cada nodo hereda un **intervalo abierto `(lo, hi)`** de sus ancestros. Al bajar a la izquierda, el valor del nodo pasa a ser el nuevo máximo; al bajar a la derecha, el nuevo mínimo. El intervalo se estrecha en cada nivel y arrastra las restricciones de todos los ancestros.
+
+En el widget, empieza con la versión ingenua en el árbol trampa: devuelve `True`. Después cambia a "Con rangos" y mira cómo el intervalo del 4 ya es `(5, 7)` cuando llega.
+
+<ValidateBst />
+
+<CodeTabs>
+
+```java title="Java"
+public boolean isValidBST(TreeNode root) {
+    return ok(root, Long.MIN_VALUE, Long.MAX_VALUE);
+}
+
+// long para los límites: Integer.MIN_VALUE puede ser un valor del árbol
+private boolean ok(TreeNode node, long lo, long hi) {
+    if (node == null) return true;
+    if (!(lo < node.val && node.val < hi)) return false;
+    return ok(node.left, lo, node.val) && ok(node.right, node.val, hi);
+}
+```
+
+```python title="Python"
+def is_valid_bst(root: TreeNode | None) -> bool:
+    def ok(node: TreeNode | None, lo: float, hi: float) -> bool:
+        if node is None:
+            return True
+        if not (lo < node.val < hi):
+            return False
+        return ok(node.left, lo, node.val) and ok(node.right, node.val, hi)
+
+    return ok(root, float("-inf"), float("inf"))
+```
+
+```ts title="TypeScript"
+function isValidBST(root: TreeNode | null): boolean {
+  const ok = (node: TreeNode | null, lo: number, hi: number): boolean => {
+    if (node === null) return true
+    if (!(lo < node.val && node.val < hi)) return false
+    return ok(node.left, lo, node.val) && ok(node.right, node.val, hi)
+  }
+  return ok(root, -Infinity, Infinity)
+}
+```
+
+</CodeTabs>
+
+**Complejidad.** O(n) tiempo, O(h) memoria.
+
+<Callout type="tip" title="En Java">
+
+Los valores son `int` y pueden ser exactamente `Integer.MIN_VALUE` o `Integer.MAX_VALUE`, así que esos no sirven como "sin límite": un árbol de un solo nodo con `Integer.MIN_VALUE` saldría inválido. Por eso la versión en Java usa límites `long`. La otra opción es pasar `Integer` y usar `null` como "sin límite".
+
+</Callout>
+
+**Alternativa igual de buena.** Recorre en inorden y verifica que cada valor sea **estrictamente** mayor que el anterior. Es otra forma de usar la misma propiedad. **Errores típicos:** usar `<=` y aceptar repetidos, e inicializar los límites con `-2**31` y `2**31 - 1` cuando el árbol puede contener justo esos valores. Por eso se usan infinitos (o `None` como "sin límite").
+
+### Kth Smallest Element in a BST
+
+**Enunciado.** Devuelve el k-ésimo menor valor (contando desde 1).
+
+**Fuerza bruta.** Recorrer todo, juntar los valores, ordenar y tomar el índice `k − 1`: O(n log n). Ignora que es un BST.
+
+**Idea clave.** El inorden de un BST ya sale ordenado: el k-ésimo nodo visitado es la respuesta. Con el inorden iterativo puedes **parar** apenas llegas, sin recorrer el resto.
+
+<CodeTabs>
+
+```java title="Java"
+public int kthSmallest(TreeNode root, int k) {
+    Deque<TreeNode> stack = new ArrayDeque<>();
+    TreeNode node = root;
+    while (true) {
+        while (node != null) {
+            stack.push(node);
+            node = node.left;
+        }
+        node = stack.pop();
+        if (--k == 0) return node.val;
+        node = node.right;
+    }
+}
+```
+
+```python title="Python"
+def kth_smallest(root: TreeNode | None, k: int) -> int:
+    stack: list[TreeNode] = []
+    node = root
+    while True:
+        while node:
+            stack.append(node)
+            node = node.left
+        node = stack.pop()
+        k -= 1
+        if k == 0:
+            return node.val
+        node = node.right
+```
+
+```ts title="TypeScript"
+function kthSmallest(root: TreeNode | null, k: number): number {
+  const stack: TreeNode[] = []
+  let node = root
+  while (true) {
+    while (node) {
+      stack.push(node)
+      node = node.left
+    }
+    node = stack.pop()!
+    if (--k === 0) return node.val
+    node = node.right
+  }
+}
+```
+
+</CodeTabs>
+
+O(h + k) tiempo y O(h) memoria. **Repregunta clásica:** "¿y si el árbol recibe inserciones y borrados todo el tiempo y la consulta es frecuente?". Guarda en cada nodo el **tamaño de su subárbol**. Con eso decides en cada nodo si el k-ésimo está a la izquierda, es el nodo o está a la derecha, en O(h) y sin recorrer.
+
+## Lowest Common Ancestor
+
+El ancestro común más bajo (LCA) de dos nodos `p` y `q` es el nodo más profundo que tiene a ambos como descendientes (un nodo cuenta como descendiente de sí mismo).
+
+### En un BST
+
+Si `p` y `q` son menores que el nodo actual, el LCA está a la izquierda; si los dos son mayores, a la derecha. El primer nodo donde **se separan** (o que es uno de ellos) es el LCA. No necesitas recursión ni recorrer todo.
+
+<CodeTabs>
+
+```java title="Java"
+public TreeNode lowestCommonAncestor(TreeNode root, TreeNode p, TreeNode q) {
+    TreeNode node = root;
+    while (node != null) {
+        if (p.val < node.val && q.val < node.val) node = node.left;
+        else if (p.val > node.val && q.val > node.val) node = node.right;
+        else return node;           // se separan aquí, o node es p o q
+    }
+    return null;
+}
+```
+
+```python title="Python"
+def lca_bst(root: TreeNode, p: TreeNode, q: TreeNode) -> TreeNode:
+    node = root
+    while node:
+        if p.val < node.val and q.val < node.val:
+            node = node.left
+        elif p.val > node.val and q.val > node.val:
+            node = node.right
+        else:
+            return node          # se separan aquí, o node es p o q
+```
+
+```ts title="TypeScript"
+function lcaBST(root: TreeNode, p: TreeNode, q: TreeNode): TreeNode {
+  let node: TreeNode | null = root
+  while (node) {
+    if (p.val < node.val && q.val < node.val) node = node.left
+    else if (p.val > node.val && q.val > node.val) node = node.right
+    else return node
+  }
+  throw new Error('p y q deben estar en el árbol')
+}
+```
+
+</CodeTabs>
+
+O(h) tiempo y O(1) memoria.
+
+### En un árbol binario cualquiera
+
+Sin orden, hay que buscar. Las tres preguntas: la función devuelve **"lo que encontré en este subárbol"**: `p`, `q`, su LCA o `None`. Caso base: si el nodo es `None`, `p` o `q`, lo devuelves. Combinación: si los dos lados encontraron algo, `p` y `q` están en lados distintos y **este nodo es el LCA**; si solo un lado encontró algo, devuelves eso hacia arriba.
+
+<CodeTabs>
+
+```java title="Java"
+public TreeNode lowestCommonAncestor(TreeNode root, TreeNode p, TreeNode q) {
+    if (root == null || root == p || root == q) return root;
+    TreeNode left = lowestCommonAncestor(root.left, p, q);
+    TreeNode right = lowestCommonAncestor(root.right, p, q);
+    if (left != null && right != null) return root;   // uno a cada lado
+    return left != null ? left : right;               // los dos del mismo lado, o ninguno
+}
+```
+
+```python title="Python"
+def lowest_common_ancestor(root: TreeNode | None, p: TreeNode, q: TreeNode) -> TreeNode | None:
+    if root is None or root is p or root is q:
+        return root
+    left = lowest_common_ancestor(root.left, p, q)
+    right = lowest_common_ancestor(root.right, p, q)
+    if left and right:
+        return root               # uno a cada lado
+    return left or right          # los dos del mismo lado, o ninguno
+```
+
+```ts title="TypeScript"
+function lowestCommonAncestor(root: TreeNode | null, p: TreeNode, q: TreeNode): TreeNode | null {
+  if (root === null || root === p || root === q) return root
+  const left = lowestCommonAncestor(root.left, p, q)
+  const right = lowestCommonAncestor(root.right, p, q)
+  if (left && right) return root
+  return left ?? right
+}
+```
+
+</CodeTabs>
+
+O(n) tiempo y O(h) memoria. **Pregunta para aclarar:** ¿`p` y `q` siempre existen en el árbol? Esta solución lo asume. Si `q` no está, devuelve `p` como si fuera la respuesta; para cubrir ese caso tienes que contar cuántos de los dos encontraste de verdad. **Variante:** si cada nodo tiene puntero al padre, el problema se convierte en la intersección de dos listas enlazadas (lo viste en [listas enlazadas](/casos/listas-enlazadas)).
+
+<Callout type="interview">
+
+Lo que el entrevistador está evaluando en árboles: que digas **qué devuelve tu función para un subárbol** antes de escribirla, que el caso base sea correcto (casi todos los bugs están ahí), y que sepas la complejidad en función de `h` y no solo de `n`. Un plus que se nota: mencionar sin que te pregunten que en un árbol degenerado la recursión puede desbordar la pila y que la versión iterativa lo evita.
+
+</Callout>
+
+## Binary Tree Maximum Path Sum (avanzado)
+
+**Enunciado.** Un camino es una secuencia de nodos conectados por aristas, sin repetir nodos; no tiene que pasar por la raíz ni terminar en una hoja. Devuelve la mayor suma posible de un camino. Los valores pueden ser negativos. Ejemplo: `[-10, 9, 20, null, null, 15, 7]` → `42` (el camino `15 → 20 → 7`).
+
+**Por qué es difícil.** Lo que la función recursiva devuelve **no es la respuesta**. Un camino puede "doblar" en un nodo (bajar por la izquierda y por la derecha), pero un camino que dobla no se puede extender hacia el padre: tendría una bifurcación. Entonces separas dos cosas:
+
+- **Lo que devuelves hacia arriba:** la mejor suma de un camino que **baja** desde este nodo por un solo lado: `val + max(izquierda, derecha)`.
+- **Lo que actualizas como candidato a respuesta:** el camino que dobla aquí: `val + izquierda + derecha`.
+
+Y un detalle más: si un lado aporta una suma negativa, conviene no usarlo. Por eso cada ganancia se recorta en 0.
+
+<CodeTabs>
+
+```java title="Java"
+private int best;
+
+public int maxPathSum(TreeNode root) {
+    best = Integer.MIN_VALUE;
+    gain(root);
+    return best;
+}
+
+/** Mejor suma de un camino que baja desde node por un solo lado. */
+private int gain(TreeNode node) {
+    if (node == null) return 0;
+    int left = Math.max(gain(node.left), 0);         // un lado negativo no suma: se descarta
+    int right = Math.max(gain(node.right), 0);
+    best = Math.max(best, node.val + left + right);  // el camino que dobla en node
+    return node.val + Math.max(left, right);         // hacia arriba sigue un solo lado
+}
+```
+
+```python title="Python"
+def max_path_sum(root: TreeNode | None) -> int:
+    best = float("-inf")
+
+    def gain(node: TreeNode | None) -> int:
+        """Mejor suma de un camino que baja desde node por un solo lado."""
+        nonlocal best
+        if node is None:
+            return 0
+        left = max(gain(node.left), 0)            # un lado negativo no suma: se descarta
+        right = max(gain(node.right), 0)
+        best = max(best, node.val + left + right)  # el camino que dobla en node
+        return node.val + max(left, right)         # hacia arriba sigue un solo lado
+
+    gain(root)
+    return int(best)
+```
+
+```ts title="TypeScript"
+function maxPathSum(root: TreeNode | null): number {
+  let best = -Infinity
+  const gain = (node: TreeNode | null): number => {
+    if (node === null) return 0
+    const left = Math.max(gain(node.left), 0)
+    const right = Math.max(gain(node.right), 0)
+    best = Math.max(best, node.val + left + right)
+    return node.val + Math.max(left, right)
+  }
+  gain(root)
+  return best
+}
+```
+
+</CodeTabs>
+
+O(n) tiempo, O(h) memoria. Es postorden puro: necesitas el resultado de los dos hijos antes de decidir en el nodo. **Caso borde:** todos los valores negativos. La respuesta es el mayor valor individual, y funciona porque `best` se actualiza en cada nodo con `left` y `right` recortados en 0. La misma estructura, "devolver una cosa y actualizar otra", resuelve Diameter of Binary Tree y Longest Univalue Path.
+
+<Quiz
+  question="En max_path_sum, ¿por qué gain devuelve node.val + max(left, right) y no node.val + left + right?"
+  options={[
+    { text: 'Porque sumar los dos lados puede desbordar el entero.', why: 'El desbordamiento no tiene nada que ver; en Python ni siquiera existe.' },
+    { text: 'Porque el padre solo puede extender un camino que baja por un lado: si usara los dos, el camino tendría una bifurcación.', correct: true, why: 'El camino que dobla en node se considera como candidato (best), pero no se puede devolver hacia arriba. Esa separación entre "lo que devuelvo" y "la respuesta global" es la idea central del problema.' },
+    { text: 'Es una optimización: los dos dan el mismo resultado final.', why: 'Dan resultados distintos: devolver left + right permitiría caminos imposibles y sobreestimaría la respuesta.' },
+  ]}
+/>
+
+## Serialize and Deserialize Binary Tree
+
+Pregunta de nivel Hard que conviene conocer aunque sea a grandes rasgos: convertir un árbol en una cadena y reconstruirlo desde ella. La forma más simple es un **preorden con marcadores de `None`**: el árbol `[1, 2, 3, null, null, 4, 5]` (en el formato por niveles de LeetCode) se escribe `1,2,#,#,3,4,#,#,5,#,#`. Para reconstruir, lees los valores en el mismo orden con un iterador: cada valor crea un nodo y llama recursivamente para su izquierdo y su derecho; cada `#` devuelve `None`. Los marcadores son lo que hace la reconstrucción **única**: un preorden sin ellos no alcanza para saber la forma. El formato por niveles que usa LeetCode (`[3, 9, 20, null, null, 15, 7]`) es la alternativa con BFS. Ambos son O(n).
+
+## Complejidad: O(n) y O(h)
+
+<Sketch
+  width={640}
+  height={300}
+  caption="Mismo n, distinta altura. La recursión guarda un marco por nivel, así que la memoria del DFS depende de h: unos 20 niveles para un millón de nodos balanceados, un millón si el árbol es una lista."
+  items={[
+    { type: 'path', d: 'M 143 58 L 107 102 M 157 58 L 193 102 M 96 120 L 79 160 M 104 120 L 121 160 M 196 120 L 179 160 M 204 120 L 221 160', len: 360 },
+    { type: 'path', d: 'M 139 50 a 11 11 0 1 0 22 0 a 11 11 0 1 0 -22 0 M 89 110 a 11 11 0 1 0 22 0 a 11 11 0 1 0 -22 0 M 189 110 a 11 11 0 1 0 22 0 a 11 11 0 1 0 -22 0 M 64 170 a 11 11 0 1 0 22 0 a 11 11 0 1 0 -22 0 M 114 170 a 11 11 0 1 0 22 0 a 11 11 0 1 0 -22 0 M 164 170 a 11 11 0 1 0 22 0 a 11 11 0 1 0 -22 0 M 214 170 a 11 11 0 1 0 22 0 a 11 11 0 1 0 -22 0', len: 500, tone: 'ok', fill: true },
+    { type: 'text', x: 150, y: 226, text: 'balanceado', size: 22, anchor: 'middle', tone: 'ok' },
+    { type: 'text', x: 150, y: 256, text: 'h ≈ log₂ n', size: 20, font: 'code', anchor: 'middle', tone: 'ok' },
+    { type: 'line', points: [[310, 30], [310, 260]], dashed: true, tone: 'muted' },
+    { type: 'path', d: 'M 417 58 L 443 87 M 457 103 L 483 132 M 497 148 L 523 177 M 537 193 L 563 222', len: 240 },
+    { type: 'path', d: 'M 399 50 a 11 11 0 1 0 22 0 a 11 11 0 1 0 -22 0 M 439 95 a 11 11 0 1 0 22 0 a 11 11 0 1 0 -22 0 M 479 140 a 11 11 0 1 0 22 0 a 11 11 0 1 0 -22 0 M 519 185 a 11 11 0 1 0 22 0 a 11 11 0 1 0 -22 0 M 559 230 a 11 11 0 1 0 22 0 a 11 11 0 1 0 -22 0', len: 360, tone: 'bad', fill: true },
+    { type: 'text', x: 360, y: 196, text: 'degenerado', size: 22, tone: 'bad' },
+    { type: 'text', x: 360, y: 226, text: 'h = n', size: 20, font: 'code', tone: 'bad' },
+    { type: 'text', x: 24, y: 292, text: 'la pila de la recursión crece con h, no con n', size: 19, tone: 'pencil' },
+  ]}
+/>
+
+Casi todo recorrido de árbol es **O(n) en tiempo**, porque visita cada nodo una cantidad constante de veces. La memoria es la parte interesante: la recursión (o la pila explícita) guarda un marco por nivel, así que es **O(h)**, la altura.
+
+| Forma del árbol | Altura `h` | Memoria del DFS | Ejemplo |
+|---|---|---|---|
+| Balanceado | ~log₂ n | O(log n) | 1 millón de nodos → unos 20 niveles |
+| Degenerado (una lista) | n | O(n) | Insertar 1, 2, 3, … en un BST sin balancear |
+
+El caso degenerado es más común de lo que parece: un BST sin balanceo al que le insertas claves ya ordenadas se convierte en una lista. Por eso existen los árboles autobalanceados (AVL, rojo-negro), que garantizan O(log n), y por eso los mapas ordenados de las librerías estándar (`TreeMap` en Java, `std::map` en C++) los usan por dentro. En la práctica, si el árbol puede ser profundo, la recursión es un riesgo real: Python corta por defecto a las 1.000 llamadas de profundidad, y en Java un árbol degenerado de unas decenas de miles de nodos ya produce un `StackOverflowError` con la pila por defecto. Ahí la versión iterativa es la respuesta correcta.
+
+<Quiz
+  question="Un BFS y un DFS recorren un árbol binario completo de 1 millón de nodos. ¿Cuál necesita más memoria?"
+  options={[
+    { text: 'El DFS, porque la recursión es costosa.', why: 'El DFS guarda un marco por nivel: unos 20 en un árbol completo de un millón de nodos.' },
+    { text: 'El BFS: su cola llega a guardar el último nivel, cerca de medio millón de nodos.', correct: true, why: 'La memoria del BFS es O(w), el ancho máximo; la del DFS es O(h), la altura. En un árbol completo w ≈ n/2 y h ≈ log n. En un árbol degenerado es al revés.' },
+    { text: 'Los dos usan O(n) siempre.', why: 'Los dos son O(n) en el peor caso, pero dependen de formas distintas del árbol: ancho contra altura.' },
+  ]}
+/>
+
+## Problemas típicos de este patrón
+
+| Problema (LeetCode) | Técnica | Dificultad |
+|---|---|---|
+| [Maximum Depth of Binary Tree](https://leetcode.com/problems/maximum-depth-of-binary-tree/) | DFS, combinar alturas | Easy |
+| [Invert Binary Tree](https://leetcode.com/problems/invert-binary-tree/) | DFS, intercambiar hijos | Easy |
+| [Same Tree](https://leetcode.com/problems/same-tree/) | DFS sobre dos árboles | Easy |
+| [Subtree of Another Tree](https://leetcode.com/problems/subtree-of-another-tree/) | Same Tree en cada nodo | Easy |
+| [Diameter of Binary Tree](https://leetcode.com/problems/diameter-of-binary-tree/) | Devolver altura, actualizar diámetro | Easy |
+| [Binary Tree Level Order Traversal](https://leetcode.com/problems/binary-tree-level-order-traversal/) | BFS por niveles | Medium |
+| [Binary Tree Right Side View](https://leetcode.com/problems/binary-tree-right-side-view/) | BFS, último de cada nivel | Medium |
+| [Validate Binary Search Tree](https://leetcode.com/problems/validate-binary-search-tree/) | Intervalo (min, max) o inorden | Medium |
+| [Kth Smallest Element in a BST](https://leetcode.com/problems/kth-smallest-element-in-a-bst/) | Inorden iterativo con corte | Medium |
+| [Lowest Common Ancestor of a Binary Search Tree](https://leetcode.com/problems/lowest-common-ancestor-of-a-binary-search-tree/) | Bajar hasta que se separan | Medium |
+| [Lowest Common Ancestor of a Binary Tree](https://leetcode.com/problems/lowest-common-ancestor-of-a-binary-tree/) | Postorden, "qué encontré" | Medium |
+| [Construct Binary Tree from Preorder and Inorder Traversal](https://leetcode.com/problems/construct-binary-tree-from-preorder-and-inorder-traversal/) | La raíz del preorden parte el inorden | Medium |
+| [Binary Tree Maximum Path Sum](https://leetcode.com/problems/binary-tree-maximum-path-sum/) | Devolver un lado, actualizar el que dobla | Hard |
+| [Serialize and Deserialize Binary Tree](https://leetcode.com/problems/serialize-and-deserialize-binary-tree/) | Preorden con marcadores de None | Hard |
+
+Si tienes poco tiempo: Maximum Depth, Invert, Level Order, Validate BST y Lowest Common Ancestor. Practícalos hasta poder decir las tres preguntas en voz alta antes de escribir.
+
+<Takeaways>
+
+- Para cualquier problema de árbol, responde tres preguntas: **qué devuelve la función** para un subárbol, cuál es el **caso base** y cómo se **combinan** los hijos.
+- **Pre, in y post orden** son la misma recursión con la visita en otro lugar. Preorden para copiar o serializar, inorden para BST, postorden para lo que depende de los hijos.
+- **BFS con cola** y el tamaño del nivel guardado antes del `for`. Usa `deque`, no `pop(0)` ni `shift()`.
+- Validar un BST exige un **intervalo `(min, max)`** que viene de todos los ancestros. Comparar solo con los hijos falla con un nieto que está del lado equivocado de su abuelo.
+- En un BST, el **inorden sale ordenado** y el LCA es el primer nodo donde `p` y `q` se separan.
+- Algunos problemas devuelven una cosa y actualizan otra (max path sum, diámetro): lo que se puede **extender hacia arriba** no es la respuesta.
+- Tiempo **O(n)**, memoria **O(h)**: log n si está balanceado, n si es degenerado. Con árboles profundos, la versión iterativa evita desbordar la pila.
+
+</Takeaways>
+
+## Fuentes y lecturas
+
+- Thomas H. Cormen et al., *Introduction to Algorithms*, 4.ª ed., MIT Press, 2022. Capítulo 12, "Binary Search Trees", y capítulo 13, "Red-Black Trees".
+- Robert Sedgewick y Kevin Wayne, *Algorithms*, 4.ª ed., [sección 3.2: Binary Search Trees](https://algs4.cs.princeton.edu/32bst/).
+- Python, [collections.deque](https://docs.python.org/3/library/collections.html#collections.deque) (operaciones O(1) en ambos extremos) y [sys.setrecursionlimit](https://docs.python.org/3/library/sys.html#sys.setrecursionlimit).
+- Tech Interview Handbook, [Tree cheatsheet](https://www.techinterviewhandbook.org/algorithms/tree/).
+- Las páginas de LeetCode enlazadas en la tabla de problemas.

@@ -1,0 +1,586 @@
+import { IdempotentPayment } from '../../components/widgets/casos-b/IdempotentPayment'
+
+Te piden diseñar el sistema de pagos de un e-commerce o de un marketplace: el comprador paga su pedido, la plataforma se queda con una comisión y el vendedor recibe el resto. No vas a procesar tarjetas tú mismo; para eso existe un **PSP** (*payment service provider*: Stripe, Adyen, Mercado Pago, Transbank). Lo que diseñas es todo lo que rodea esa llamada: cómo se crea un pago, cómo sobrevive a reintentos, cómo se registra cada peso y cómo sabes, al final del día, que tus números coinciden con los del banco.
+
+Es un clásico porque invierte la lógica de casi todos los demás casos. Aquí el volumen es modesto y la escala casi nunca es el problema. El problema es la **corrección**: el dinero no se crea ni se destruye, un cliente no puede pagar dos veces el mismo pedido y cada movimiento debe poder auditarse años después. Y todo eso con redes que fallan de forma ambigua: cuando una llamada al PSP da *timeout*, no sabes si el cobro ocurrió o no.
+
+Un sistema de pagos rara vez se cae por QPS. Se cae por un cobro duplicado, por un webhook procesado dos veces o por una diferencia de $1.500 que nadie puede explicar en la conciliación.
+
+<Sketch
+  width={640}
+  height={300}
+  caption="La idea de todo el caso: el cliente puede reintentar cuantas veces quiera con la misma clave; la base reconoce la repetición y el PSP cobra una sola vez."
+  items={[
+    { type: 'box', x: 24, y: 96, w: 130, h: 60, label: 'checkout', size: 22 },
+    { type: 'arrow', from: [158, 112], to: [270, 112], label: 'clave k1', labelAt: [212, 100] },
+    { type: 'arrow', from: [158, 144], to: [270, 144], dashed: true, tone: 'warn', label: 'timeout: reintenta k1', labelAt: [204, 178] },
+    { type: 'box', x: 274, y: 92, w: 150, h: 70, label: 'Payment API', size: 20, tone: 'line', fill: true },
+    { type: 'arrow', from: [349, 166], to: [349, 200], tone: 'muted' },
+    { type: 'box', x: 262, y: 204, w: 174, h: 40, label: 'k1: ya existe', font: 'code', size: 18 },
+    { type: 'arrow', from: [428, 127], to: [494, 127], tone: 'ok', label: 'un cobro', labelAt: [461, 114] },
+    { type: 'box', x: 498, y: 97, w: 118, h: 60, label: 'PSP', size: 22 },
+    { type: 'check', x: 557, y: 196, size: 26 },
+    { type: 'text', x: 24, y: 40, text: 'un timeout no es "falló": es "no sé"', size: 20, tone: 'pencil' },
+    { type: 'highlight', x: 20, y: 262, w: 400, h: 28 },
+    { type: 'text', x: 24, y: 284, text: 'reintentos + idempotencia = un solo cobro', size: 20, tone: 'line', with: true },
+  ]}
+/>
+
+## Requisitos
+
+**Funcionales**
+
+1. **Cobrar** al comprador por un pedido (*pay-in*), a través de un PSP.
+2. **Registrar** cada movimiento de dinero en un ledger contable.
+3. **Reembolsar** total o parcialmente un pago.
+4. Consultar el **estado** de un pago y notificar al servicio de pedidos cuando cambia.
+5. **Conciliar** a diario lo registrado contra lo que reporta el PSP.
+6. (Extensión) Pagar a los vendedores (*pay-out*). Lo mencionamos, pero el foco es el pay-in.
+
+**No funcionales**
+
+- **Corrección por sobre disponibilidad**: nunca cobrar dos veces, nunca perder un registro. Si hay que elegir, preferimos rechazar un pago antes que arriesgar uno inconsistente.
+- **Idempotencia de punta a punta**: cualquier petición se puede reintentar sin efectos duplicados.
+- **Durabilidad y auditoría**: los registros financieros son inmutables; los errores se corrigen con asientos nuevos, no editando los viejos.
+- **Latencia razonable**: unos segundos en p99. La domina el PSP y, si aplica, la autenticación 3-D Secure del banco emisor.
+- **Seguridad**: nunca tocar el número de tarjeta. El cliente la tokeniza directamente con el PSP, lo que reduce drásticamente el alcance de PCI DSS.
+
+**Fuera de alcance**: detección de fraude (la mencionamos como dependencia), conversión de moneda, billeteras con saldo propio y suscripciones.
+
+## Estimaciones
+
+Supongamos un marketplace mediano:
+
+```text
+Volumen
+  pagos por día .............. 1.000.000
+  TPS promedio ............... 1.000.000 / 86.400 ≈ 12
+  pico (CyberDay, ×10) ....... ≈ 120 TPS
+
+Ledger
+  asientos por pago .......... ~3 transacciones (captura, liquidación, payout)
+  filas por pago ............. ~8 entradas (débitos + créditos)
+  filas por día .............. ~8 M  → ~2.900 M/año
+  tamaño por fila ............ ~150 B → ~440 GB/año (+ índices)
+
+Idempotencia
+  claves por día ............. ~1 M, ~1 KB con la respuesta guardada
+  retención 24 h ............. ~1 GB vivo
+
+Webhooks del PSP
+  eventos por pago ........... ~3 → 3 M/día ≈ 35/s promedio
+```
+
+La conclusión importa más que los números: **120 TPS de escritura los aguanta un solo primario de PostgreSQL bien provisionado**. No necesitas sharding el primer día. El ledger sí crece sin parar (cientos de GB por año), así que planifica particionar por tiempo y archivar, pero el diseño gira en torno a la corrección, no al throughput.
+
+## Entidades y API
+
+- **Payment**: la intención de cobrar un monto por un pedido. Tiene estado, monto, moneda y la referencia del PSP.
+- **PaymentAttempt**: cada llamada concreta al PSP. Un pago puede tener varios intentos (reintentos, otro medio de pago).
+- **IdempotencyKey**: la clave que manda el cliente, con el hash de la petición y la respuesta guardada.
+- **LedgerAccount**, **LedgerTransaction** y **LedgerEntry**: el libro contable de doble partida.
+- **PspEvent**: cada webhook recibido, guardado tal cual y deduplicado por su id.
+- **Refund**: un reembolso, con su propio ciclo de vida.
+
+```http
+POST /v1/payments
+Idempotency-Key: ord-1042-7f3a9c
+Content-Type: application/json
+
+{ "orderId": "ord-1042", "amount": 49990, "currency": "CLP",
+  "paymentMethodToken": "pm_1Q…" }
+
+→ 201 { "id": "pay_001", "status": "processing" }
+→ 200 (misma clave, ya completada) → la MISMA respuesta guardada
+→ 409 (misma clave, todavía en curso) → reintenta más tarde
+→ 422 (misma clave, distinto cuerpo) → error del cliente
+
+GET /v1/payments/pay_001
+→ 200 { "id": "pay_001", "status": "captured", "amount": 49990, ... }
+
+POST /v1/payments/pay_001/refunds
+Idempotency-Key: rfd-ord-1042-1
+{ "amount": 10000, "reason": "producto_incompleto" }
+→ 201 { "id": "rfd_01", "status": "pending" }
+
+POST /v1/webhooks/psp            # firmado por el PSP
+→ 200 (rápido; el procesamiento es asíncrono)
+```
+
+Dos detalles que el entrevistador nota. Primero, **los montos son enteros en la unidad mínima de la moneda** (centavos para USD; el peso chileno no tiene decimales, así que 49990 son $49.990). Nunca `float`: `0.1 + 0.2` no es `0.3` y en un ledger eso es un descuadre. Segundo, la **clave de idempotencia la genera el cliente** una vez por intención de compra y la guarda antes de enviar, para poder reusarla en cada reintento.
+
+<Callout type="tip" title="En Java">
+
+Los montos van en `long` (centavos), nunca en `double`. Si necesitas decimales, usa `BigDecimal` y compáralo con `compareTo`, no con `equals`: para `equals`, `new BigDecimal("2.0")` y `new BigDecimal("2.00")` son distintos porque tienen distinta escala. Y las claves y hashes son `String`: se comparan con `equals`, nunca con `==`.
+
+</Callout>
+
+## Modelo de datos
+
+Fuente de verdad: **PostgreSQL** (o cualquier base relacional con transacciones serializables y restricciones). Necesitas escribir el pago, la clave de idempotencia y los asientos del ledger **en la misma transacción**, y necesitas que la base rechace duplicados por ti. Un almacén clave-valor sin transacciones multi-fila te obliga a reconstruir todo eso a mano.
+
+```sql
+CREATE TABLE payments (
+  id            text PRIMARY KEY,                 -- 'pay_001'
+  order_id      text   NOT NULL,
+  amount        bigint NOT NULL CHECK (amount > 0),
+  currency      char(3) NOT NULL,
+  status        text   NOT NULL,                  -- created | requires_action | authorized | captured | failed | canceled | refunded
+  psp_reference text,
+  version       int    NOT NULL DEFAULT 1,
+  created_at    timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE idempotency_keys (
+  merchant_id   bigint NOT NULL,
+  key           text   NOT NULL,
+  request_hash  text   NOT NULL,                  -- para detectar reuso con otro cuerpo
+  status        text   NOT NULL,                  -- processing | completed
+  recovery_point text  NOT NULL DEFAULT 'started',
+  response_code int,
+  response_body jsonb,
+  locked_at     timestamptz,
+  created_at    timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (merchant_id, key)
+);
+
+CREATE TABLE ledger_accounts (
+  id           text PRIMARY KEY,                  -- 'psp_receivable', 'seller:88:payable'
+  normal_side  text NOT NULL,                     -- debit | credit
+  currency     char(3) NOT NULL
+);
+
+CREATE TABLE ledger_transactions (
+  id          uuid PRIMARY KEY,
+  payment_id  text,
+  kind        text NOT NULL,                      -- capture | settlement | payout | refund | reversal
+  posted_at   timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (payment_id, kind)                       -- un evento de negocio → una transacción contable
+);
+
+CREATE TABLE ledger_entries (
+  transaction_id uuid   NOT NULL REFERENCES ledger_transactions(id),
+  account_id     text   NOT NULL REFERENCES ledger_accounts(id),
+  direction      text   NOT NULL,                 -- debit | credit
+  amount         bigint NOT NULL CHECK (amount > 0)
+);
+
+CREATE TABLE psp_events (
+  event_id    text PRIMARY KEY,                   -- id del PSP: deduplicación gratis
+  type        text NOT NULL,
+  payload     jsonb NOT NULL,
+  received_at timestamptz NOT NULL DEFAULT now(),
+  processed_at timestamptz
+);
+```
+
+Las restricciones hacen buena parte del trabajo: la clave primaria de `idempotency_keys` impide procesar dos veces la misma petición, `UNIQUE (payment_id, kind)` impide registrar dos veces la captura del mismo pago y la clave primaria de `psp_events` deduplica los webhooks. Que la suma de débitos sea igual a la de créditos en cada transacción se verifica en la aplicación antes del commit (o con un trigger diferido). El ledger es **append-only**: ni `UPDATE` ni `DELETE` sobre sus tablas, y conviene quitarle esos permisos al usuario de la aplicación.
+
+## Diseño de alto nivel
+
+<FlowDiagram
+  caption="Flujo de un pago: API idempotente, ejecutor con reintentos, PSP, webhooks, ledger de doble partida y conciliación."
+  nodes={[
+    { id: 'c', label: 'Checkout', kind: 'client', x: 0, y: 1, sub: 'genera la clave' },
+    { id: 'pay', label: 'Payment service', kind: 'service', x: 1, y: 1, sub: 'API + idempotencia', tone: 'line' },
+    { id: 'db', label: 'Postgres', kind: 'db', x: 1, y: 0, sub: 'pagos · claves' },
+    { id: 'wh', label: 'Webhook handler', kind: 'shield', x: 2, y: 0, sub: 'firma · dedup' },
+    { id: 'ex', label: 'Payment executor', kind: 'worker', x: 2, y: 1, sub: 'reintentos · backoff' },
+    { id: 'psp', label: 'PSP', kind: 'payment', x: 3, y: 1, sub: 'Stripe · Adyen' },
+    { id: 'bank', label: 'Red y emisor', kind: 'network', x: 4, y: 1, sub: 'Visa · Mastercard' },
+    { id: 'led', label: 'Ledger', kind: 'core', x: 2, y: 2, sub: 'doble partida' },
+    { id: 'q', label: 'Eventos', kind: 'stream', x: 1, y: 2, sub: 'outbox → Kafka' },
+    { id: 'ord', label: 'Order service', kind: 'service', x: 0, y: 2 },
+    { id: 'rec', label: 'Conciliación', kind: 'workflow', x: 3, y: 2, sub: 'batch diario' },
+  ]}
+  edges={[
+    { from: 'c', to: 'pay', label: 'POST + clave' },
+    { from: 'pay', to: 'db' },
+    { from: 'pay', to: 'ex' },
+    { from: 'ex', to: 'psp', label: 'autorizar' },
+    { from: 'psp', to: 'bank' },
+    { from: 'psp', to: 'wh', label: 'webhook' },
+    { from: 'wh', to: 'db' },
+    { from: 'ex', to: 'led', label: 'asientos' },
+    { from: 'pay', to: 'q', label: 'outbox' },
+    { from: 'q', to: 'ord' },
+    { from: 'psp', to: 'rec', label: 'reporte', dashed: true },
+    { from: 'led', to: 'rec' },
+  ]}
+  steps={[
+    {
+      title: '1. Crear el pago',
+      body: <>El checkout envía <code>POST /payments</code> con su <code>Idempotency-Key</code>. En una sola transacción, el Payment service inserta la clave como <code>processing</code> y crea el pago en estado <code>created</code>. Si la clave ya existía, no crea nada: devuelve la respuesta guardada o un 409.</>,
+      active: ['c', 'pay', 'db'],
+      flow: ['c-pay', 'pay-db'],
+    },
+    {
+      title: '2. Llamar al PSP',
+      body: <>El Payment executor llama al PSP para autorizar el monto, mandando su propia clave de idempotencia (el id del intento). El PSP consulta a la red de tarjetas y al banco emisor, que aprueba o rechaza.</>,
+      active: ['pay', 'ex', 'psp', 'bank'],
+      flow: ['pay-ex', 'ex-psp', 'psp-bank'],
+    },
+    {
+      title: '3. Si hay timeout',
+      body: <>Un timeout no significa que el cobro falló: significa que no sabes. El executor consulta el estado del intento en el PSP y, solo si no existe, reintenta con la misma clave, con backoff exponencial y jitter. Nunca genera una clave nueva para reintentar.</>,
+      active: ['ex', 'psp'],
+      flow: ['ex-psp'],
+    },
+    {
+      title: '4. Webhook',
+      body: <>El PSP confirma de forma asíncrona. El handler verifica la firma, inserta el evento en <code>psp_events</code> (si el id ya existe, es un duplicado y lo ignora), responde 200 de inmediato y procesa después: transición de estado condicional sobre el pago.</>,
+      active: ['psp', 'wh', 'db'],
+      flow: ['psp-wh', 'wh-db'],
+    },
+    {
+      title: '5. Ledger',
+      body: <>Con el pago capturado se escribe la transacción contable: débitos y créditos que suman cero. La restricción única sobre (pago, tipo) garantiza que un reintento no registre la captura dos veces.</>,
+      active: ['ex', 'led'],
+      flow: ['ex-led'],
+    },
+    {
+      title: '6. Notificar',
+      body: <>El cambio de estado se escribe en una tabla outbox en la misma transacción; un relay lo publica en Kafka y el Order service marca el pedido como pagado. Sin outbox tendrías una escritura dual: la base y la cola pueden quedar en desacuerdo.</>,
+      active: ['pay', 'q', 'ord'],
+      flow: ['pay-q', 'q-ord'],
+    },
+    {
+      title: '7. Conciliar',
+      body: <>Cada día, el job de conciliación compara el ledger con el reporte de liquidación del PSP (y luego con el extracto bancario). Cada diferencia se clasifica, se corrige automáticamente si se puede o va a una cola de revisión para el equipo de finanzas.</>,
+      active: ['psp', 'led', 'rec'],
+      flow: ['psp-rec', 'led-rec'],
+    },
+  ]}
+/>
+
+Fíjate en que el diagrama tiene dos caminos de confirmación: la respuesta síncrona del PSP al executor y el webhook asíncrono. No es redundancia accidental. Cualquiera de los dos puede perderse, y el diseño tiene que llegar al estado correcto con cualquiera de ellos, en cualquier orden y aunque lleguen repetidos.
+
+## Profundizaciones
+
+### 1. Idempotencia de punta a punta
+
+Primero, de dónde salen los duplicados. No es un caso raro: es el comportamiento normal de una red.
+
+- El usuario hace **doble clic** en "Pagar", o recarga la página.
+- La app móvil pierde señal y **reintenta** sola.
+- El *load balancer* o una librería HTTP reintenta ante un 502.
+- El cliente da **timeout** esperando la respuesta, aunque el servidor terminó bien.
+- La cola entrega un mensaje **al menos una vez**.
+- El PSP **reenvía** un webhook porque tu 200 no le llegó.
+
+La solución estándar, popularizada por Stripe, es la **clave de idempotencia**: el cliente genera un identificador único por operación (un UUID v4, o uno derivado del pedido) y lo manda en cada intento. El servidor lo usa para reconocer repeticiones.
+
+<CodeTabs>
+
+```java title="Java"
+// PaymentService.java (Spring + JdbcTemplate)
+Reply createPayment(PaymentRequest req, long merchantId) {
+    String key = req.header("Idempotency-Key");
+    if (key == null) return Reply.of(400, Map.of("error", "idempotency_key_required"));
+    String fingerprint = sha256(canonicalJson(req.body()));
+
+    // 1. Reclamar la clave. La PK (merchant_id, key) hace que solo una petición gane.
+    //    Siempre contra el primario: leer de una réplica atrasada puede no ver la clave.
+    int claimed = jdbc.update("""
+        INSERT INTO idempotency_keys (merchant_id, key, request_hash, status, locked_at)
+        VALUES (?, ?, ?, 'processing', now())
+        ON CONFLICT (merchant_id, key) DO NOTHING""", merchantId, key, fingerprint);
+
+    if (claimed == 0) {
+        IdemRow row = jdbc.queryForObject("""
+            SELECT request_hash, status, response_code, response_body, locked_at
+              FROM idempotency_keys WHERE merchant_id = ? AND key = ?""", IdemRow.MAPPER, merchantId, key);
+        if (!row.requestHash().equals(fingerprint)) return Reply.of(422, Map.of("error", "key_reused_with_different_body"));
+        if (row.status().equals("completed")) return Reply.of(row.responseCode(), row.responseBody()); // misma respuesta
+        if (isStale(row.lockedAt())) return resumeFromRecoveryPoint(merchantId, key);             // el dueño murió
+        return Reply.of(409, Map.of("error", "request_in_progress"));                              // doble clic
+    }
+
+    // 2. Crear el pago (transacción local) y llamar al PSP con NUESTRA clave hacia abajo.
+    Payment payment = createPaymentRow(req.body());
+    PspResult result = psp.authorize(
+        new AuthorizeRequest(payment.amount(), payment.currency(), req.body().paymentMethodToken()),
+        payment.id() + ":attempt-1");
+
+    // 3. Guardar estado del pago y respuesta de la clave en la misma transacción.
+    return completeKey(merchantId, key, payment, result);
+}
+```
+
+```ts title="TypeScript"
+// payments/create-payment.ts
+export async function createPayment(req: PaymentRequest, merchantId: number) {
+  const key = req.headers['idempotency-key']
+  if (!key) return reply(400, { error: 'idempotency_key_required' })
+  const fingerprint = sha256(canonicalJson(req.body))
+
+  // 1. Reclamar la clave. La PK (merchant_id, key) hace que solo una petición gane.
+  //    Siempre contra el primario: leer de una réplica atrasada puede no ver la clave.
+  const claimed = await db.query(
+    `INSERT INTO idempotency_keys (merchant_id, key, request_hash, status, locked_at)
+     VALUES ($1, $2, $3, 'processing', now())
+     ON CONFLICT (merchant_id, key) DO NOTHING`,
+    [merchantId, key, fingerprint],
+  )
+
+  if (claimed.rowCount === 0) {
+    const row = await db.one(
+      `SELECT request_hash, status, response_code, response_body, locked_at
+         FROM idempotency_keys WHERE merchant_id = $1 AND key = $2`,
+      [merchantId, key],
+    )
+    if (row.request_hash !== fingerprint) return reply(422, { error: 'key_reused_with_different_body' })
+    if (row.status === 'completed') return reply(row.response_code, row.response_body) // misma respuesta
+    if (isStale(row.locked_at)) return resumeFromRecoveryPoint(merchantId, key)      // el dueño murió
+    return reply(409, { error: 'request_in_progress' })                             // doble clic
+  }
+
+  // 2. Crear el pago (transacción local) y llamar al PSP con NUESTRA clave hacia abajo.
+  const payment = await createPaymentRow(req.body)
+  const result = await psp.authorize(
+    { amount: payment.amount, currency: payment.currency, token: req.body.paymentMethodToken },
+    { idempotencyKey: `${payment.id}:attempt-1` },
+  )
+
+  // 3. Guardar estado del pago y respuesta de la clave en la misma transacción.
+  return completeKey(merchantId, key, payment, result)
+}
+```
+
+</CodeTabs>
+
+Hay cinco detalles que separan una implementación de juguete de una real:
+
+1. **La unicidad la impone la base**, no un `SELECT` previo. Dos peticiones simultáneas que hacen "si no existe, inserto" vuelven al bug de read-then-write. El `INSERT … ON CONFLICT` es atómico.
+2. **Se guarda el hash del cuerpo.** Si alguien reusa la clave con otro monto, es un bug del cliente y debe recibir un error, no la respuesta de otra operación. Stripe hace exactamente esa comparación.
+3. **Se guarda la respuesta, incluidos los errores.** Si el primer intento terminó en "tarjeta rechazada", el reintento debe devolver lo mismo y no volver a intentar el cobro. (Una excepción razonable: los errores de validación previos a ejecutar nada no se guardan, para que el cliente pueda corregir y reintentar.)
+4. **Se propaga hacia abajo.** De nada sirve deduplicar en tu API si el executor, al reintentar contra el PSP, manda una clave nueva. Cada intento tiene su id, y ese id viaja como clave de idempotencia al PSP.
+5. **Las lecturas de idempotencia van al primario.** Airbnb lo documenta en su librería Orpheus: leer de una réplica con *lag* puede no ver una clave recién escrita y dejar pasar un duplicado.
+
+¿Cuánto tiempo guardas las claves? Stripe permite que se eliminen pasadas al menos 24 horas; después, la misma clave crea una operación nueva. Es suficiente para cubrir reintentos reales y mantiene la tabla acotada (~1 GB con nuestros supuestos).
+
+Prueba ahora los dos escenarios clásicos en el simulador. Haz doble clic y simula la pérdida de respuesta, con y sin clave.
+
+<IdempotentPayment />
+
+Fíjate en el detalle del ledger: con o sin clave, **cuadra**. Dos cobros duplicados generan dos transacciones contables perfectamente balanceadas. La doble partida protege contra dinero que aparece o desaparece, no contra operaciones repetidas. Eso lo atrapan la idempotencia (antes) y la conciliación (después).
+
+<Quiz
+  question="Un cliente manda POST /payments con una clave nueva. Tu servidor cobra en el PSP con éxito, pero se cae antes de guardar la respuesta en idempotency_keys. El cliente reintenta con la misma clave. ¿Qué evita el doble cobro?"
+  options={[
+    { text: 'Nada: como la respuesta no se guardó, el servidor tratará el reintento como nuevo y cobrará otra vez.', why: 'Eso pasaría si el reintento hacia el PSP usara una clave distinta. Si propagas la clave del intento al PSP, el PSP reconoce el duplicado.' },
+    { text: 'Que la clave quedó en processing con un lock vencido: el reintento retoma desde el último punto de recuperación y repite la llamada al PSP con la misma clave del intento, que el PSP deduplica.', correct: true, why: 'Exacto. Esa es la combinación: recovery points en tu lado (sabes que llegaste a llamar al PSP) y la clave propagada hacia abajo (el PSP devuelve el cobro existente en lugar de crear otro).' },
+    { text: 'El ledger, porque detecta que la suma de débitos y créditos no cuadra.', why: 'Un cobro duplicado bien registrado cuadra igual. La doble partida no detecta duplicados.' },
+    { text: 'El 409 Conflict, porque la clave sigue en estado processing para siempre.', why: 'Si nunca vences el lock, el pago queda trabado para siempre y el cliente nunca obtiene respuesta. El lock debe expirar para que alguien pueda retomar.' },
+  ]}
+/>
+
+### 2. La máquina de estados del pago
+
+Un pago no es un booleano "pagado sí/no". Es una máquina de estados explícita, y casi todos los bugs de pagos son transiciones que no deberían haber ocurrido.
+
+```text
+created ──► requires_action (3-D Secure) ──► authorized ──► captured ──► refunded
+   │                │                            │                 └──► partially_refunded
+   └────────────────┴──────► failed              └──► canceled (la autorización se libera)
+```
+
+- **Autorizar** reserva los fondos en la tarjeta del comprador; **capturar** los mueve. Separarlos tiene sentido cuando cobras al despachar (un marketplace que espera stock) o cuando el monto final puede cambiar. Pero las autorizaciones **caducan**: para la mayoría de las tarjetas en línea, alrededor de siete días, según la red y el PSP. Si capturas tarde, el cobro falla.
+- **Las transiciones son condicionales.** Un webhook que dice "capturado" solo mueve el pago si está en `authorized`. Esto resuelve de paso los eventos fuera de orden, que Stripe advierte explícitamente que pueden ocurrir.
+
+<CodeTabs>
+
+```java title="Java"
+enum PaymentStatus {
+    CREATED, REQUIRES_ACTION, AUTHORIZED, CAPTURED, FAILED, CANCELED, REFUNDED, PARTIALLY_REFUNDED
+}
+
+class Estados {
+    static final Map<PaymentStatus, Set<PaymentStatus>> ALLOWED = Map.of(
+        PaymentStatus.CREATED, EnumSet.of(PaymentStatus.REQUIRES_ACTION, PaymentStatus.AUTHORIZED, PaymentStatus.FAILED),
+        PaymentStatus.REQUIRES_ACTION, EnumSet.of(PaymentStatus.AUTHORIZED, PaymentStatus.FAILED),
+        PaymentStatus.AUTHORIZED, EnumSet.of(PaymentStatus.CAPTURED, PaymentStatus.CANCELED, PaymentStatus.FAILED),
+        PaymentStatus.CAPTURED, EnumSet.of(PaymentStatus.REFUNDED, PaymentStatus.PARTIALLY_REFUNDED),
+        PaymentStatus.PARTIALLY_REFUNDED, EnumSet.of(PaymentStatus.REFUNDED, PaymentStatus.PARTIALLY_REFUNDED),
+        PaymentStatus.FAILED, EnumSet.noneOf(PaymentStatus.class),
+        PaymentStatus.CANCELED, EnumSet.noneOf(PaymentStatus.class),
+        PaymentStatus.REFUNDED, EnumSet.noneOf(PaymentStatus.class));
+
+    static boolean transition(JdbcTemplate jdbc, String id, PaymentStatus from, PaymentStatus to) {
+        if (!ALLOWED.get(from).contains(to)) throw new IllegalStateException("transición inválida " + from + " → " + to);
+        int rows = jdbc.update("""
+            UPDATE payments SET status = ?, version = version + 1
+             WHERE id = ? AND status = ?""", to.name().toLowerCase(), id, from.name().toLowerCase());
+        // 0 filas: otro proceso ya movió el pago (webhook duplicado o fuera de orden). No es error.
+        return rows == 1;
+    }
+}
+```
+
+```ts title="TypeScript"
+// payments/state.ts
+type PaymentStatus =
+  | 'created' | 'requires_action' | 'authorized' | 'captured'
+  | 'failed' | 'canceled' | 'refunded' | 'partially_refunded'
+
+const allowed: Record<PaymentStatus, PaymentStatus[]> = {
+  created: ['requires_action', 'authorized', 'failed'],
+  requires_action: ['authorized', 'failed'],
+  authorized: ['captured', 'canceled', 'failed'],
+  captured: ['refunded', 'partially_refunded'],
+  partially_refunded: ['refunded', 'partially_refunded'],
+  failed: [], canceled: [], refunded: [],
+}
+
+export async function transition(id: string, from: PaymentStatus, to: PaymentStatus) {
+  if (!allowed[from].includes(to)) throw new Error(`transición inválida ${from} → ${to}`)
+  const r = await db.query(
+    `UPDATE payments SET status = $3, version = version + 1
+      WHERE id = $1 AND status = $2`,
+    [id, from, to],
+  )
+  // 0 filas: otro proceso ya movió el pago (webhook duplicado o fuera de orden). No es error.
+  return r.rowCount === 1
+}
+```
+
+</CodeTabs>
+
+**El estado "no sé".** Después de un timeout contra el PSP, el pago queda en un limbo. La regla de oro: **nunca asumas que falló**. Si lo marcas como fallido y el cliente reintenta con otro medio de pago, puede terminar pagando dos veces. El procedimiento correcto es consultar al PSP por el intento (por su referencia o su clave de idempotencia); si existe, adoptas su resultado; si no existe, reintentas con la misma clave. Un job de "pagos pendientes" barre periódicamente los que llevan demasiado tiempo en `created` y les aplica ese mismo procedimiento.
+
+**Reintentos con backoff exponencial y jitter.** Si el PSP está degradado y todos tus executors reintentan cada 200 ms, lo terminas de tumbar. El artículo de AWS sobre backoff muestra que agregar aleatoriedad ("full jitter") reparte los reintentos y reduce el trabajo total:
+
+<CodeTabs>
+
+```java title="Java"
+class Backoff {
+    // full jitter: espera un valor aleatorio entre 0 y el tope exponencial
+    static long delayMs(int attempt) {
+        long tope = Math.min(30_000L, 200L << Math.min(attempt, 20)); // el min evita desbordar el shift
+        return ThreadLocalRandom.current().nextLong(tope + 1);
+    }
+}
+```
+
+```ts title="TypeScript"
+// full jitter: espera un valor aleatorio entre 0 y el tope exponencial
+const delayMs = (attempt: number) => Math.random() * Math.min(30_000, 200 * 2 ** attempt)
+```
+
+</CodeTabs>
+
+Distingue errores **reintentables** (timeouts, 5xx, límites de tasa) de los **no reintentables** (tarjeta rechazada, datos inválidos). Airbnb cuenta que clasificar mal estos errores es una fuente directa de cobros dobles o de pagos trabados para siempre.
+
+**Webhooks.** Verifica la firma (HMAC con el secreto del endpoint y tolerancia de tiempo contra *replay*), guarda el evento por su id, responde 2xx de inmediato y procesa en una cola. Stripe reintenta las entregas fallidas durante hasta tres días y no garantiza orden, así que tu handler debe ser idempotente y tolerar eventos viejos.
+
+### 3. El ledger de doble partida
+
+Guardar `balance = balance + 49990` en una columna parece suficiente hasta que un número no cuadra y no hay forma de saber por qué. La contabilidad de doble partida, con 500 años de uso, resuelve exactamente eso: **cada movimiento registra de dónde salió el dinero y a dónde fue**, y en cada transacción la suma de débitos es igual a la suma de créditos. Los saldos no se guardan como verdad: se **derivan** de entradas inmutables.
+
+Dos tipos de cuentas, según su lado "normal":
+
+- **Débito-normal** (usos del dinero): activos y gastos. Un débito las aumenta. Ejemplos: Banco, PSP por cobrar, Gasto comisión PSP.
+- **Crédito-normal** (fuentes del dinero): pasivos, patrimonio e ingresos. Un crédito las aumenta. Ejemplos: Por pagar al vendedor, Ingresos por comisión.
+
+Sigamos una venta del marketplace: el comprador paga $49.990, la plataforma cobra 10 % de comisión y el PSP cobra $1.500 de *fee* (supuesto).
+
+| Momento | Cuenta | Débito | Crédito |
+|---|---|---:|---:|
+| **1. Captura** | PSP por cobrar (activo) | 49.990 | |
+| | Por pagar al vendedor (pasivo) | | 44.991 |
+| | Ingresos por comisión (ingreso) | | 4.999 |
+| **2. Liquidación del PSP** | Banco (activo) | 48.490 | |
+| | Gasto comisión PSP (gasto) | 1.500 | |
+| | PSP por cobrar (activo) | | 49.990 |
+| **3. Payout al vendedor** | Por pagar al vendedor (pasivo) | 44.991 | |
+| | Banco (activo) | | 44.991 |
+
+Cada bloque suma lo mismo en ambas columnas. Al final, "PSP por cobrar" y "Por pagar al vendedor" vuelven a cero (se cumplieron las promesas), y en el Banco quedan $3.499, que es justo la comisión menos el fee del PSP. Si cualquier número de la cadena estuviera mal, algún saldo no cerraría.
+
+Reglas de implementación:
+
+- **Append-only.** Un error se corrige con una transacción de reverso, nunca editando. Square diseñó su servicio Books exactamente así: inmutable y auditable.
+- **Atómico con el negocio.** La transacción contable se escribe en la misma transacción de base de datos que el cambio de estado del pago. Si no, puedes tener un pago capturado sin asiento, o al revés.
+- **Saldos materializados con cuidado.** Para leer rápido, puedes mantener una tabla de saldos actualizada en la misma transacción y protegida con versión (concurrencia optimista) cuando la cuenta no puede quedar negativa, como el saldo a pagar a un vendedor.
+- **Cuentas calientes.** La cuenta "Ingresos por comisión" recibe una entrada por cada venta. Si además actualizas su saldo en cada transacción, esa fila se vuelve un cuello de botella de locks. Lo habitual es no materializar el saldo de las cuentas calientes (se calcula por agregación periódica) o repartirla en sub-cuentas.
+
+<Quiz
+  question="El ledger de tu sistema cuadra perfectamente (débitos = créditos), pero un cliente reclama que le cobraron dos veces el mismo pedido. ¿Cómo es posible?"
+  options={[
+    { text: 'No es posible: si el ledger cuadra, no hubo error.', why: 'La doble partida garantiza que el dinero no aparece ni desaparece, no que cada operación ocurrió una sola vez. Dos cobros duplicados, bien registrados, cuadran.' },
+    { text: 'Se procesaron dos cobros reales y ambos quedaron registrados como transacciones balanceadas; lo detecta la conciliación contra el pedido y el reporte del PSP.', correct: true, why: 'Correcto. Por eso existen dos defensas distintas: idempotencia para no crear el duplicado y conciliación para detectarlo si igual ocurre (dos cobros para un pedido).' },
+    { text: 'El ledger usa float y el redondeo escondió la diferencia.', why: 'Usar float sería otro bug, pero aquí el problema no es de redondeo: son dos operaciones completas.' },
+    { text: 'El PSP cometió el error, así que no aparece en tus registros.', why: 'Si el doble cobro viene de tus reintentos sin clave, el PSP solo obedeció. Y si no está en tus registros, eso también lo revela la conciliación.' },
+  ]}
+/>
+
+### 4. Conciliación: la red de seguridad
+
+Por bien diseñado que esté todo lo anterior, algo se va a desalinear: un webhook que nunca llegó, un reembolso hecho a mano desde el panel del PSP, un fee distinto al esperado. La **conciliación** compara periódicamente tus registros con los de terceros y explica cada diferencia.
+
+Se hace en tres niveles:
+
+1. **Ledger contra PSP.** Cada día, el PSP entrega un reporte de liquidación con cada transacción, su fee y el monto neto. Lo cruzas, pago por pago, con tu ledger.
+2. **PSP contra banco.** El depósito que llegó al banco debe coincidir con el neto que el PSP dijo que iba a liquidar.
+3. **Pedidos contra pagos.** Cada pedido pagado tiene exactamente un cobro capturado (o un cobro y su reembolso).
+
+Las diferencias se clasifican: falta en tu lado (webhook perdido: la corriges consultando la API del PSP), falta en el PSP (crees que capturaste y no: alerta), montos distintos (fees, redondeos de moneda) y **duplicados** (dos cobros para un pedido: reembolso). Lo que se puede corregir solo se corrige con asientos de ajuste; el resto va a una cola de revisión para finanzas.
+
+<Callout type="idea" title="El exactly-once es una ilusión bien construida">
+
+Ninguna red entrega un mensaje exactamente una vez. Lo que construyes es **at-least-once** (reintentar hasta tener confirmación) más **procesamiento idempotente** (que repetir no tenga efecto). El resultado se comporta como si fuera exactly-once. La conciliación es el tercer componente: la auditoría que prueba que la ilusión se sostuvo y que repara cuando no.
+
+</Callout>
+
+## Cuellos de botella y trade-offs
+
+**Síncrono contra asíncrono con el PSP.** Esperar la respuesta del PSP en la petición del usuario da una experiencia simple ("pago aprobado"), pero ata tu latencia a la suya. Responder `202 processing` y confirmar por webhook desacopla, pero obliga al cliente a consultar o escuchar el resultado. Lo común es un híbrido: esperar unos segundos y, si no hay respuesta, pasar a asíncrono.
+
+**Corrección contra disponibilidad.** Si la base de pagos no está disponible, rechazas pagos. Suena duro, pero cobrar sin poder registrar es peor. El sistema de pagos es CP por diseño. Ver [consistencia y CAP](/system-design/consistencia).
+
+**Outbox contra escritura dual.** Publicar a Kafka directo después del commit parece más simple, pero si el proceso muere entre ambas operaciones, el pedido nunca se entera del pago. La tabla outbox lo resuelve al costo de un relay más. Ver [sagas y outbox](/arquitectura/sagas-y-outbox).
+
+**Múltiples PSP.** Tener dos proveedores da resiliencia y mejores tasas de aprobación, pero complica la idempotencia: si el PSP A da timeout y haces *failover* al PSP B, puedes terminar cobrando en ambos. Antes de cambiar de proveedor, confirma el estado en el primero o anula su autorización.
+
+**Autorizar y capturar por separado.** Da flexibilidad (cobrar al despachar, ajustar el monto), pero agrega estados, autorizaciones que caducan y fondos retenidos que molestan al comprador.
+
+**Cuentas calientes del ledger.** La cuenta de ingresos de la plataforma participa en todas las transacciones. Materializar su saldo en cada escritura serializa todo el sistema sobre una fila.
+
+**Retención de claves de idempotencia.** Más tiempo cubre reintentos tardíos (un job que se reanuda al día siguiente); menos tiempo mantiene la tabla chica. 24 horas es el estándar de facto, pero los procesos batch pueden necesitar más.
+
+## Qué espera el entrevistador
+
+<Callout type="interview" title="La vara según el nivel">
+
+**Mid-level.** Integrar con un PSP sin tocar tarjetas, modelar el pago con estados claros, usar montos enteros en unidad mínima y explicar por qué un doble clic no debe cobrar dos veces (claves de idempotencia con restricción única). Webhooks verificados y procesados de forma idempotente.
+
+**Senior.** Idempotencia de punta a punta (cliente, API, executor y PSP, con hash del cuerpo y respuesta guardada); el timeout como estado desconocido que se resuelve consultando antes de reintentar; backoff con jitter y errores reintentables contra no reintentables; máquina de estados con transiciones condicionales que toleran eventos duplicados y fuera de orden; ledger de doble partida append-only escrito en la misma transacción; outbox para notificar.
+
+**Staff.** Razonar sobre los modos de falla sin que te los pregunten: el proceso que muere entre el cobro y el commit (recovery points), la réplica atrasada que deja pasar duplicados, el failover entre PSP. Diseñar la conciliación de tres vías y el flujo operativo de excepciones con finanzas. Discutir cuentas calientes, particionamiento del ledger por tiempo, retención y auditoría. Y saber decir qué no construirías: probablemente no quieras tu propio ledger si un producto existente cubre tus necesidades.
+
+</Callout>
+
+<Takeaways>
+
+- En pagos el enemigo no es la escala sino la ambigüedad: un timeout significa "no sé", nunca "falló". Consulta antes de reintentar.
+- La clave de idempotencia la genera el cliente, la unicidad la impone la base (no un SELECT previo) y se propaga hacia abajo hasta el PSP.
+- Guarda el hash del cuerpo y la respuesta completa, incluidos los errores; reusar una clave con otro cuerpo es un 422.
+- Modela el pago como máquina de estados con UPDATE condicionales: así los webhooks duplicados o fuera de orden se vuelven inofensivos.
+- El ledger de doble partida es append-only, deriva los saldos de entradas inmutables y se escribe en la misma transacción que el cambio de estado.
+- La doble partida no detecta cobros duplicados: para eso están la idempotencia (prevención) y la conciliación diaria (detección y reparación).
+- Exactly-once es at-least-once más procesamiento idempotente, auditado por conciliación.
+
+</Takeaways>
+
+## Fuentes y lecturas
+
+- [Stripe — Designing robust and predictable APIs with idempotency](https://stripe.com/blog/idempotency) (Brandur Leach, 2017): claves de idempotencia, backoff y jitter.
+- [Stripe — Idempotent requests](https://docs.stripe.com/api/idempotent_requests): comparación de parámetros, respuestas guardadas y retención de 24 horas.
+- [Stripe — Webhooks](https://docs.stripe.com/webhooks): verificación de firma, duplicados, orden no garantizado y reintentos durante hasta tres días.
+- [Brandur Leach — Implementing Stripe-like Idempotency Keys in Postgres](https://brandur.org/idempotency-keys) (2017): tabla de claves, recovery points y fases atómicas, con código.
+- [Airbnb Engineering — Avoiding Double Payments in a Distributed Payments System](https://medium.com/airbnb-engineering/avoiding-double-payments-in-a-distributed-payments-system-2981f6b070bb) (Jon Chew, 2019): Orpheus, lecturas desde el primario y clasificación de errores.
+- [Modern Treasury — Accounting for Developers, Part I](https://www.moderntreasury.com/journal/accounting-for-developers-part-i): débitos, créditos y cuentas débito-normal y crédito-normal, explicados para ingenieros.
+- [Square — Books, an immutable double-entry accounting database service](https://developer.squareup.com/blog/books-an-immutable-double-entry-accounting-database-service/) (2019): un ledger inmutable en producción.
+- [AWS Architecture Blog — Exponential Backoff and Jitter](https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter/) (Marc Brooker): por qué el jitter reduce la contención en los reintentos.
+- Alex Xu y Sahn Lam, *System Design Interview – An Insider's Guide, Volume 2*, capítulo "Payment System" ([ByteByteGo](https://bytebytego.com/courses/system-design-interview/payment-system)): pay-in, pay-out, ledger y conciliación en formato de entrevista.
+- [Pat Helland — Idempotence Is Not a Medical Condition](https://queue.acm.org/detail.cfm?id=2187821) (ACM Queue, 2012): por qué los sistemas distribuidos deben asumir mensajes repetidos.

@@ -1,0 +1,65 @@
+.sc-chain {
+  display: flex;
+  align-items: center;
+  padding: var(--s-5) 0;
+  overflow-x: auto;
+}
+.sc-node {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  border: 3px solid var(--line);
+  background: var(--paper);
+  font-weight: 700;
+  font-size: 0.82rem;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+.sc-node--user {
+  width: auto;
+  height: 32px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border-color: var(--ink);
+  font-size: 0.8rem;
+}
+.sc-node.is-async {
+  border-color: var(--rule-strong);
+  color: var(--ink-3);
+}
+.sc-link {
+  flex: 1 1 14px;
+  min-width: 8px;
+  height: 0;
+  border-top: 5px solid var(--line);
+}
+.sc-link.is-async {
+  border-top: 3px dashed var(--rule-strong);
+}
+.sc-queue {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 6px;
+  border: 2px solid var(--ink-3);
+  background: var(--card);
+  color: var(--ink-2);
+}
+.sc-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-3) var(--s-6);
+}
+@media (max-width: 420px) {
+  .sc-node {
+    width: 30px;
+    height: 30px;
+    font-size: 0.72rem;
+    border-width: 2.5px;
+  }
+}

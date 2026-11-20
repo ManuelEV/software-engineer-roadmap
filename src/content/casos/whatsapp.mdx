@@ -1,0 +1,336 @@
+import { MessageDelivery } from '../../components/widgets/casos-a/MessageDelivery'
+
+"Diseña WhatsApp." Un chat parece sencillo: Ana escribe, Beto lee. Pero el sistema tiene que mantener **cientos de millones de conexiones abiertas** a teléfonos que entran y salen de la cobertura, encontrar en milisegundos en qué servidor está conectado Beto, garantizar que cada mensaje llegue **exactamente una vez a la vista del usuario** aunque la red falle a mitad de camino, y hacer todo eso sin poder leer el contenido, porque está cifrado de extremo a extremo.
+
+Es un caso clásico porque es el ejemplo más claro de **sistema con estado de conexión**: casi todo lo que diseñaste antes era HTTP sin estado detrás de un balanceador. Aquí los servidores recuerdan quién está conectado a cada uno, y eso cambia el enrutamiento, los despliegues y las fallas. Además, los famosos ticks son un protocolo de confirmaciones que puedes dibujar con precisión, y que el entrevistador puede usar para tirar del hilo hasta donde quiera.
+
+La escala es real: en 2020 Meta reportó que WhatsApp entregaba alrededor de **100.000 millones de mensajes al día**. Y su historia de ingeniería es famosa por la eficiencia: en 2012 el equipo publicó que había superado los **2 millones de conexiones TCP en un solo servidor**, con Erlang sobre FreeBSD.
+
+<Sketch
+  width={640}
+  height={270}
+  caption="Los ticks son confirmaciones encadenadas: un tick cuando el servidor guardó el mensaje, dos cuando el teléfono de Beto lo recibió."
+  items={[
+    { type: 'text', x: 24, y: 34, text: 'los ticks son acks encadenados', size: 22, tone: 'pencil' },
+    { type: 'box', x: 24, y: 80, w: 110, h: 76, label: 'Ana', size: 22 },
+    { type: 'box', x: 255, y: 80, w: 130, h: 76, label: 'inbox', size: 22, tone: 'line', fill: true },
+    { type: 'arrow', from: [136, 100], to: [252, 100], label: 'mensaje', labelAt: [194, 90] },
+    { type: 'arrow', from: [252, 138], to: [136, 138], dashed: true, tone: 'ok', label: 'ack', labelAt: [194, 164] },
+    { type: 'check', x: 150, y: 196, size: 22 },
+    { type: 'text', x: 176, y: 204, text: 'guardado', size: 18, tone: 'ok' },
+    { type: 'box', x: 506, y: 80, w: 110, h: 76, label: 'Beto', size: 22 },
+    { type: 'arrow', from: [388, 100], to: [503, 100], label: 'entrega', labelAt: [446, 90] },
+    { type: 'arrow', from: [503, 138], to: [388, 138], dashed: true, tone: 'ok', label: 'recibido', labelAt: [446, 164] },
+    { type: 'check', x: 410, y: 196, size: 22 },
+    { type: 'check', x: 430, y: 196, size: 22, with: true },
+    { type: 'text', x: 458, y: 204, text: 'entregado', size: 18, tone: 'ok' },
+    { type: 'text', x: 320, y: 252, text: 'persistir antes de confirmar', size: 22, anchor: 'middle', tone: 'line' },
+  ]}
+/>
+
+## Requisitos
+
+**Funcionales**
+
+1. Mensajes 1 a 1 de texto, en tiempo real.
+2. Grupos (WhatsApp hoy permite grupos de hasta 1.024 participantes).
+3. Estados de entrega: enviado, entregado, leído.
+4. Entrega a usuarios desconectados cuando vuelven.
+5. Adjuntos (fotos, video, audio, documentos).
+6. Presencia: "en línea", "últ. vez" y "escribiendo…".
+7. Varios dispositivos por usuario (teléfono y hasta 4 dispositivos vinculados).
+
+**No funcionales**
+
+- **Latencia**: menos de 500 ms de punta a punta si ambos están en línea (supuesto).
+- **Entrega garantizada**: ningún mensaje confirmado al emisor se pierde.
+- **Sin duplicados visibles** y **orden** correcto dentro de cada conversación.
+- **Retención mínima**: el servidor guarda mensajes solo hasta entregarlos. La política de privacidad de WhatsApp indica que un mensaje no entregado se conserva cifrado hasta 30 días y luego se borra.
+- **Cifrado de extremo a extremo**: el servidor transporta, no lee.
+- **Eficiencia en el móvil**: batería y datos son recursos del usuario.
+
+**Fuera de alcance**: llamadas de voz y video, Estados (historias), pagos, la API para empresas y los respaldos en la nube.
+
+## Estimaciones
+
+Partimos del dato público de **100.000 millones de mensajes diarios** y supongamos **500 millones de conexiones simultáneas** en el pico.
+
+| Magnitud | Cálculo | Resultado |
+|---|---|---|
+| Mensajes por segundo | 100.000 M ÷ 86.400 | ~1,2 M/s promedio, ~3–4 M/s pico (Año Nuevo) |
+| Recibos (✓✓ y leído) | ~2 por mensaje entregado | otros ~2,4 M/s: **más recibos que mensajes** |
+| Servidores de conexión | 500 M ÷ ~1 M por servidor | ~500, más margen: 1.000–2.000 |
+| Heartbeats | 500 M ÷ cada 30–60 s | ~10 M/s de pings pequeños |
+| Tráfico de mensajes | 100.000 M × ~300 B cifrados | ~30 TB/día en tránsito |
+| Inbox pendiente | supongamos 5 % sin entregar por horas | ~5.000 M × 300 B ≈ 1,5 TB en reposo |
+
+Dos lecturas de esta tabla que impresionan en una entrevista:
+
+1. **El tráfico de control supera al de contenido.** Recibos y heartbeats son más frecuentes que los mensajes. Diseñar para "un mensaje" sin pensar en sus confirmaciones subestima la carga al menos 2×.
+2. **El almacenamiento es pequeño** porque el servidor es *store-and-forward*: guarda hasta entregar y borra. Los adjuntos son otra historia y van a almacenamiento de objetos.
+
+## Entidades y API
+
+Entidades: **User**, **Device** (cada uno con sus claves de cifrado y token de push), **Chat** (1 a 1 o grupo, con sus miembros), **Message** (ID generado por el cliente, chat, emisor, contenido cifrado) y **Receipt** (entregado o leído, por mensaje y dispositivo).
+
+La mensajería **no** va por REST: va por una conexión persistente (WebSocket o un protocolo propio sobre TCP; WhatsApp históricamente usó una variante compacta de XMPP). Estos son los marcos que viajan:
+
+```text
+cliente → servidor   send     { client_msg_id: "c-7f3a", chat: "ana:beto", ciphertext: "…" }
+servidor → cliente   ack      { client_msg_id: "c-7f3a", server_seq: 98123, ts: 1763560812 }   → ✓
+servidor → cliente   message  { chat: "ana:beto", from: "ana", server_seq: 98123, ciphertext: "…" }
+cliente → servidor   receipt  { server_seq: 98123, type: "delivered" }                          → ✓✓
+cliente → servidor   receipt  { server_seq: 98123, type: "read" }                               → ✓✓ azul
+cliente → servidor   sync     { last_seq: 98100 }       ← al reconectar: "dame lo que me falte"
+ambos                ping / pong                        ← heartbeat cada N segundos
+```
+
+Los adjuntos sí usan HTTP, porque son grandes y no deben ocupar la conexión de chat:
+
+```http
+POST /v1/media/uploads
+{ "size_bytes": 2400000, "sha256": "9f2c…" }
+
+201 Created
+{ "media_id": "md_51ab", "upload_url": "https://media.storage.ejemplo/…&signature=…" }
+```
+
+El cliente cifra el archivo con una clave aleatoria, lo sube **ya cifrado**, y manda por el chat un mensaje pequeño con `media_id`, la clave y el hash. El servidor guarda un blob que no puede abrir.
+
+## Modelo de datos
+
+```text
+devices         PK user_id, device_id → push_token, identity_key, signed_prekey, one_time_prekeys[]
+
+chats           PK chat_id → type (direct | group), created_at
+chat_members    PK chat_id, user_id → role, joined_at        + índice inverso user_id → chat_ids
+
+inbox           PK device_id, CK server_seq → chat_id, sender, ciphertext, ts     TTL 30 días
+                (se borra cuando el dispositivo confirma)
+
+sessions        device_id → gateway_id, connected_at       (en memoria, TTL renovado por heartbeat)
+
+last_seen       user_id → timestamp
+```
+
+Decisiones a justificar:
+
+- **El inbox es por dispositivo, no por usuario.** Con varios dispositivos, cada uno confirma por su cuenta: el teléfono puede haber recibido un mensaje que la computadora aún no.
+- **El inbox es una cola, no un historial.** Es *append* + borrar al confirmar. Un almacén de columnas anchas (Cassandra, ScyllaDB, DynamoDB) particionado por `device_id` encaja bien. Ojo con un detalle: en esas bases un borrado es una "lápida" (*tombstone*) que se limpia en la compactación; con muchísimos borrados conviene una estrategia de compactación por ventanas de tiempo o, mejor aún, TTL en vez de borrados explícitos cuando se pueda.
+- **Si el producto guarda historial en el servidor** (Messenger, Slack, Discord), el modelo cambia: una tabla de mensajes particionada por `(chat_id, ventana de tiempo)` y ordenada por ID. Discord documentó ese diseño: partición por canal más un *bucket* temporal, IDs Snowflake, primero en Cassandra y desde 2022 en ScyllaDB, con billones de mensajes.
+- **Las sesiones viven en memoria** (Redis o un registro distribuido): son efímeras y se reconstruyen solas cuando los clientes reconectan.
+
+## Diseño de alto nivel
+
+<FlowDiagram
+  caption="Mensajería con gateways con estado. Recorre un mensaje con Beto en línea, con Beto desconectado y la reconexión."
+  nodes={[
+    { id: 'ana', label: 'Ana', kind: 'mobile', x: 0, y: 0.5 },
+    { id: 'ga', label: 'Gateway A', kind: 'gateway', x: 1, y: 0.5, sub: 'conexión de Ana' },
+    { id: 'chat', label: 'Chat service', kind: 'service', x: 2, y: 1.6, sub: 'enruta y persiste' },
+    { id: 'gb', label: 'Gateway B', kind: 'gateway', x: 3, y: 0.5, sub: 'conexión de Beto' },
+    { id: 'beto', label: 'Beto', kind: 'mobile', x: 4, y: 0.5 },
+    { id: 'inbox', label: 'Inbox', kind: 'db', x: 1, y: 2.8, sub: 'pendientes por device' },
+    { id: 'sess', label: 'Sesiones', kind: 'cache', x: 3, y: 2.8, sub: 'device → gateway' },
+    { id: 'push', label: 'Push', kind: 'notify', x: 4, y: 1.8, sub: 'APNs / FCM' },
+  ]}
+  edges={[
+    { from: 'ana', to: 'ga', bidir: true },
+    { from: 'ga', to: 'chat' },
+    { from: 'chat', to: 'inbox' },
+    { from: 'chat', to: 'sess' },
+    { from: 'chat', to: 'gb' },
+    { from: 'gb', to: 'beto', bidir: true },
+    { from: 'chat', to: 'push', dashed: true },
+    { from: 'push', to: 'beto', dashed: true },
+  ]}
+  steps={[
+    {
+      title: 'Conexión',
+      body: <>Cada teléfono abre una conexión persistente (TLS) contra un gateway a través de un balanceador L4. El gateway registra <code>device → gateway</code> en el servicio de sesiones con un TTL que renuevan los heartbeats.</>,
+      active: ['ana', 'ga', 'beto', 'gb', 'sess'],
+      flow: ['ana-ga'],
+    },
+    {
+      title: 'Enviar y persistir: un tick',
+      body: <>Ana envía el mensaje con un <code>client_msg_id</code> único. El Chat service lo escribe en el inbox de cada dispositivo de Beto y <b>solo después</b> responde el ack a Ana. Ese ack es el primer tick: el mensaje está a salvo en el servidor.</>,
+      active: ['ana', 'ga', 'chat', 'inbox'],
+      flow: ['ana-ga', 'ga-chat', 'chat-inbox'],
+    },
+    {
+      title: '¿Dónde está Beto?',
+      body: <>Consulta el registro de sesiones: Beto está en el gateway B. Si hubiera varios dispositivos conectados, serían varios gateways.</>,
+      active: ['chat', 'sess'],
+      flow: ['chat-sess'],
+    },
+    {
+      title: 'Entregar: dos ticks',
+      body: <>El Chat service manda el mensaje al gateway B, que lo empuja por el socket de Beto. El teléfono de Beto confirma; el servidor borra la entrada del inbox y reenvía el recibo a Ana: dos ticks.</>,
+      active: ['chat', 'gb', 'beto'],
+      flow: ['chat-gb', 'gb-beto'],
+    },
+    {
+      title: 'Beto desconectado',
+      body: <>No hay sesión activa. El mensaje queda en el inbox y se manda una notificación push por APNs o FCM. Con cifrado de extremo a extremo, el push no lleva el texto en claro: despierta a la app, que se conecta y lo descarga.</>,
+      active: ['chat', 'inbox', 'push', 'beto'],
+      flow: ['chat-push', 'push-beto'],
+    },
+    {
+      title: 'Reconectar y sincronizar',
+      body: <>Beto vuelve a tener señal, reconecta (quizá a otro gateway) y envía <code>sync</code> con el último número de secuencia que tiene. El servidor le entrega todo lo pendiente del inbox en orden, y cada confirmación genera los recibos para los emisores.</>,
+      active: ['beto', 'gb', 'chat', 'inbox'],
+      flow: ['gb-beto', 'chat-gb', 'chat-inbox'],
+    },
+  ]}
+/>
+
+## Profundizaciones
+
+### 1. Conexiones persistentes y enrutamiento entre gateways
+
+**¿Por qué una conexión persistente?** Porque el servidor necesita **empujar** mensajes sin que el cliente pregunte. Las alternativas (polling, long-polling) gastan batería y añaden latencia. WebSocket o un protocolo binario propio sobre TCP son la respuesta estándar; MQTT es otra opción usada en mensajería móvil.
+
+**Los gateways tienen estado**, y eso trae tres problemas que el entrevistador va a explorar:
+
+- **Enrutamiento.** Ana está en el gateway A y Beto en el B. ¿Cómo llega el mensaje? Opciones: (a) un **registro de sesiones** `device → gateway` que el Chat service consulta antes de reenviar por RPC; (b) **pub/sub** por usuario (Redis Pub/Sub), donde el gateway de Beto se suscribe al canal de Beto mientras está conectado; (c) **hashing consistente** de usuarios a gateways, que obliga a que el cliente se conecte a "su" gateway y complica el balanceo. La (a) y la (b) son las más comunes. Con pub/sub, la entrega es "como mucho una vez": por eso **la durabilidad la da el inbox**, que se escribe antes de publicar.
+- **Conexiones muertas.** En redes móviles, una conexión puede morir sin que nadie lo note (un NAT del operador la descarta en silencio). Un **heartbeat** de aplicación (ping cada 30–60 s, por ejemplo) la detecta. Más frecuente detecta antes, pero gasta más batería: es un trade-off explícito.
+- **Despliegues y caídas.** Reiniciar un gateway desconecta a un millón de usuarios, que reconectan **todos a la vez**. Es una *tormenta de reconexión* que puede tumbar a los gateways vecinos. Mitigaciones: drenar conexiones de a poco antes del reinicio, *backoff* exponencial con *jitter* en el cliente, y límites de tasa de conexión por gateway.
+
+<Sidenote>Las cifras de WhatsApp en 2012 (más de 2 millones de conexiones por servidor) salieron de mucho trabajo de ajuste del kernel de FreeBSD y de la máquina virtual de Erlang, donde cada conexión es un proceso liviano. Años después, el equipo contó que operaba más cerca de 1 millón por servidor para dejar margen.</Sidenote>
+
+### 2. Entrega garantizada, ticks y orden
+
+Los ticks son **confirmaciones encadenadas**. Juega con el simulador: desconecta a Beto, envía dos mensajes, mira el inbox y la campana de push, y vuelve a conectarlo.
+
+<MessageDelivery />
+
+Las reglas que hacen que funcione:
+
+1. **Persistir antes de confirmar.** El primer tick significa "el servidor lo guardó durablemente". Si el Chat service confirmara antes de escribir y luego cayera, Ana creería que el mensaje salió y se perdería.
+2. **Al menos una vez + deduplicación = exactamente una vez a la vista.** Si el ack se pierde, el cliente de Ana reintenta. El servidor reconoce el `client_msg_id` repetido (es una **clave de idempotencia**) y devuelve el mismo ack sin duplicar. Del otro lado igual: si Beto recibe dos veces el mismo `server_seq`, lo muestra una sola.
+3. **Borrar solo con confirmación del dispositivo.** El segundo tick no lo genera el gateway al enviar por el socket, sino el **teléfono** al recibir. El socket podía estar muerto sin saberlo.
+4. **Los recibos son mensajes.** Viajan por el mismo camino en sentido contrario, con la misma lógica de inbox y reintento. Y también van cifrados.
+
+Las reglas 1 y 2 juntas, en el manejador del Chat service que recibe el marco `send`:
+
+```java title="Java"
+record SendFrame(String clientMsgId, String chatId, String senderDevice, byte[] ciphertext) {}
+record Ack(String clientMsgId, long serverSeq, long ts) {}
+
+// client_msg_id → ack ya enviado. En producción: una escritura condicional en la base, con TTL.
+private final Map<String, Ack> acks = new ConcurrentHashMap<>();
+
+Ack onSend(SendFrame f) {
+    // Un reintento trae el mismo client_msg_id: devuelve el mismo ack, sin duplicar.
+    return acks.computeIfAbsent(f.clientMsgId(), id -> {
+        long seq = nextSeq(f.chatId());                    // orden dentro del chat
+        for (String device : recipientDevices(f.chatId(), f.senderDevice())) {
+            inbox.append(device, seq, f);                  // 1. persistir en cada inbox…
+        }
+        return new Ack(id, seq, Instant.now().getEpochSecond()); // 2. …y recién ahí confirmar: ✓
+    });
+}
+```
+
+El mapa en memoria es solo para ilustrar: con varias instancias del Chat service, la deduplicación tiene que vivir en el almacenamiento compartido (una inserción condicional por `client_msg_id`), igual que el inbox.
+
+**¿Y el orden?** Dentro de una conversación, el orden lo define un **número de secuencia** asignado por el servidor al persistir (por ejemplo, un contador por chat o por inbox). El cliente ordena por ese número y detecta huecos: si tiene la 98100 y le llega la 98123, sabe que le faltan mensajes y pide un `sync`. No hace falta un orden global entre conversaciones distintas, y sería carísimo.
+
+<Quiz
+  question="¿En qué momento debe el servidor enviar el ack que el emisor muestra como un solo tick?"
+  options={[
+    { text: 'Apenas recibe el mensaje por el socket, para que el emisor no espere.', why: 'Si el servidor cae antes de persistir, el emisor cree que el mensaje salió y se pierde.' },
+    { text: 'Después de escribir el mensaje durablemente en el inbox del destinatario.', correct: true, why: 'El tick promete que el mensaje no se va a perder. Solo lo puedes prometer cuando está en almacenamiento durable (y replicado).' },
+    { text: 'Cuando el destinatario lo recibe en su teléfono.', why: 'Ese es el segundo tick (entregado). Si esperaras eso para el primero, un destinatario desconectado dejaría al emisor sin saber si su mensaje salió.' },
+  ]}
+/>
+
+<Quiz
+  question="El teléfono de Ana envía un mensaje, pero el ack se pierde por un corte de red, y la app lo reenvía al reconectar. ¿Cómo evitas que Beto lo vea dos veces?"
+  options={[
+    { text: 'Comparando el texto del mensaje con los últimos recibidos.', why: 'Dos mensajes legítimos pueden tener el mismo texto ("ok"). Y con cifrado de extremo a extremo, el servidor ni siquiera ve el texto.' },
+    { text: 'Con un client_msg_id generado por el cliente que el servidor usa como clave de idempotencia.', correct: true, why: 'El reintento llega con el mismo ID; el servidor detecta que ya lo persistió y responde el mismo ack sin crear otro mensaje.' },
+    { text: 'Desactivando los reintentos en el cliente.', why: 'Entonces perderías mensajes cada vez que se pierde un ack. La garantía de entrega exige reintentar.' },
+  ]}
+/>
+
+### 3. Grupos y varios dispositivos
+
+**Grupos: fan-out en el servidor.** Ana envía un mensaje a un grupo de 200 personas. Lo ideal es que suba **una** sola copia y que el servidor la reparta a los 200 inboxes. Pero con cifrado de extremo a extremo, ¿cómo cifras una sola copia para 200 destinatarios? WhatsApp usa el componente **Sender Keys** del protocolo Signal: cada miembro tiene una "clave de emisor" para el grupo, que distribuye una vez a cada otro miembro por las sesiones 1 a 1 ya cifradas. A partir de ahí, cada mensaje se cifra **una vez** con esa clave y el servidor hace el fan-out del mismo texto cifrado. Cuando alguien sale del grupo, las claves se rotan.
+
+Costo y límites del fan-out de grupo:
+
+- Cada mensaje genera tantas escrituras de inbox como miembros: un grupo de 1.024 multiplica por mil. Por eso los grupos tienen un tamaño máximo, y para audiencias enormes los productos usan otro modelo (canales o difusión, donde los seguidores **leen** en vez de recibir copias: el mismo push vs pull de [Twitter](/casos/twitter)).
+- Los recibos se agregan: el emisor ve dos ticks cuando **todos** recibieron, y en "Info del mensaje" el detalle por persona.
+
+**Varios dispositivos: fan-out en el cliente.** Desde 2021, cada dispositivo vinculado tiene su **propia clave de identidad**. En los chats 1 a 1, el cliente que envía **cifra el mensaje N veces**, una por cada dispositivo destinatario (y por sus propios otros dispositivos, para que también lo vean). Meta lo llama *client-fanout*. Los grupos, en cambio, siguen con Sender Keys. Consecuencia para el diseño: el inbox y los recibos son **por dispositivo**.
+
+### 4. Cifrado de extremo a extremo y presencia
+
+**El cifrado, a alto nivel.** WhatsApp usa el **protocolo Signal**:
+
+1. Cada dispositivo genera claves: una de identidad de largo plazo, una *signed prekey* y un lote de *one-time prekeys*, y sube las partes públicas al servidor.
+2. Para escribirle a Beto por primera vez, Ana descarga su paquete de prekeys y calcula un secreto compartido (el acuerdo X3DH), **aunque Beto esté desconectado**.
+3. Cada mensaje se cifra con una clave nueva derivada por el *Double Ratchet*: si alguien roba una clave, no puede leer mensajes anteriores (*forward secrecy*) y la sesión se "cura" con los mensajes siguientes.
+
+Lo que esto le hace a tu arquitectura es lo que el entrevistador quiere oír: **el servidor es un directorio de claves y un relé de bytes opacos**. No puede indexar para búsqueda, no puede filtrar spam por contenido (solo por metadatos y reportes), no puede generar vistas previas de links (lo hace el cliente emisor), las notificaciones push no pueden llevar el texto, y los respaldos necesitan su propio esquema de cifrado.
+
+**Presencia sin tormentas.** La versión ingenua avisa a todos tus contactos cada vez que te conectas o desconectas. Con 500 contactos y conexiones que suben y bajan por la cobertura, el fan-out de presencia superaría al de mensajes. Mejor:
+
+- **Suscripción al mirar.** Solo quien tiene **abierto** tu chat se suscribe a tu presencia (con un TTL). Cuando lo cierra, deja de recibir.
+- **"Últ. vez" se escribe al desconectar**, no con cada heartbeat.
+- **"Escribiendo…" es efímero**: no se persiste, se envía como mejor esfuerzo y caduca en segundos. Si se pierde, nadie lo nota.
+
+<Callout type="tip" title="Ordénalo por durabilidad">
+
+Una forma elegante de presentar este caso: clasifica cada tipo de dato por cuánto te importa perderlo. Mensajes: durable, replicado, con confirmación. Recibos: durables, pero un recibo perdido solo deja un tick gris de más. Presencia y "escribiendo": efímeros, en memoria, sin reintentos. Cada categoría tiene un costo distinto y el diseño lo refleja.
+
+</Callout>
+
+## Cuellos de botella y trade-offs
+
+| Riesgo | Mitigación |
+|---|---|
+| Tormenta de reconexión tras caer un gateway o una región | Backoff con jitter en el cliente, drenaje gradual, límites de conexiones nuevas por segundo |
+| Registro de sesiones desactualizado (dice que Beto está en B, pero B murió) | TTL corto renovado por heartbeat; si la entrega falla, se cae al inbox + push |
+| Fan-out de grupos grandes | Límite de tamaño, Sender Keys para subir una sola copia, colas separadas para grupos grandes |
+| Borrados masivos en el inbox (lápidas) | TTL y compactación por ventanas de tiempo; particiones acotadas |
+| Retrasos de APNs/FCM | Tratar el push como un "despertador", nunca como el canal de entrega |
+| Multi-región | El usuario se conecta a la región más cercana; los mensajes entre regiones viajan por enlaces internos; el inbox vive en la región "hogar" del destinatario |
+| Batería | Heartbeats tan espaciados como permitan los NAT; agrupar recibos |
+
+## Qué espera el entrevistador
+
+<Callout type="interview" title="Por nivel">
+
+**Mid-level.** Conexión persistente (WebSocket), un servicio de chat que guarda y reenvía, entrega a desconectados con almacenamiento + push, una tabla de mensajes razonable. Funciona para dos usuarios conectados al mismo servidor y explica cómo crecer.
+
+**Senior.** Gateways con estado y cómo se enrutan mensajes entre ellos (registro de sesiones o pub/sub), protocolo de acks con persistencia antes de confirmar, idempotencia con ID del cliente, inbox por dispositivo con borrado al confirmar, números de secuencia para orden y huecos, heartbeats, fan-out de grupos y sus límites.
+
+**Staff.** Implicaciones del cifrado de extremo a extremo en todo el sistema, multi-dispositivo, tormentas de reconexión y despliegues de gateways, multi-región y residencia de datos, clasificación de datos por durabilidad, capacidad por servidor y costo, políticas de retención.
+
+</Callout>
+
+<Takeaways>
+
+- Un chat a escala es un **sistema con estado de conexión**: gateways que recuerdan quién está conectado, y un registro o pub/sub para encontrar a cada destinatario.
+- Los ticks son **acks encadenados**: un tick = persistido en el servidor; dos = confirmado por el dispositivo; azules = leído. **Persiste antes de confirmar.**
+- **Al menos una vez + deduplicación** por `client_msg_id` da "exactamente una vez" a la vista del usuario.
+- El servidor es **store-and-forward**: inbox por dispositivo, borrado al confirmar, retención limitada; el push solo despierta a la app.
+- Grupos con **Sender Keys** (una copia cifrada, fan-out en servidor); multi-dispositivo con **client-fanout** (una copia por dispositivo).
+- Con cifrado de extremo a extremo el servidor **no puede leer**: búsqueda, previsualizaciones y antispam se mueven al cliente o a metadatos.
+- Presencia por **suscripción al mirar**, "escribiendo" efímero: no todo merece durabilidad.
+
+</Takeaways>
+
+## Fuentes y lecturas
+
+- WhatsApp Blog, [1 million is so 2011](https://blog.whatsapp.com/1-million-is-so-2011) (2012).
+- Rick Reed, [Scaling to Millions of Simultaneous Connections](https://www.erlang-factory.com/upload/presentations/558/efsf2012-whatsapp-scaling.pdf), Erlang Factory SF 2012.
+- WhatsApp, [Encryption Overview (whitepaper técnico)](https://www.whatsapp.com/security/WhatsApp-Security-Whitepaper.pdf).
+- Meta Engineering, [How WhatsApp enables multi-device capability](https://engineering.fb.com/2021/07/14/security/whatsapp-multi-device/) (2021).
+- Signal, [The Double Ratchet Algorithm](https://signal.org/docs/specifications/doubleratchet/).
+- Discord, [How Discord Stores Trillions of Messages](https://discord.com/blog/how-discord-stores-trillions-of-messages) (2023).
+- TechCrunch, [WhatsApp is now delivering roughly 100 billion messages a day](https://techcrunch.com/2020/10/29/whatsapp-is-now-delivering-roughly-100-billion-messages-a-day/) (2020).
+- Hello Interview, [Design WhatsApp](https://www.hellointerview.com/learn/system-design/problem-breakdowns/whatsapp).
+- Alex Xu, *System Design Interview*, vol. 1, cap. 12: [Design a Chat System](https://bytebytego.com/courses/system-design-interview/design-a-chat-system).

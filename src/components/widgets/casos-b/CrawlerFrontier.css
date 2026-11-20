@@ -1,0 +1,201 @@
+.cf-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-2);
+}
+
+.cf-stage {
+  display: grid;
+  gap: var(--s-4);
+}
+
+.cf-clock {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  justify-self: start;
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: var(--paper-3);
+  font-family: var(--font-code);
+  font-size: 0.8rem;
+  color: var(--ink-2);
+}
+
+.cf-block {
+  display: grid;
+  gap: 6px;
+}
+
+.cf-block__title {
+  margin: 0;
+  font-family: var(--font-sign);
+  font-weight: 700;
+  font-size: 0.74rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.cf-row {
+  display: grid;
+  grid-template-columns: 6.6rem minmax(0, 1fr);
+  align-items: center;
+  gap: 4px var(--s-3);
+  min-height: 40px;
+}
+
+.cf-host {
+  grid-template-columns: 6.6rem minmax(0, 1fr) auto;
+}
+
+.cf-row__name {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-sign);
+  font-weight: 600;
+  font-size: 0.92rem;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+/* Station dot: paper fill, thick ring. */
+.cf-dot {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 3px solid var(--rule-strong);
+  background: var(--paper);
+  transition: border-color 200ms var(--ease-out), background-color 200ms var(--ease-out);
+}
+.cf-host.is-fetch .cf-dot {
+  border-color: var(--line);
+  background: var(--line);
+}
+.cf-host.is-cool .cf-dot {
+  border-color: var(--warn);
+}
+.cf-host.is-ready .cf-dot {
+  border-color: var(--line);
+}
+
+/* The queue is drawn as a line track. */
+.cf-track {
+  position: relative;
+  list-style: none;
+  margin: 0;
+  padding: 0 0 0 4px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  min-height: 30px;
+}
+.cf-track::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 4px;
+  margin-top: -2px;
+  border-radius: 4px;
+  background: var(--rule);
+  z-index: 0;
+}
+
+.cf-chip {
+  position: relative;
+  z-index: 1;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 2px solid var(--line);
+  background: var(--paper);
+  font-family: var(--font-code);
+  font-size: 0.74rem;
+  line-height: 1.5;
+  color: var(--ink);
+  white-space: nowrap;
+}
+.cf-chip.is-seed {
+  background: var(--line-tint-2);
+}
+
+.cf-more,
+.cf-empty {
+  position: relative;
+  z-index: 1;
+  padding: 0 6px;
+  background: var(--card);
+  font-family: var(--font-sign);
+  font-size: 0.82rem;
+  color: var(--ink-3);
+}
+.cf-empty {
+  font-style: italic;
+}
+
+.cf-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--font-sign);
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--ink-3);
+  white-space: nowrap;
+}
+.cf-host.is-fetch .cf-status {
+  color: var(--line-ink);
+}
+.cf-host.is-cool .cf-status {
+  color: var(--warn);
+}
+
+.cf-bits {
+  display: grid;
+  grid-template-columns: repeat(16, minmax(0, 1fr));
+  gap: 3px;
+  max-width: 34rem;
+}
+.cf-bit {
+  aspect-ratio: 1;
+  border-radius: 3px;
+  border: 1.5px solid var(--rule-strong);
+  background: var(--paper);
+  transition:
+    background-color 200ms var(--ease-out),
+    border-color 200ms var(--ease-out);
+}
+.cf-bit.is-on {
+  background: var(--line);
+  border-color: var(--line);
+}
+.cf-bit.is-probe {
+  outline: 2px solid var(--ink);
+  outline-offset: 1px;
+}
+
+.cf-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-3) var(--s-5);
+  margin-bottom: var(--s-3);
+}
+
+@media (max-width: 480px) {
+  .cf-row,
+  .cf-host {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .cf-row .cf-track {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+  .cf-row:not(.cf-host) .cf-row__name {
+    grid-column: 1 / -1;
+  }
+}

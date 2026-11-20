@@ -1,0 +1,694 @@
+import { HeapPlayground } from '../../components/widgets/entrevistas/HeapPlayground'
+import { TwoHeapsMedian } from '../../components/widgets/entrevistas/TwoHeapsMedian'
+
+Hay una familia de problemas que se delata por el enunciado: "el k-ésimo mayor", "los k más frecuentes", "los k puntos más cercanos", "fusiona k listas ordenadas", "la mediana de un flujo". En todos te piden **lo mejor de algo sin necesitar el orden completo**, y ordenar todo es trabajo de más. La herramienta es el *heap* (montículo), la estructura que hay detrás de toda cola de prioridad.
+
+Un heap hace una sola cosa muy bien: te da el mínimo (o el máximo) en O(1) y te deja insertar o sacar en O(log n). Este tema explica cómo lo logra por dentro, porque en entrevistas te lo preguntan y porque en TypeScript te puede tocar escribirlo, y resuelve los problemas clásicos con la misma receta: enunciado, preguntas, fuerza bruta, la idea, el código y las repreguntas.
+
+<Sketch
+  width={640}
+  height={320}
+  caption="La idea de todo el tema: el heap que imaginas es un árbol, pero en memoria es un arreglo sin huecos, y los índices hacen de punteros."
+  items={[
+    { type: 'text', x: 24, y: 34, text: 'lo que imaginas', size: 22, tone: 'pencil' },
+    { type: 'circle', x: 130, y: 84, r: 22, label: '1', font: 'code', tone: 'line', fill: true },
+    { type: 'path', d: 'M118 102 L82 132 M142 102 L178 132 M62 168 L48 196 M78 168 L92 196 M190 168 L172 196', len: 230 },
+    { type: 'circle', x: 70, y: 150, r: 22, label: '3', font: 'code' },
+    { type: 'circle', x: 190, y: 150, r: 22, label: '2', font: 'code', with: true },
+    { type: 'circle', x: 42, y: 216, r: 22, label: '7', font: 'code' },
+    { type: 'circle', x: 98, y: 216, r: 22, label: '4', font: 'code', with: true },
+    { type: 'circle', x: 166, y: 216, r: 22, label: '5', font: 'code', with: true },
+    { type: 'text', x: 162, y: 64, text: 'mínimo', size: 19, tone: 'line' },
+    { type: 'line', points: [[272, 24], [272, 300]], dashed: true, tone: 'muted' },
+    { type: 'text', x: 300, y: 34, text: 'lo que hay en memoria', size: 22, tone: 'line' },
+    { type: 'cells', x: 300, y: 84, values: [1, 3, 2, 7, 4, 5], size: 52, index: true, states: ['line', null, null, null, null, null] },
+    { type: 'arrow', from: [378, 140], to: [482, 140], bend: 44, tone: 'line' },
+    { type: 'arrow', from: [378, 140], to: [534, 140], bend: 74, tone: 'line', with: true },
+    { type: 'text', x: 404, y: 214, text: 'hijos de 1: 3 y 4', size: 19, tone: 'pencil' },
+    { type: 'highlight', x: 296, y: 248, w: 236, h: 30, tone: 'ok' },
+    { type: 'text', x: 300, y: 270, text: 'hijos: 2i+1 y 2i+2', size: 20, font: 'code', with: true },
+    { type: 'text', x: 24, y: 290, text: 'cada padre ≤ sus hijos', size: 20, tone: 'ok' },
+  ]}
+/>
+
+## Qué te da un heap (y qué no)
+
+Un **min-heap** es un árbol binario que cumple una sola regla: **cada padre es menor o igual que sus hijos**. De ahí sale todo lo demás. La raíz es el mínimo del conjunto, pero entre hermanos o primos no hay ningún orden. Un **max-heap** es lo mismo con la desigualdad al revés.
+
+| Operación | Costo | Comentario |
+|---|---|---|
+| Ver el mínimo (`peek`) | O(1) | Siempre está en la raíz |
+| Insertar (`push`) | O(log n) | Se agrega al final y sube |
+| Sacar el mínimo (`pop`) | O(log n) | El último pasa a la raíz y baja |
+| Construir desde un arreglo (`heapify`) | O(n) | No O(n log n): lo vemos más abajo |
+| Buscar un valor arbitrario | O(n) | El heap no sirve para buscar |
+| Recorrer en orden | O(n log n) | Hay que sacar uno por uno |
+
+La última fila es la que más se olvida. Si necesitas buscar, borrar un elemento cualquiera o recorrer en orden, un heap no te ayuda: piensa en un árbol balanceado (`TreeMap` en Java, `SortedList` de `sortedcontainers` en Python) o en ordenar.
+
+<Callout type="interview">
+
+Cuando digas "uso un heap", el entrevistador suele repreguntar "¿y cuánto cuesta cada operación?" o "¿cómo lo implementarías?". Lo que evalúa es si el heap es una caja negra para ti o si sabes por qué `push` es O(log n). Con las dos secciones que siguen tienes la respuesta completa en un minuto.
+
+</Callout>
+
+## Por dentro: un árbol completo guardado en un arreglo
+
+El truco que hace al heap tan barato es que **no usa punteros**. Es un árbol binario *completo*: todos los niveles están llenos salvo, quizás, el último, que se llena de izquierda a derecha. Un árbol así se puede guardar nivel por nivel en un arreglo sin huecos, y la estructura queda implícita en los índices:
+
+- Los hijos del nodo `i` están en `2i + 1` y `2i + 2`.
+- Su padre está en `(i - 1) // 2`.
+
+Como el árbol es completo, con n elementos tiene ⌊log₂ n⌋ + 1 niveles. Por eso cualquier camino de la raíz a una hoja mide O(log n), y las dos operaciones que modifican el heap recorren como mucho uno de esos caminos.
+
+### Insertar: sift-up
+
+Agregas el elemento al final del arreglo, la primera hoja libre, así el árbol sigue completo. Puede que sea menor que su padre y rompa la regla. Entonces lo comparas con su padre y, si es menor, los intercambias. Repites hasta que el padre sea menor o igual, o hasta llegar a la raíz. Cada intercambio sube un nivel, así que son como mucho log₂ n intercambios.
+
+### Sacar el mínimo: sift-down
+
+La raíz es el mínimo, pero no puedes dejar un hueco arriba. Tomas el **último** elemento (quitarlo del final no rompe la forma completa), lo pones en la raíz y lo hundes: lo comparas con sus dos hijos y, si alguno es menor, lo intercambias con el **menor de los dos**. Si lo cambiaras con el mayor, ese mayor quedaría como padre del menor y la regla se rompería otra vez.
+
+### Heapify en O(n)
+
+Si ya tienes los n elementos, insertarlos uno por uno cuesta O(n log n). Hay una forma mejor: recorrer los nodos internos **de abajo hacia arriba** (desde el índice `n // 2 - 1` hasta 0) y hundir cada uno. Cuando llegas a un nodo, sus dos subárboles ya son heaps, así que basta un sift-down.
+
+¿Por qué sale lineal? Porque el trabajo de cada sift-down depende de la **altura** del nodo, no de la del árbol. La mitad de los nodos son hojas y no hacen nada; un cuarto está a altura 1 y baja como mucho un nivel; un octavo baja dos, y así. La suma n/4 · 1 + n/8 · 2 + n/16 · 3 + … está acotada por n. La mayoría de los nodos vive cerca del fondo y casi no se mueve.<Sidenote>La demostración formal está en el capítulo 6 de *Introduction to Algorithms* (CLRS). La documentación de `heapq` también lo afirma: `heapify` transforma la lista "in linear time".</Sidenote>
+
+<Sketch
+  width={640}
+  height={300}
+  caption="Por qué heapify cuesta O(n): la mitad de los nodos son hojas y no bajan nada; solo los pocos de arriba bajan muchos niveles."
+  items={[
+    { type: 'path', d: 'M150 30 L30 250 L270 250 Z', len: 700 },
+    { type: 'path', d: 'M120 85 L180 85 M90 140 L210 140 M60 195 L240 195', len: 360, tone: 'muted' },
+    { type: 'text', x: 300, y: 230, text: 'n/2 hojas: no bajan', size: 20, tone: 'line' },
+    { type: 'text', x: 300, y: 174, text: 'n/4 nodos: bajan 1', size: 20 },
+    { type: 'text', x: 300, y: 118, text: 'n/8 nodos: bajan 2', size: 20 },
+    { type: 'text', x: 300, y: 62, text: 'la raíz: baja log n', size: 20 },
+    { type: 'arrow', from: [286, 222], to: [286, 70], tone: 'pencil' },
+    { type: 'text', x: 24, y: 288, text: 'casi todo está abajo', size: 18, tone: 'pencil' },
+    { type: 'highlight', x: 296, y: 258, w: 186, h: 30, tone: 'ok' },
+    { type: 'text', x: 300, y: 280, text: 'suma ≤ n: O(n)', size: 20, font: 'code', tone: 'ok', with: true },
+    { type: 'check', x: 512, y: 272, size: 24 },
+  ]}
+/>
+
+En el widget, prueba primero el heapify del arreglo desordenado y fíjate en los nodos que se mueven: solo los de arriba bajan más de un nivel. Después inserta un número más chico que la raíz y mira cómo sube hasta arriba en tres intercambios, y extrae el mínimo para ver el último elemento subir a la raíz y volver a hundirse.
+
+<HeapPlayground />
+
+<Quiz
+  question="En un heap guardado en un arreglo, ¿cuál es el padre del elemento que está en el índice 9?"
+  options={[
+    { text: 'El índice 4.', correct: true, why: '(9 − 1) // 2 = 4. Comprobación: los hijos de 4 son 2·4 + 1 = 9 y 2·4 + 2 = 10.' },
+    { text: 'El índice 4,5, que se redondea a 5.', why: 'La división es entera hacia abajo. El índice 5 tiene como hijos a 11 y 12.' },
+    { text: 'El índice 3.', why: 'Los hijos de 3 son 7 y 8. El 9 ya es hijo de 4.' },
+    { text: 'Depende de los valores guardados.', why: 'La forma del árbol depende solo de la cantidad de elementos, no de los valores. Por eso no hacen falta punteros.' },
+  ]}
+/>
+
+## Heaps en Java, Python y TypeScript
+
+En **Java** el heap viene en `java.util`: `PriorityQueue` es un **min-heap** con `offer` (insertar), `poll` (sacar el mínimo) y `peek` (verlo). Para un max-heap le pasas un comparador al revés, `Collections.reverseOrder()`, y para objetos, un `Comparator` con desempate. Si la construyes a partir de una colección completa, OpenJDK arma el heap de una vez (el heapify lineal), en vez de insertar uno por uno.
+
+En **Python** el heap viene en la biblioteca estándar: `heapq` trabaja sobre una lista común y es un **min-heap**. Para un max-heap, el truco clásico es guardar los valores negados. Desde Python 3.14 existen `heappush_max`, `heappop_max` y compañía, pero muchas plataformas de entrevista usan versiones anteriores, así que el negativo sigue siendo lo que vas a escribir.
+
+En **TypeScript** (y en JavaScript) no hay heap estándar. LeetCode incluye en su entorno de JavaScript la librería `@datastructures-js/priority-queue`, pero en una entrevista en vivo pregunta antes de asumir que existe. Lo más seguro es saber escribir uno mínimo en cinco minutos, con una función de comparación para usarlo como min-heap o max-heap. Es lo que hace la pestaña de TypeScript; en Java usa la `PriorityQueue` estándar:
+
+<CodeTabs>
+
+```java title="Java"
+record Pedido(int prioridad, String id) {}
+
+class Ejemplos {
+    void heaps() {
+        PriorityQueue<Integer> minHeap = new PriorityQueue<>(List.of(5, 1, 8, 3)); // O(n)
+        minHeap.offer(2);                          // O(log n)
+        int menor = minHeap.poll();                // 1
+        int tope = minHeap.peek();                 // ver el mínimo sin sacarlo: 2
+
+        // max-heap: el mismo heap con el comparador al revés
+        PriorityQueue<Integer> maxHeap = new PriorityQueue<>(Collections.reverseOrder());
+        maxHeap.addAll(List.of(5, 1, 8));
+        int mayor = maxHeap.peek();                // 8
+
+        // prioridad + desempate: un comparador encadenado
+        PriorityQueue<Pedido> pedidos = new PriorityQueue<>(
+            Comparator.comparingInt(Pedido::prioridad).thenComparing(Pedido::id));
+        pedidos.offer(new Pedido(2, "pedido-17"));
+        pedidos.offer(new Pedido(1, "pedido-42"));
+        Pedido primero = pedidos.poll();           // Pedido[prioridad=1, id=pedido-42]
+    }
+}
+```
+
+```python title="Python"
+import heapq
+
+nums = [5, 1, 8, 3]
+heapq.heapify(nums)              # O(n), en el lugar
+heapq.heappush(nums, 2)          # O(log n)
+menor = heapq.heappop(nums)      # 1
+tope = nums[0]                   # ver el mínimo sin sacarlo: 2
+
+# max-heap: guardar negativos
+mx = []
+for x in [5, 1, 8]:
+    heapq.heappush(mx, -x)
+mayor = -mx[0]                   # 8
+
+# prioridad + desempate: las tuplas se comparan elemento por elemento
+pedidos = []
+heapq.heappush(pedidos, (2, 17, "pedido-17"))   # (prioridad, id, dato)
+heapq.heappush(pedidos, (1, 42, "pedido-42"))
+heapq.heappop(pedidos)           # (1, 42, 'pedido-42')
+
+heapq.nlargest(3, [4, 9, 1, 7, 3])   # [9, 7, 4], O(n log k)
+```
+
+```ts title="TypeScript"
+/** Heap binario mínimo: `less(a, b)` dice si a debe salir antes que b. */
+class MinHeap<T> {
+  private a: T[] = []
+  constructor(private less: (x: T, y: T) => boolean) {}
+
+  get size(): number {
+    return this.a.length
+  }
+  peek(): T | undefined {
+    return this.a[0]
+  }
+  push(x: T): void {
+    const a = this.a
+    a.push(x)
+    let i = a.length - 1
+    while (i > 0) {
+      const p = (i - 1) >> 1
+      if (!this.less(a[i], a[p])) break
+      ;[a[i], a[p]] = [a[p], a[i]]
+      i = p
+    }
+  }
+  pop(): T | undefined {
+    const a = this.a
+    if (a.length === 0) return undefined
+    const top = a[0]
+    const last = a.pop()!
+    if (a.length > 0) {
+      a[0] = last
+      let i = 0
+      for (;;) {
+        const l = 2 * i + 1
+        const r = l + 1
+        let m = i
+        if (l < a.length && this.less(a[l], a[m])) m = l
+        if (r < a.length && this.less(a[r], a[m])) m = r
+        if (m === i) break
+        ;[a[i], a[m]] = [a[m], a[i]]
+        i = m
+      }
+    }
+    return top
+  }
+}
+
+const minHeap = new MinHeap<number>((x, y) => x < y)
+const maxHeap = new MinHeap<number>((x, y) => x > y) // mismo código, comparación al revés
+```
+
+</CodeTabs>
+
+Dos detalles de Python que causan errores en vivo. Primero, si guardas tuplas `(prioridad, objeto)` y dos prioridades empatan, Python compara los objetos y lanza `TypeError` si no son comparables (un `ListNode`, un diccionario). Mete un desempate único en medio, como un índice o un contador. Segundo, `heap[0]` es el mínimo, pero `heap[1]` **no** es el segundo menor necesariamente: solo la raíz tiene garantía.
+
+<Callout type="tip" title="En Java">
+
+- `PriorityQueue` es un **min-heap**. Para max-heap, `Collections.reverseOrder()` o `(a, b) -> Integer.compare(b, a)`. No escribas `(a, b) -> b - a`: con valores extremos la resta desborda y el orden sale mal (con `Integer.MIN_VALUE` en la cola, ese valor queda como "máximo").
+- Sin comparador, la cola necesita que los elementos sean `Comparable`. Con un `ListNode` lanza `ClassCastException` en el primer `offer`.
+- `peek()` devuelve un `Integer`. `lo.peek() == hi.peek()` compara **referencias** y da `false` para valores iguales fuera del rango cacheado de -128 a 127. Usa `equals` o pásalos a `int`.
+- Recorrer la cola con un `for`, `toString()` o `toArray()` **no** da los elementos en orden. Solo `poll()` los saca ordenados.
+
+</Callout>
+
+## Kth Largest Element in an Array
+
+**Enunciado.** Dado un arreglo `nums` y un entero `k`, devuelve el k-ésimo elemento más grande en el orden ordenado (no el k-ésimo distinto). Con `nums = [3, 2, 1, 5, 6, 4]` y `k = 2`, la respuesta es `5`. Con `[3, 2, 3, 1, 2, 4, 5, 5, 6]` y `k = 4`, es `4`.
+
+**Qué preguntar.**
+
+- ¿Los duplicados cuentan por separado? (En LeetCode, sí: `[5, 5]` con `k = 2` da 5.)
+- ¿`k` siempre está entre 1 y n? ¿Puedo modificar el arreglo?
+- ¿Qué tamaño tiene n y qué tan grande es k comparado con n? Eso decide entre heap y quickselect.
+
+**Fuerza bruta.** Ordenar de mayor a menor y devolver `nums[k - 1]`: O(n log n) de tiempo. Es una respuesta válida para abrir, y dila en voz alta antes de optimizar.
+
+**La idea.** No necesitas ordenar los n números, solo saber cuáles son los k mayores. Mantén un **min-heap con los k mayores vistos hasta ahora**. Su raíz es el menor de ese grupo, el "portero": cada número nuevo entra al heap y, si el heap pasa de k, sacas el mínimo. Lo que sale nunca puede estar entre los k mayores, porque hay k números más grandes que él. Al final, la raíz es exactamente el k-ésimo mayor.
+
+<Sketch
+  width={640}
+  height={290}
+  caption="El min-heap de tamaño k como portero: su raíz es el menor de los k mayores vistos, y solo entra quien le gana."
+  items={[
+    { type: 'text', x: 24, y: 34, text: 'llegan de a uno', size: 20, tone: 'pencil' },
+    { type: 'cells', x: 24, y: 56, values: [4, 9, 1, 7, 12], size: 44 },
+    { type: 'arrow', from: [256, 78], to: [344, 78], tone: 'line' },
+    { type: 'text', x: 360, y: 34, text: 'min-heap, k = 3', size: 20, tone: 'line' },
+    { type: 'cells', x: 360, y: 52, values: [5, 8, 11], size: 52, states: ['line', null, null] },
+    { type: 'text', x: 360, y: 136, text: 'la raíz es el portero', size: 19, tone: 'pencil' },
+    { type: 'text', x: 24, y: 182, text: 'llega 1: menor que 5, ni entra', size: 20, tone: 'bad' },
+    { type: 'cross', x: 380, y: 176, size: 22 },
+    { type: 'text', x: 24, y: 226, text: 'llega 9: entra, y sale el 5', size: 20, tone: 'ok' },
+    { type: 'check', x: 352, y: 220, size: 24 },
+    { type: 'text', x: 24, y: 272, text: 'al final, la raíz es el k-ésimo mayor', size: 20, tone: 'line' },
+  ]}
+/>
+
+<Callout type="tip" title="Señal para reconocer el patrón">
+
+Si ves "el k-ésimo mayor", "los k más…" o "top k", piensa en un **heap de tamaño k con el orden al revés**: min-heap para quedarte con los k más grandes, max-heap para los k más chicos. La raíz es el elemento que estás dispuesto a descartar.
+
+</Callout>
+
+<CodeTabs>
+
+```java title="Java"
+class Solution {
+    public int findKthLargest(int[] nums, int k) {
+        PriorityQueue<Integer> heap = new PriorityQueue<>(); // los k mayores, como min-heap
+        for (int x : nums) {
+            heap.offer(x);
+            if (heap.size() > k) heap.poll();  // sale el menor: no está entre los k mayores
+        }
+        return heap.peek();
+    }
+}
+```
+
+```python title="Python"
+import heapq
+
+def find_kth_largest(nums: list[int], k: int) -> int:
+    heap: list[int] = []          # los k mayores vistos, como min-heap
+    for x in nums:
+        heapq.heappush(heap, x)
+        if len(heap) > k:
+            heapq.heappop(heap)   # sale el menor: no está entre los k mayores
+    return heap[0]
+```
+
+```ts title="TypeScript"
+// usa la clase MinHeap de la sección anterior
+function findKthLargest(nums: number[], k: number): number {
+  const heap = new MinHeap<number>((x, y) => x < y)
+  for (const x of nums) {
+    heap.push(x)
+    if (heap.size > k) heap.pop() // sale el menor: no está entre los k mayores
+  }
+  return heap.peek()!
+}
+```
+
+</CodeTabs>
+
+**Complejidad.** Cada número hace como mucho un `push` y un `pop` sobre un heap de tamaño k: **O(n log k)** de tiempo y **O(k)** de memoria. Cuando k es pequeño frente a n, la diferencia con O(n log n) es grande, y además el algoritmo funciona sobre un flujo que no cabe en memoria.
+
+**Casos borde y errores típicos.**
+
+- `k = 1` (el máximo) y `k = n` (el mínimo): el código los resuelve sin casos especiales; pruébalos en voz alta.
+- Duplicados: no los filtres. `[5, 5, 4]` con `k = 2` debe dar 5.
+- Usar un max-heap con los n elementos y sacar k veces también funciona, pero cuesta O(n + k log n) de tiempo y O(n) de memoria. Explica por qué elegiste el min-heap de tamaño k.
+- Off-by-one: la condición es `len(heap) > k`, no `>=`. Con `>=` te quedas con k − 1 elementos.
+
+**Variantes y repreguntas.**
+
+- *"¿Se puede en O(n)?"* Sí, en promedio, con **quickselect**: el particionado de quicksort, pero recursando solo hacia el lado que contiene la posición buscada. O(n) promedio y O(n²) en el peor caso (mitígalo con pivote aleatorio). Mencionarlo suma puntos aunque implementes el heap.
+- *Kth Largest Element in a Stream*: los números llegan de a uno y piden la respuesta tras cada uno. Es este mismo heap, guardado como atributo de una clase.
+- *"¿Y si los datos no caben en memoria?"* El heap de tamaño k solo necesita k elementos en memoria y una pasada por los datos.
+
+## K Closest Points y Top K Frequent
+
+Los dos son el mismo patrón con otra métrica para comparar.
+
+### K Closest Points to Origin
+
+**Enunciado.** Dados puntos `[x, y]` y un entero k, devuelve los k más cercanos al origen. Con `[[1, 3], [-2, 2]]` y `k = 1`, la respuesta es `[[-2, 2]]` (distancia² 8 contra 10). Pregunta si el orden de la salida importa (en LeetCode, no) y qué hacer con empates.
+
+**Fuerza bruta:** ordenar por distancia, O(n log n). **La idea:** quieres los k **más chicos**, así que mantienes un **max-heap** de tamaño k cuya raíz es el más lejano de los candidatos; si llega uno más cercano, el más lejano sale. Compara `x² + y²` sin raíz cuadrada: es más rápido y evita errores de punto flotante.
+
+<CodeTabs>
+
+```java title="Java"
+class Solution {
+    public int[][] kClosest(int[][] points, int k) {
+        // max-heap por distancia²: la raíz es el más lejano de los candidatos
+        PriorityQueue<int[]> heap = new PriorityQueue<>(
+            (a, b) -> Integer.compare(b[0] * b[0] + b[1] * b[1], a[0] * a[0] + a[1] * a[1]));
+        for (int[] p : points) {
+            heap.offer(p);
+            if (heap.size() > k) heap.poll();  // sale el más lejano
+        }
+        return heap.toArray(new int[0][]);
+    }
+}
+```
+
+```python title="Python"
+import heapq
+
+def k_closest(points: list[list[int]], k: int) -> list[list[int]]:
+    heap: list[tuple[int, int, int]] = []   # (-dist², x, y): max-heap por distancia
+    for x, y in points:
+        heapq.heappush(heap, (-(x * x + y * y), x, y))
+        if len(heap) > k:
+            heapq.heappop(heap)             # sale el más lejano
+    return [[x, y] for _, x, y in heap]
+```
+
+```ts title="TypeScript"
+function kClosest(points: number[][], k: number): number[][] {
+  const d = (p: number[]) => p[0] * p[0] + p[1] * p[1]
+  const heap = new MinHeap<number[]>((a, b) => d(a) > d(b)) // max-heap por distancia
+  for (const p of points) {
+    heap.push(p)
+    if (heap.size > k) heap.pop() // sale el más lejano
+  }
+  const out: number[][] = []
+  while (heap.size) out.push(heap.pop()!)
+  return out
+}
+```
+
+</CodeTabs>
+
+O(n log k) de tiempo y O(k) de memoria. Quickselect también aplica aquí, con O(n) promedio.
+
+### Top K Frequent Elements
+
+Cuenta las frecuencias con un diccionario (en Java, un `HashMap` con `count.merge(x, 1, Integer::sum)`) y quédate con las k mayores. Con un heap de tamaño k: **O(n log k)**. En Python es una línea: `heapq.nlargest(k, count.keys(), key=count.get)`.
+
+Pero este problema tiene una solución O(n) que conviene conocer: como ninguna frecuencia supera n, puedes usar **bucket sort** (una lista de cubetas indexada por frecuencia) y recorrerla de mayor a menor. Está resuelta en [arreglos y hashing](/casos/arrays-y-hashing). Si el entrevistador pide "mejor que O(n log n)", el heap ya cumple; si pide "lineal", son las cubetas.
+
+<CodeTabs>
+
+```java title="Java"
+class Solution {
+    public int[] topKFrequent(int[] nums, int k) {
+        Map<Integer, Integer> count = new HashMap<>();
+        for (int x : nums) count.merge(x, 1, Integer::sum);
+        // min-heap por frecuencia, de tamaño k
+        PriorityQueue<Map.Entry<Integer, Integer>> heap =
+            new PriorityQueue<>(Map.Entry.comparingByValue());
+        for (Map.Entry<Integer, Integer> e : count.entrySet()) {
+            heap.offer(e);
+            if (heap.size() > k) heap.poll();
+        }
+        int[] out = new int[k];
+        for (int i = 0; i < k; i++) out[i] = heap.poll().getKey();
+        return out;
+    }
+}
+```
+
+```python title="Python"
+import heapq
+from collections import Counter
+
+def top_k_frequent(nums: list[int], k: int) -> list[int]:
+    count = Counter(nums)                       # O(n)
+    return heapq.nlargest(k, count.keys(), key=count.get)   # O(m log k)
+```
+
+```ts title="TypeScript"
+function topKFrequent(nums: number[], k: number): number[] {
+  const count = new Map<number, number>()
+  for (const x of nums) count.set(x, (count.get(x) ?? 0) + 1)
+  // min-heap por frecuencia, de tamaño k
+  const heap = new MinHeap<[number, number]>((a, b) => a[1] < b[1])
+  for (const entry of count) {
+    heap.push(entry)
+    if (heap.size > k) heap.pop()
+  }
+  const out: number[] = []
+  while (heap.size) out.push(heap.pop()![0])
+  return out
+}
+```
+
+</CodeTabs>
+
+## Merge K Sorted Lists
+
+**Enunciado.** Recibes k listas enlazadas, cada una ordenada, y debes fusionarlas en una sola lista ordenada. Con `[[1, 4, 5], [1, 3, 4], [2, 6]]` el resultado es `1 → 1 → 2 → 3 → 4 → 4 → 5 → 6`.
+
+**Qué preguntar.** ¿Puede haber listas vacías, o ninguna lista? ¿Puedo reutilizar los nodos o debo crear nuevos? ¿Cuánto vale k comparado con el total de nodos N?
+
+**Fuerza bruta.** Volcar todos los valores en un arreglo, ordenarlo y armar una lista nueva: O(N log N). Otra opción ingenua es fusionar la lista 1 con la 2, el resultado con la 3, y así: O(N · k), porque los primeros nodos se recorren k veces.
+
+**La idea.** El siguiente nodo de la salida siempre es el menor de las **k cabezas** actuales. Un min-heap con una cabeza por lista te da ese mínimo en O(log k). Sacas la menor, la enganchas a la salida y metes en el heap al siguiente nodo de esa misma lista. El heap nunca tiene más de k elementos.
+
+<Callout type="tip" title="Señal para reconocer el patrón">
+
+"Fusionar k fuentes ordenadas" (listas, archivos, *streams* de logs por servidor) es un heap con **un elemento por fuente**. Es la misma idea del *k-way merge* que usan las bases de datos para ordenar datos que no caben en memoria.
+
+</Callout>
+
+<CodeTabs>
+
+```java title="Java"
+class ListNode {
+    int val;
+    ListNode next;
+    ListNode(int val) { this.val = val; }
+}
+
+class Solution {
+    public ListNode mergeKLists(ListNode[] lists) {
+        PriorityQueue<ListNode> heap = new PriorityQueue<>(Comparator.comparingInt(n -> n.val));
+        for (ListNode node : lists) if (node != null) heap.offer(node);
+
+        ListNode dummy = new ListNode(0), tail = dummy;
+        while (!heap.isEmpty()) {
+            ListNode node = heap.poll();
+            tail.next = node;
+            tail = node;
+            if (node.next != null) heap.offer(node.next);
+        }
+        return dummy.next;
+    }
+}
+```
+
+```python title="Python"
+import heapq
+
+def merge_k_lists(lists: list[ListNode | None]) -> ListNode | None:
+    heap: list[tuple[int, int, ListNode]] = []
+    for i, node in enumerate(lists):
+        if node:
+            heap.append((node.val, i, node))   # i desempata: ListNode no se compara
+    heapq.heapify(heap)
+
+    dummy = tail = ListNode(0)
+    while heap:
+        _, i, node = heapq.heappop(heap)
+        tail.next = node
+        tail = node
+        if node.next:
+            heapq.heappush(heap, (node.next.val, i, node.next))
+    return dummy.next
+```
+
+```ts title="TypeScript"
+function mergeKLists(lists: Array<ListNode | null>): ListNode | null {
+  const heap = new MinHeap<ListNode>((a, b) => a.val < b.val)
+  for (const node of lists) if (node) heap.push(node)
+
+  const dummy = new ListNode(0)
+  let tail = dummy
+  while (heap.size) {
+    const node = heap.pop()!
+    tail.next = node
+    tail = node
+    if (node.next) heap.push(node.next)
+  }
+  return dummy.next
+}
+```
+
+</CodeTabs>
+
+**Complejidad.** Cada uno de los N nodos entra y sale del heap una vez, con un heap de tamaño k: **O(N log k)** de tiempo y **O(k)** de memoria extra (reutilizamos los nodos).
+
+**Casos borde y errores típicos.** `lists = []` y `lists = [None, None]` deben devolver `None`. El error más común en Python es el `TypeError` por comparar `ListNode` cuando dos valores empatan: por eso va el índice `i` en la tupla. En Java el equivalente es olvidar el comparador: `new PriorityQueue<ListNode>()` compila, pero lanza `ClassCastException` al insertar. El segundo más común es olvidar el nodo `dummy` y llenar el código de casos especiales para la cabeza (lo ves en [listas enlazadas](/casos/listas-enlazadas)).
+
+**Variantes y repreguntas.** *"¿Hay otra forma con la misma complejidad?"* Sí: **divide y vencerás**, fusionando las listas de a pares (como el merge de mergesort). Hay log k rondas y cada una recorre N nodos: O(N log k) sin heap. Otras variantes: *Find K Pairs with Smallest Sums* y *Kth Smallest Element in a Sorted Matrix*, que usan el mismo "heap de fronteras".
+
+## Find Median from Data Stream: dos heaps
+
+**Enunciado.** Diseña una clase con `addNum(x)`, que recibe números de un flujo, y `findMedian()`, que devuelve la mediana de todo lo recibido hasta ahora. Tras `1, 2` la mediana es 1,5; tras `1, 2, 3`, es 2.
+
+**Qué preguntar.** ¿Cuántas llamadas hay de cada tipo? (Si hay muchas más consultas que inserciones, cambia lo que conviene optimizar.) ¿El rango de los números es acotado? ¿Se llama `findMedian` con la estructura vacía?
+
+**Fuerza bruta.** Guardar todo en una lista y ordenarla en cada consulta: O(n log n) por `findMedian`. Mejor: mantener la lista ordenada con inserción binaria, O(n) por `addNum` por el corrimiento de elementos.
+
+**La idea.** La mediana solo depende de los dos elementos del medio. Divide los números en dos mitades: `lo`, la mitad menor, en un **max-heap** (su raíz es el mayor de los chicos), y `hi`, la mitad mayor, en un **min-heap** (su raíz es el menor de los grandes). Mantén dos invariantes: todo lo de `lo` es menor o igual que todo lo de `hi`, y `lo` tiene el mismo tamaño que `hi` o uno más. Entonces la mediana está siempre en las raíces.
+
+<TwoHeapsMedian />
+
+Mira el preset creciente, `1, 2, 3, 4, 5, 6`: cada número nuevo va a `hi` por ser el mayor, y casi siempre hay que pasar un tope a `lo` para rebalancear. Y en el de repetidos, la comparación `x <= -lo[0]` manda los empates a `lo` sin romper nada.
+
+<Callout type="tip" title="Señal para reconocer el patrón">
+
+"Mediana" o "percentil" de algo que **cambia** (un flujo, una ventana que se desliza) es la señal de **dos heaps**. También aparece cuando necesitas balancear dos grupos: el mayor de un lado frente al menor del otro.
+
+</Callout>
+
+<CodeTabs>
+
+```java title="Java"
+class MedianFinder {
+    private final PriorityQueue<Integer> lo = new PriorityQueue<>(Collections.reverseOrder()); // max-heap: la mitad menor
+    private final PriorityQueue<Integer> hi = new PriorityQueue<>();                           // min-heap: la mitad mayor
+
+    public void addNum(int x) {
+        if (lo.isEmpty() || x <= lo.peek()) lo.offer(x);
+        else hi.offer(x);
+        // rebalancear: lo tiene igual que hi o uno más
+        if (lo.size() > hi.size() + 1) hi.offer(lo.poll());
+        else if (hi.size() > lo.size()) lo.offer(hi.poll());
+    }
+
+    public double findMedian() {
+        if (lo.size() > hi.size()) return lo.peek();
+        return (lo.peek() + hi.peek()) / 2.0;     // 2.0: división real, no entera
+    }
+}
+```
+
+```python title="Python"
+import heapq
+
+class MedianFinder:
+    def __init__(self) -> None:
+        self.lo: list[int] = []   # max-heap (negados): la mitad menor
+        self.hi: list[int] = []   # min-heap: la mitad mayor
+
+    def addNum(self, x: int) -> None:
+        if not self.lo or x <= -self.lo[0]:
+            heapq.heappush(self.lo, -x)
+        else:
+            heapq.heappush(self.hi, x)
+        # rebalancear: lo tiene igual que hi o uno más
+        if len(self.lo) > len(self.hi) + 1:
+            heapq.heappush(self.hi, -heapq.heappop(self.lo))
+        elif len(self.hi) > len(self.lo):
+            heapq.heappush(self.lo, -heapq.heappop(self.hi))
+
+    def findMedian(self) -> float:
+        if len(self.lo) > len(self.hi):
+            return -self.lo[0]
+        return (-self.lo[0] + self.hi[0]) / 2
+```
+
+```ts title="TypeScript"
+class MedianFinder {
+  private lo = new MinHeap<number>((a, b) => a > b) // max-heap: la mitad menor
+  private hi = new MinHeap<number>((a, b) => a < b) // min-heap: la mitad mayor
+
+  addNum(x: number): void {
+    if (this.lo.size === 0 || x <= this.lo.peek()!) this.lo.push(x)
+    else this.hi.push(x)
+    // rebalancear: lo tiene igual que hi o uno más
+    if (this.lo.size > this.hi.size + 1) this.hi.push(this.lo.pop()!)
+    else if (this.hi.size > this.lo.size) this.lo.push(this.hi.pop()!)
+  }
+
+  findMedian(): number {
+    if (this.lo.size > this.hi.size) return this.lo.peek()!
+    return (this.lo.peek()! + this.hi.peek()!) / 2
+  }
+}
+```
+
+</CodeTabs>
+
+**Complejidad.** `addNum` hace como mucho tres operaciones de heap: **O(log n)**. `findMedian` lee dos raíces: **O(1)**. Memoria O(n).
+
+**Casos borde y errores típicos.** Un solo número (la mediana es él mismo). Números repetidos y negativos (en Python, cuidado con el signo al sacar de `lo`: es `-heappop`, no `heappop`). Devolver un entero cuando la cantidad es par: en Python 3, `/` ya devuelve float, pero en Java `(a + b) / 2` con dos `int` trunca. Divide por `2.0`, y si los valores pueden acercarse a los límites de `int`, súmalos como `long` para no desbordar. Y olvidar rebalancear después de **cada** inserción.
+
+**Variantes y repreguntas.**
+
+- *"¿Y si todos los números están entre 0 y 100?"* Un arreglo de 101 contadores: `addNum` O(1) y `findMedian` O(101) recorriendo los contadores. Si el 99 % está en ese rango, contadores para el rango más dos listas para los extremos.
+- *Sliding Window Median*: la mediana de cada ventana de tamaño k. Además de insertar, hay que **borrar** el que sale de la ventana, y el heap no borra elementos arbitrarios. Se resuelve con borrado perezoso (marcar y descartar cuando llega a la raíz) o con una estructura ordenada.
+- *IPO* y otros problemas de "dos heaps" combinan un heap de candidatos bloqueados con uno de disponibles.
+
+<Quiz
+  question="Implementas MedianFinder pero mandas cada número nuevo directo al heap más chico, sin compararlo con las raíces, y luego rebalanceas por tamaño. ¿Qué pasa?"
+  options={[
+    { text: 'Funciona igual, porque el rebalanceo corrige todo.', why: 'El rebalanceo solo iguala tamaños. Si un número grande entra a lo, rompe la invariante "todo lo de lo ≤ todo lo de hi" y las raíces ya no son los elementos del medio.' },
+    { text: 'Los tamaños quedan bien, pero las raíces pueden no ser los del medio y la mediana sale mal.', correct: true, why: 'Con 1, 10, 2: el 10 podría quedar en lo y el 2 en hi; la mediana devuelta sería 10. Hay que decidir el lado comparando con la raíz de lo (o pasar siempre por un heap y luego mover su tope al otro).' },
+    { text: 'Se vuelve O(n) por operación.', why: 'El costo sigue siendo O(log n); el problema es de corrección, no de eficiencia.' },
+  ]}
+/>
+
+## Cuándo heap y cuándo ordenar todo
+
+Un heap no siempre gana. La regla práctica depende de cuánto de la salida necesitas y de si los datos llegan de golpe o de a poco:
+
+| Situación | Mejor opción | Por qué |
+|---|---|---|
+| Necesitas los k mejores y k es mucho menor que n | Heap de tamaño k | O(n log k) y O(k) de memoria |
+| Necesitas casi todo ordenado (k cercano a n) | Ordenar | O(n log n) con constantes más bajas y código más simple |
+| Solo el k-ésimo, con todos los datos en memoria | Quickselect | O(n) promedio |
+| Los datos llegan en flujo o no caben en memoria | Heap | Una pasada, memoria acotada |
+| Extraer el siguiente mínimo muchas veces mientras se insertan nuevos | Heap | Dijkstra, simulaciones, planificadores |
+| Las frecuencias o valores están acotados | Cubetas o contadores | O(n) sin comparaciones |
+
+El último caso de la tabla incluye **Task Scheduler**: tareas con un tiempo de enfriamiento entre repeticiones de la misma tarea. La simulación natural usa un max-heap de frecuencias (siempre ejecutar la tarea con más pendientes) más una cola de tareas en enfriamiento. Hay también una fórmula de O(n) basada en la tarea más frecuente; si la conoces, explícala, pero la simulación con heap es la que se deja razonar en voz alta.
+
+El mismo heap aparece fuera de los problemas de "top k": en el algoritmo de **Dijkstra**, para sacar el nodo con menor distancia tentativa (lo ves en [grafos](/casos/grafos)), en los planificadores de tareas por prioridad y en los temporizadores de un *event loop*.
+
+### Problemas típicos de este patrón
+
+| Problema (LeetCode) | Idea | Costo |
+|---|---|---|
+| [Kth Largest Element in an Array](https://leetcode.com/problems/kth-largest-element-in-an-array/) | Min-heap de tamaño k (o quickselect) | O(n log k) |
+| [Kth Largest Element in a Stream](https://leetcode.com/problems/kth-largest-element-in-a-stream/) | El mismo heap, guardado en la clase | O(log k) por número |
+| [Last Stone Weight](https://leetcode.com/problems/last-stone-weight/) | Max-heap y simulación | O(n log n) |
+| [K Closest Points to Origin](https://leetcode.com/problems/k-closest-points-to-origin/) | Max-heap de tamaño k por distancia² | O(n log k) |
+| [Top K Frequent Elements](https://leetcode.com/problems/top-k-frequent-elements/) | Contar + heap, o cubetas | O(n log k) u O(n) |
+| [Merge k Sorted Lists](https://leetcode.com/problems/merge-k-sorted-lists/) | Heap con una cabeza por lista | O(N log k) |
+| [Find Median from Data Stream](https://leetcode.com/problems/find-median-from-data-stream/) | Dos heaps balanceados | O(log n) y O(1) |
+| [Task Scheduler](https://leetcode.com/problems/task-scheduler/) | Max-heap + cola de enfriamiento | O(n) con alfabeto fijo |
+
+<Quiz
+  question="Tienes 10 millones de registros de latencia y te piden los 100 más lentos. ¿Qué propones?"
+  options={[
+    { text: 'Ordenar todo de mayor a menor y tomar los 100 primeros.', why: 'Funciona, pero cuesta O(n log n) y necesitas todo en memoria. Con k = 100 frente a n = 10⁷, hay una opción mucho mejor.' },
+    { text: 'Un min-heap de tamaño 100: cada registro entra, y si el heap pasa de 100, sale el menor.', correct: true, why: 'O(n log k) con log₂ 100 ≈ 7, memoria para 100 registros y una sola pasada, así que sirve aunque los datos vengan de un archivo o un stream.' },
+    { text: 'Un max-heap con los 10 millones y sacar 100 veces.', why: 'Es O(n + k log n) de tiempo, aceptable, pero ocupa memoria para los 10 millones. El min-heap de tamaño k es igual de rápido y casi no usa memoria.' },
+    { text: 'Un max-heap de tamaño 100.', why: 'Con un max-heap la raíz es el más lento, que es justo el que quieres conservar; no puedes saber cuál descartar. Para quedarte con los mayores, el heap va al revés: min-heap.' },
+  ]}
+/>
+
+<Takeaways>
+
+- Un heap es un **árbol completo guardado en un arreglo**: hijos en `2i + 1` y `2i + 2`, padre en `(i - 1) // 2`. Por ser completo, mide log n de alto.
+- `push` sube (sift-up) y `pop` mueve el último a la raíz y lo hunde (sift-down): **O(log n)**. Ver el mínimo es O(1) y `heapify` es **O(n)**, no O(n log n).
+- Para los **k mayores**, un **min-heap de tamaño k**; para los k menores, un max-heap. La raíz es lo que estás dispuesto a descartar. O(n log k) y O(k) de memoria.
+- `heapq` es min-heap: el **negativo** convierte valores en un max-heap, y una tupla con un **desempate** evita comparar objetos. En TypeScript, sé escribir un heap mínimo con un comparador.
+- **Fusionar k fuentes ordenadas** es un heap con una cabeza por fuente: O(N log k).
+- **Mediana de un flujo**: dos heaps (max-heap con la mitad menor, min-heap con la mayor), balanceados para que la mediana esté en las raíces.
+- Si k es cercano a n, ordena. Si solo quieres el k-ésimo y tienes todo en memoria, menciona **quickselect**.
+
+</Takeaways>
+
+## Fuentes y lecturas
+
+- Python, [heapq: Heap queue algorithm](https://docs.python.org/3/library/heapq.html): la API, el heapify lineal y las funciones max-heap agregadas en 3.14.
+- Robert Sedgewick y Kevin Wayne, *Algorithms*, 4.ª ed., [2.4 Priority Queues](https://algs4.cs.princeton.edu/24pq/): sift-up y sift-down (*swim* y *sink*) con código y figuras.
+- Cormen, Leiserson, Rivest y Stein, [*Introduction to Algorithms*](https://mitpress.mit.edu/9780262046305/introduction-to-algorithms/), 4.ª ed., cap. 6 (Heapsort): la demostración de que construir un heap es O(n).
+- Tech Interview Handbook, [Heap cheatsheet for coding interviews](https://www.techinterviewhandbook.org/algorithms/heap/).
+- Wikipedia, [Binary heap](https://en.wikipedia.org/wiki/Binary_heap) y [Quickselect](https://en.wikipedia.org/wiki/Quickselect).
+- [datastructures-js/priority-queue](https://github.com/datastructures-js/priority-queue): la cola de prioridad que LeetCode ofrece en su entorno de JavaScript.
+- LeetCode: [Kth Largest Element in an Array](https://leetcode.com/problems/kth-largest-element-in-an-array/), [Merge k Sorted Lists](https://leetcode.com/problems/merge-k-sorted-lists/), [Find Median from Data Stream](https://leetcode.com/problems/find-median-from-data-stream/).

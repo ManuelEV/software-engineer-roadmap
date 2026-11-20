@@ -1,0 +1,631 @@
+import { IntervalMerge } from '../../components/widgets/entrevistas/IntervalMerge'
+import { MeetingRooms } from '../../components/widgets/entrevistas/MeetingRooms'
+
+Los problemas de intervalos aparecen disfrazados de cosas cotidianas: reservas de salas, turnos de un consultorio, ventanas de mantenimiento, franjas de entrega de pedidos. Casi todos se resuelven con la misma receta de dos pasos: **ordenar** y después **barrer** de izquierda a derecha tomando una decisión local en cada intervalo. La decisión correcta depende de cómo ordenaste, y elegir mal el criterio de orden es el error más común.
+
+Esa "decisión local" es lo que se llama un algoritmo **greedy** (goloso o voraz): en cada paso toma la opción que parece mejor ahora y nunca vuelve atrás. Cuando funciona, da soluciones de O(n log n) con cinco líneas de código. Cuando no funciona, da respuestas incorrectas que parecen razonables. Este tema cubre los problemas de intervalos más preguntados y, sobre todo, cómo saber (y argumentar en voz alta) si un greedy es correcto.
+
+<Sketch
+  width={640}
+  height={300}
+  caption="La idea del tema en un dibujo: el criterio de orden decide el algoritmo. Por inicio, para juntar lo que se pisa; por fin, para elegir la mayor cantidad que no se pise."
+  items={[
+    { type: 'text', x: 24, y: 32, text: 'por inicio: juntar', size: 22, tone: 'line' },
+    { type: 'box', x: 40, y: 56, w: 48, h: 22 },
+    { type: 'box', x: 64, y: 88, w: 96, h: 22 },
+    { type: 'box', x: 208, y: 120, w: 48, h: 22 },
+    { type: 'arrow', from: [150, 150], to: [150, 180], tone: 'pencil' },
+    { type: 'box', x: 40, y: 186, w: 120, h: 26, label: '[1,6]', font: 'code', size: 18, tone: 'ok', fill: true },
+    { type: 'box', x: 208, y: 186, w: 48, h: 26, tone: 'ok', fill: true, with: true },
+    { type: 'text', x: 24, y: 250, text: ['si empieza antes del fin', 'del último, se funde'], size: 19, tone: 'pencil' },
+    { type: 'line', points: [[310, 20], [310, 290]], dashed: true, tone: 'muted' },
+    { type: 'text', x: 340, y: 32, text: 'por fin: elegir', size: 22, tone: 'line' },
+    { type: 'box', x: 364, y: 56, w: 22, h: 22, tone: 'ok', fill: true },
+    { type: 'box', x: 408, y: 88, w: 22, h: 22, tone: 'ok', fill: true },
+    { type: 'box', x: 342, y: 120, w: 198, h: 22, tone: 'bad' },
+    { type: 'check', x: 562, y: 60, size: 20 },
+    { type: 'check', x: 562, y: 92, size: 20, with: true },
+    { type: 'cross', x: 562, y: 124, size: 20 },
+    { type: 'text', x: 340, y: 250, text: ['el que termina antes', 'deja más lugar'], size: 19, tone: 'pencil' },
+  ]}
+/>
+
+## Intervalos: ordenar, y por qué el criterio importa
+
+Un intervalo es un par `[inicio, fin]`. Antes de escribir código, aclara dos cosas con el entrevistador:
+
+1. **¿Los extremos son cerrados o semiabiertos?** Una reunión de 9 a 10 y otra de 10 a 11, ¿chocan? En la vida real, no: es `[9, 10)`, semiabierto. En Merge Intervals de LeetCode, en cambio, `[1, 4]` y `[4, 5]` **sí** se fusionan. La respuesta cambia un `<` por un `<=`.
+2. **¿Vienen ordenados?** Si ya vienen ordenados por inicio, te ahorras el O(n log n). Si no, ordenar es lo primero.
+
+**La condición de solapamiento.** Dos intervalos cerrados `a` y `b` se solapan si y solo si `a.inicio <= b.fin` y `b.inicio <= a.fin`. Es más fácil pensarlo al revés: **no** se solapan si uno termina antes de que empiece el otro. Si ya los ordenaste por inicio, basta con una comparación: el siguiente se solapa con el anterior si `siguiente.inicio <= anterior.fin`.
+
+<Sketch
+  width={640}
+  height={240}
+  caption="Los tres casos con los intervalos ordenados por inicio: se solapan, se tocan en un punto (depende de lo que acuerdes) o hay un hueco."
+  items={[
+    { type: 'text', x: 20, y: 36, text: 'se solapan', size: 20, tone: 'ok' },
+    { type: 'box', x: 40, y: 56, w: 80, h: 24, label: 'a', size: 18 },
+    { type: 'box', x: 80, y: 90, w: 100, h: 24, label: 'b', size: 18 },
+    { type: 'text', x: 20, y: 152, text: '3 ≤ 5', size: 20, font: 'code', tone: 'ok' },
+    { type: 'text', x: 230, y: 36, text: 'se tocan', size: 20, tone: 'warn' },
+    { type: 'box', x: 250, y: 56, w: 60, h: 24, label: 'a', size: 18 },
+    { type: 'box', x: 310, y: 90, w: 60, h: 24, label: 'b', size: 18 },
+    { type: 'text', x: 230, y: 152, text: '4 ≤ 4: ¿cuenta?', size: 20, tone: 'warn' },
+    { type: 'text', x: 440, y: 36, text: 'hay un hueco', size: 20, tone: 'pencil' },
+    { type: 'box', x: 460, y: 56, w: 40, h: 24, label: 'a', size: 18 },
+    { type: 'box', x: 540, y: 90, w: 60, h: 24, label: 'b', size: 18 },
+    { type: 'text', x: 440, y: 152, text: '5 > 3', size: 20, font: 'code', tone: 'pencil' },
+    { type: 'text', x: 20, y: 214, text: 'ordenados por inicio: se solapan si b.inicio ≤ a.fin', size: 20, tone: 'line' },
+  ]}
+/>
+
+**Ordenar por inicio o por fin.** Esta es la decisión que define el algoritmo:
+
+- **Por inicio** cuando quieres **juntar** o **contar simultáneos**: fusionar intervalos, insertar uno nuevo, contar salas. Al barrer en orden de inicio, todo lo que puede solaparse con el intervalo actual ya apareció, y lo que importa es el que termina más tarde (para fusionar) o los que siguen abiertos (para contar).
+- **Por fin** cuando quieres **elegir** la mayor cantidad de intervalos que no se pisen: actividades, intervalos a eliminar, flechas para globos. Quedarte con el que termina antes deja el mayor espacio libre para los que vienen. Más abajo está el argumento de por qué esto es correcto.
+
+<Callout type="interview">
+
+En los problemas de intervalos, el entrevistador evalúa tres cosas: que preguntes si los extremos que se tocan cuentan como solapados, que **justifiques** el criterio de orden en vez de ordenar "porque sí", y que pruebes casos borde sin que te los pidan: intervalos contenidos uno en otro, intervalos que se tocan en un punto, un solo intervalo y la lista vacía.
+
+</Callout>
+
+## Merge Intervals
+
+**Enunciado.** Dada una lista de intervalos, fusiona todos los que se solapan. `[[1,3], [2,6], [8,10], [15,18]]` → `[[1,6], [8,10], [15,18]]`.
+
+**Qué preguntar.** ¿Vienen ordenados? ¿`[1,4]` y `[4,5]` se fusionan? ¿Puedo modificar la entrada o devuelvo una lista nueva? ¿La lista puede estar vacía?
+
+**Fuerza bruta.** Comparar cada par y fusionar mientras haya cambios: O(n²) por pasada, y puede necesitar varias pasadas porque una fusión puede habilitar otra.
+
+**Idea clave.** Ordena por inicio. Ahora, si el intervalo actual se solapa con algo, se solapa con **el último bloque que fusionaste**, porque todos los anteriores empiezan antes y ya están absorbidos en ese bloque o terminaron antes. Así que alcanza con una comparación por intervalo: o estiras el último bloque, o abres uno nuevo.
+
+**Señal para reconocer el patrón:** si ves "intervalos que se solapan" y la salida es una lista de bloques, piensa en ordenar por inicio y comparar solo con el último.
+
+Prueba los presets "se tocan en un punto" y "uno contenido en otro", o escribe tus propios intervalos:
+
+<IntervalMerge />
+
+<CodeTabs>
+
+```java title="Java"
+public int[][] merge(int[][] intervals) {
+    int[][] sorted = intervals.clone();
+    Arrays.sort(sorted, (a, b) -> Integer.compare(a[0], b[0]));
+    List<int[]> merged = new ArrayList<>();
+    for (int[] iv : sorted) {
+        int[] last = merged.isEmpty() ? null : merged.get(merged.size() - 1);
+        if (last != null && iv[0] <= last[1]) {
+            last[1] = Math.max(last[1], iv[1]); // max: puede estar contenido
+        } else {
+            merged.add(new int[] { iv[0], iv[1] });
+        }
+    }
+    return merged.toArray(new int[0][]);
+}
+```
+
+```python title="Python"
+def merge(intervals: list[list[int]]) -> list[list[int]]:
+    merged: list[list[int]] = []
+    for start, end in sorted(intervals, key=lambda iv: iv[0]):
+        if merged and start <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], end)  # max: puede estar contenido
+        else:
+            merged.append([start, end])
+    return merged
+```
+
+```ts title="TypeScript"
+function merge(intervals: number[][]): number[][] {
+  const sorted = [...intervals].sort((a, b) => a[0] - b[0])
+  const merged: number[][] = []
+  for (const [start, end] of sorted) {
+    const last = merged[merged.length - 1]
+    if (last && start <= last[1]) {
+      last[1] = Math.max(last[1], end) // max: puede estar contenido
+    } else {
+      merged.push([start, end])
+    }
+  }
+  return merged
+}
+```
+
+</CodeTabs>
+
+**Complejidad.** O(n log n) por el orden; la pasada es O(n). Memoria O(n) para la salida (más lo que use el sort).
+
+**Casos borde y errores típicos.**
+
+- **Olvidar el `max`.** Con `[[1,10], [2,3]]`, escribir `merged[-1][1] = end` deja `[1,3]`: el intervalo contenido achica el bloque. Es el bug más común de este problema.
+- **`<` en vez de `<=`**, o al revés, según lo que hayas acordado sobre los extremos.
+- En TypeScript, `sort()` sin comparador ordena **como texto**: `[10, 9]` queda antes que `[9, 1]` porque `"10"` va antes que `"9"`. Siempre pasa `(a, b) => a[0] - b[0]`.
+- Modificar la entrada: `merged.append([start, end])` en Python y `new int[] { iv[0], iv[1] }` en Java crean un par nuevo a propósito, para no mutar los intervalos originales al estirar el último.
+
+<Callout type="tip" title="En Java">
+
+`Arrays.sort` sobre un `int[][]` necesita un comparador. Usa `Integer.compare(a[0], b[0])` y no `a[0] - b[0]`: la resta desborda con valores grandes de signo opuesto (por ejemplo, `-2_000_000_000` y `2_000_000_000`) y el orden queda mal sin que nada falle. Además, `Arrays.sort` de un `int[]` ordena primitivos con un quicksort de doble pivote (no estable, sin comparador), mientras que el de objetos (`Integer[]`, `int[][]`) usa un mergesort estable.
+
+</Callout>
+
+**Variantes y repreguntas.** "¿Y si llegan en streaming y te preguntan la unión en cualquier momento?" (un árbol ordenado por inicio, como `TreeMap` en Java o `SortedList` en Python, para insertar y fusionar con los vecinos en O(log n)). "¿Y si te piden la longitud total cubierta?" (fusiona y suma). [Interval List Intersections](https://leetcode.com/problems/interval-list-intersections/) es la versión con dos listas ordenadas y dos punteros.
+
+## Insert Interval
+
+**Enunciado.** Tienes una lista de intervalos **ordenada y sin solapamientos**, y uno nuevo. Insértalo y fusiona lo que haga falta. `[[1,2], [3,5], [6,7], [8,10], [12,16]]` con `[4,8]` → `[[1,2], [3,10], [12,16]]`.
+
+**Qué preguntar.** ¿La lista viene ordenada? (Si sí, no ordenes: eso es justamente lo que quieren ver.) ¿Devuelvo una lista nueva?
+
+**Fuerza bruta.** Agregar el nuevo y correr Merge Intervals: O(n log n). Correcto, pero desperdicia que la lista ya está ordenada.
+
+**Idea clave.** Una sola pasada en tres fases. Primero, copia los que terminan antes de que empiece el nuevo. Después, mientras haya intervalos que empiezan antes de que termine el nuevo, fúndelos con él (estirando inicio y fin). Por último, copia el resto.
+
+**Señal para reconocer el patrón:** si la entrada ya está ordenada y sin solapamientos, busca una pasada O(n) en fases en vez de reordenar.
+
+<CodeTabs>
+
+```java title="Java"
+public int[][] insert(int[][] intervals, int[] newInterval) {
+    List<int[]> res = new ArrayList<>();
+    int start = newInterval[0], end = newInterval[1];
+    int i = 0, n = intervals.length;
+    while (i < n && intervals[i][1] < start) res.add(intervals[i++]); // 1. terminan antes
+    while (i < n && intervals[i][0] <= end) { // 2. se solapan: se funden
+        start = Math.min(start, intervals[i][0]);
+        end = Math.max(end, intervals[i][1]);
+        i++;
+    }
+    res.add(new int[] { start, end });
+    while (i < n) res.add(intervals[i++]); // 3. empiezan después
+    return res.toArray(new int[0][]);
+}
+```
+
+```python title="Python"
+def insert(intervals: list[list[int]], new: list[int]) -> list[list[int]]:
+    res: list[list[int]] = []
+    i, n = 0, len(intervals)
+    start, end = new
+    while i < n and intervals[i][1] < start:   # 1. terminan antes del nuevo
+        res.append(intervals[i])
+        i += 1
+    while i < n and intervals[i][0] <= end:    # 2. se solapan: se funden
+        start = min(start, intervals[i][0])
+        end = max(end, intervals[i][1])
+        i += 1
+    res.append([start, end])
+    res.extend(intervals[i:])                  # 3. empiezan después
+    return res
+```
+
+```ts title="TypeScript"
+function insert(intervals: number[][], newInterval: number[]): number[][] {
+  const res: number[][] = []
+  let [start, end] = newInterval
+  let i = 0
+  while (i < intervals.length && intervals[i][1] < start) res.push(intervals[i++]) // 1. terminan antes
+  while (i < intervals.length && intervals[i][0] <= end) {
+    // 2. se solapan: se funden con el nuevo
+    start = Math.min(start, intervals[i][0])
+    end = Math.max(end, intervals[i][1])
+    i++
+  }
+  res.push([start, end])
+  return res.concat(intervals.slice(i)) // 3. empiezan después
+}
+```
+
+</CodeTabs>
+
+**Complejidad.** O(n) tiempo y memoria. Podrías encontrar los límites de la fase 2 con búsqueda binaria, pero construir la salida sigue siendo O(n).
+
+**Casos borde.** Lista vacía (la salida es solo el nuevo). El nuevo va antes de todos o después de todos. El nuevo cubre todos. El nuevo toca un extremo exacto (`[2,3]` con `[3,5]`: con `<=` se funden).
+
+## Meeting Rooms I y II
+
+**Meeting Rooms I.** "¿Una persona puede asistir a todas estas reuniones?" Ordena por inicio y revisa que cada reunión empiece después de que termine la anterior. O(n log n). Es el calentamiento antes de la segunda parte.
+
+**Meeting Rooms II. Enunciado.** ¿Cuántas salas hacen falta como mínimo para todas las reuniones? `[[0,30], [5,10], [15,20]]` → `2`.
+
+**Qué preguntar.** Una reunión que termina a las 10 y otra que empieza a las 10, ¿pueden usar la misma sala? (Casi siempre sí: intervalos semiabiertos.) ¿Cuántas reuniones hay? ¿Me piden solo la cantidad o también la asignación de salas?
+
+**Fuerza bruta.** Para cada instante de tiempo, contar cuántas reuniones están activas y quedarse con el máximo. O(n × T) con T el rango de tiempo, o O(n²) revisando solo los inicios.
+
+**Idea clave.** La respuesta es el **máximo de reuniones simultáneas**. Barre en orden de inicio y mantén un **min-heap con los finales** de las reuniones en curso. Cuando empieza una reunión, saca del heap todas las que ya terminaron (su fin es menor o igual al inicio actual) y mete la nueva. El tamaño del heap en ese momento es cuántas salas están ocupadas, y el máximo que alcance es la respuesta. El heap sirve porque solo necesitas saber **cuál termina primero**, y eso es O(1) mirando el tope.
+
+**Señal para reconocer el patrón:** si ves "cuántos recursos a la vez" (salas, servidores, vehículos, cajeros), piensa en una línea de barrido que cuenta inicios y finales.
+
+<MeetingRooms />
+
+Esta es la versión del widget, con un min-heap (`PriorityQueue` en Java, `heapq` en Python):
+
+<CodeTabs>
+
+```java title="Java"
+public int minMeetingRooms(int[][] meetings) {
+    int[][] sorted = meetings.clone();
+    Arrays.sort(sorted, (a, b) -> Integer.compare(a[0], b[0]));
+    PriorityQueue<Integer> ends = new PriorityQueue<>(); // min-heap con los finales
+    int best = 0;
+    for (int[] m : sorted) {
+        while (!ends.isEmpty() && ends.peek() <= m[0]) {
+            ends.poll(); // esa sala ya se liberó
+        }
+        ends.offer(m[1]);
+        best = Math.max(best, ends.size());
+    }
+    return best;
+}
+```
+
+```python title="Python"
+import heapq
+
+def min_meeting_rooms(meetings: list[list[int]]) -> int:
+    ends: list[int] = []  # min-heap con los finales de las reuniones en curso
+    best = 0
+    for start, end in sorted(meetings):
+        while ends and ends[0] <= start:
+            heapq.heappop(ends)  # esa sala ya se liberó
+        heapq.heappush(ends, end)
+        best = max(best, len(ends))
+    return best
+```
+
+</CodeTabs>
+
+<Callout type="tip" title="En Java">
+
+`PriorityQueue` es un **min-heap**: `peek()` y `poll()` dan el menor. Para un max-heap, `new PriorityQueue<>(Collections.reverseOrder())`. `peek()` devuelve un `Integer`: compararlo con un `int` con `<=` está bien (se desempaqueta), pero comparar dos `Integer` con `==` compara referencias y falla fuera del rango que Java cachea (-128 a 127). Usa `equals` o desempaqueta antes.
+
+</Callout>
+
+**Sin heap: dos arreglos ordenados.** Fíjate en que no importa **qué** reunión termina, solo **cuántas** terminaron antes de cada inicio. Así que puedes ordenar los inicios y los finales por separado y recorrerlos con dos punteros. Cada inicio, o reutiliza una sala que ya se liberó (avanza el puntero de finales), o necesita una sala nueva. Es la versión más fácil de escribir en un lenguaje sin heap en la biblioteca estándar, como TypeScript.
+
+<CodeTabs>
+
+```java title="Java"
+public int minMeetingRooms(int[][] meetings) {
+    int n = meetings.length;
+    int[] starts = new int[n], ends = new int[n];
+    for (int i = 0; i < n; i++) {
+        starts[i] = meetings[i][0];
+        ends[i] = meetings[i][1];
+    }
+    Arrays.sort(starts);
+    Arrays.sort(ends);
+    int rooms = 0, j = 0;
+    for (int s : starts) {
+        if (s >= ends[j]) j++; // alguna reunión ya terminó: reusamos su sala
+        else rooms++; // todas siguen ocupadas: sala nueva
+    }
+    return rooms;
+}
+```
+
+```python title="Python"
+def min_meeting_rooms(meetings: list[list[int]]) -> int:
+    starts = sorted(m[0] for m in meetings)
+    ends = sorted(m[1] for m in meetings)
+    rooms, j = 0, 0
+    for s in starts:
+        if s >= ends[j]:  # alguna reunión ya terminó: reusamos su sala
+            j += 1
+        else:             # todas siguen ocupadas: sala nueva
+            rooms += 1
+    return rooms
+```
+
+```ts title="TypeScript"
+function minMeetingRooms(meetings: number[][]): number {
+  const starts = meetings.map((m) => m[0]).sort((a, b) => a - b)
+  const ends = meetings.map((m) => m[1]).sort((a, b) => a - b)
+  let rooms = 0
+  let j = 0
+  for (const s of starts) {
+    if (s >= ends[j]) j++ // alguna reunión ya terminó: reusamos su sala
+    else rooms++ // todas siguen ocupadas: sala nueva
+  }
+  return rooms
+}
+```
+
+</CodeTabs>
+
+**Complejidad.** Ambas versiones son O(n log n) tiempo y O(n) memoria.
+
+**Casos borde.** Reuniones que se tocan (`[1,5]` y `[5,10]` comparten sala con `>=`; con `>` pedirías una de más). Todas a la vez (la respuesta es n). Lista vacía (0; en la versión de dos punteros el loop no corre, así que no se accede a `ends[0]`).
+
+**Variantes y repreguntas.** "Devuélveme también qué sala usa cada reunión" (heap de pares `(fin, sala)`, como en el widget). "¿Y si las reuniones tienen prioridad y hay un número fijo de salas?" (es [Meeting Rooms III](https://leetcode.com/problems/meeting-rooms-iii/), con dos heaps: salas libres y salas ocupadas). [Car Pooling](https://leetcode.com/problems/car-pooling/) es el mismo barrido con pasajeros en vez de salas.
+
+<Quiz
+  question="En Meeting Rooms II con min-heap, alguien escribe el while con ends[0] < start en vez de ends[0] <= start. Con [[1,5], [5,10], [10,15]], ¿qué devuelve?"
+  options={[
+    { text: '1, igual que con <=.', why: 'Con <, una reunión que termina en 5 no libera la sala para otra que empieza en 5, así que el heap crece.' },
+    { text: '2: en t = 5 todavía cuenta como ocupada la que termina en 5; en t = 10 ya se liberó la primera.', correct: true, why: 'En t = 5 el heap tiene [5] y 5 < 5 es falso, así que no se saca: quedan 2. En t = 10 el tope es 5, que sí es menor que 10, y se saca; el siguiente tope es 10, que no se saca. El máximo fue 2, cuando una sola sala alcanzaba.' },
+    { text: '3: ninguna sala se libera nunca.', why: 'En t = 10 el fin 5 sí es estrictamente menor que 10, así que esa sala se libera.' },
+  ]}
+/>
+
+## Non-overlapping Intervals y el greedy de actividades
+
+**Enunciado.** ¿Cuál es el mínimo de intervalos que hay que eliminar para que los que quedan no se solapen? `[[1,2], [2,3], [3,4], [1,3]]` → `1` (eliminar `[1,3]`). Aquí los extremos que se tocan **no** cuentan como solapados.
+
+Es el mismo problema que el clásico **selección de actividades**: maximizar la cantidad de intervalos compatibles. Eliminar el mínimo es quedarte con el máximo.
+
+**Qué preguntar.** ¿Tocarse en un punto es solaparse? ¿Me piden la cantidad o cuáles eliminar?
+
+**Fuerza bruta.** Probar todos los subconjuntos: O(2ⁿ). Con DP sobre intervalos ordenados se puede en O(n²), pero no hace falta.
+
+**Idea clave.** Ordena por **fin**. Recorre y quédate con cada intervalo que empiece después de que terminó el último que te quedaste; los demás se eliminan. Elegir el que termina antes es lo que deja más espacio para el resto.
+
+**Señal para reconocer el patrón:** si ves "la mayor cantidad de intervalos sin solaparse" o "el mínimo que hay que quitar", piensa en ordenar por fin y elegir con avidez.
+
+<CodeTabs>
+
+```java title="Java"
+public int eraseOverlapIntervals(int[][] intervals) {
+    int[][] sorted = intervals.clone();
+    Arrays.sort(sorted, (a, b) -> Integer.compare(a[1], b[1])); // por FIN
+    int removed = 0;
+    long lastEnd = Long.MIN_VALUE;
+    for (int[] iv : sorted) {
+        if (iv[0] >= lastEnd) lastEnd = iv[1]; // compatible: nos quedamos con él
+        else removed++; // choca con el último elegido: se elimina
+    }
+    return removed;
+}
+```
+
+```python title="Python"
+def erase_overlap_intervals(intervals: list[list[int]]) -> int:
+    removed = 0
+    last_end = float('-inf')
+    for start, end in sorted(intervals, key=lambda iv: iv[1]):  # por FIN
+        if start >= last_end:   # compatible: nos quedamos con él
+            last_end = end
+        else:                   # choca con el último elegido: se elimina
+            removed += 1
+    return removed
+```
+
+```ts title="TypeScript"
+function eraseOverlapIntervals(intervals: number[][]): number {
+  const sorted = [...intervals].sort((a, b) => a[1] - b[1]) // por FIN
+  let removed = 0
+  let lastEnd = -Infinity
+  for (const [start, end] of sorted) {
+    if (start >= lastEnd) lastEnd = end // compatible: nos quedamos con él
+    else removed++ // choca con el último elegido: se elimina
+  }
+  return removed
+}
+```
+
+</CodeTabs>
+
+**Complejidad.** O(n log n) tiempo, O(1) memoria extra además del orden.
+
+**Errores típicos.** Ordenar por inicio. Con `[[1,10], [2,3], [4,5]]`, el que empieza primero es `[1,10]`, que choca con los otros dos: si lo eliges, te quedas con uno; ordenando por fin, te quedas con dos.
+
+**Minimum Number of Arrows to Burst Balloons (mención).** Globos como intervalos horizontales; una flecha vertical en `x` revienta todos los que contienen `x`. ¿Mínimo de flechas? Es el mismo greedy: ordena por fin, dispara en el fin del primero y salta todos los globos que esa flecha atraviesa (los que empiezan antes o en ese punto). La respuesta es la cantidad de grupos compatibles. Aquí tocarse **sí** cuenta: una flecha en 2 revienta `[1,2]` y `[2,3]`.
+
+## Greedy: cuándo funciona y cómo argumentarlo
+
+Un greedy funciona cuando el problema tiene la **propiedad de elección golosa**: existe una solución óptima que incluye la elección que parece mejor ahora. Si además lo que queda después de esa elección es un problema del mismo tipo (subestructura óptima), puedes repetir la elección hasta terminar.
+
+El problema es que muchos greedy **parecen** correctos y no lo son. En una entrevista no te piden una demostración formal, pero sí un argumento en dos o tres frases. La herramienta estándar es el **argumento de intercambio** (*exchange argument*).
+
+### El argumento de intercambio, en palabras simples
+
+Para la selección de actividades ordenando por fin:
+
+1. Sea `g` el intervalo que termina primero de todos.
+2. Toma **cualquier** solución óptima `O`. Mira su primer intervalo, `f`. Como `g` es el que termina primero de todos, `g` termina antes que `f` o al mismo tiempo.
+3. **Cambia** `f` por `g` en `O`. Lo que venía después de `f` empezaba después de que `f` terminara, así que también empieza después de que termine `g`: nada choca. La solución sigue siendo válida y tiene el mismo tamaño.
+4. Entonces existe una solución óptima que empieza con `g`. Elegir `g` no te hizo perder nada. Repite el argumento con lo que queda.
+
+<Sketch
+  width={640}
+  height={250}
+  caption="El argumento de intercambio: g termina antes que f, así que cambiar f por g no choca con nada de lo que venía después."
+  items={[
+    { type: 'text', x: 24, y: 32, text: 'argumento de intercambio', size: 22, tone: 'pencil' },
+    { type: 'text', x: 24, y: 92, text: 'óptima', size: 20 },
+    { type: 'box', x: 150, y: 72, w: 150, h: 28, label: 'f', size: 20 },
+    { type: 'box', x: 330, y: 72, w: 120, h: 28, label: '…', size: 20 },
+    { type: 'box', x: 480, y: 72, w: 120, h: 28, label: '…', size: 20, with: true },
+    { type: 'text', x: 24, y: 170, text: 'greedy', size: 20, tone: 'line' },
+    { type: 'box', x: 140, y: 150, w: 110, h: 28, label: 'g', size: 20, tone: 'line', fill: true },
+    { type: 'line', points: [[250, 60], [250, 196]], dashed: true, tone: 'line' },
+    { type: 'arrow', from: [200, 146], to: [222, 106], tone: 'ok' },
+    { type: 'text', x: 320, y: 142, text: 'cambiar f por g', size: 20, tone: 'ok' },
+    { type: 'text', x: 24, y: 232, text: 'g termina antes que f: lo que seguía tampoco choca', size: 19, tone: 'ok' },
+  ]}
+/>
+
+La forma de decirlo en la entrevista: **"Si una solución óptima no usa mi elección, puedo cambiar su primera elección por la mía sin empeorarla. Así que la mía es segura."**
+
+### Cuando greedy falla
+
+La forma más rápida de descartar un greedy es buscar un contraejemplo chico. Con intervalos:
+
+- **Elegir el que empieza primero:** `[[1,10], [2,3], [4,5]]`. Elige `[1,10]` y se queda con uno; lo óptimo son dos.
+- **Elegir el más corto:** `[[1,5], [4,7], [6,10]]`. El más corto es `[4,7]`, que choca con los otros dos; lo óptimo es `[1,5]` y `[6,10]`.
+
+Y el clásico de las **monedas**. Con denominaciones `[1, 5, 10, 25]` (centavos de dólar), "usa siempre la moneda más grande que quepa" da el mínimo. Pero con denominaciones raras como `[1, 3, 4]` y monto 6, greedy toma `4 + 1 + 1` (tres monedas) cuando `3 + 3` usa dos. No hay argumento de intercambio posible: elegir el 4 sí te hizo perder. Ese problema se resuelve con [programación dinámica](/casos/programacion-dinamica), que prueba todas las "últimas monedas" en vez de comprometerse con una.
+
+<Callout type="tip" title="Una prueba rápida en la pizarra">
+
+Antes de codificar un greedy, intenta romperlo durante un minuto con tres o cuatro intervalos (o monedas, o números). Si no encuentras un contraejemplo y puedes armar el argumento de intercambio, adelante. Si encuentras uno, ya sabes que necesitas DP o búsqueda. Decirlo en voz alta ("probé ordenar por inicio y falla con este caso") suma muchos puntos.
+
+</Callout>
+
+<Quiz
+  question="Te piden la mayor cantidad de pedidos que un repartidor puede entregar, donde cada pedido tiene una ventana [inicio, fin] y solo puede atender uno a la vez. ¿Qué criterio de orden usas?"
+  options={[
+    { text: 'Por inicio: atiende primero lo que llega antes.', why: 'Un pedido que empieza temprano pero dura todo el día bloquea a todos los demás. Contraejemplo: [[1,10], [2,3], [4,5]].' },
+    { text: 'Por duración: los pedidos cortos dejan más tiempo libre.', why: 'Un pedido corto puede quedar justo en medio de dos largos compatibles entre sí. Contraejemplo: [[1,5], [4,7], [6,10]].' },
+    { text: 'Por fin: el que termina antes deja más espacio para el resto.', correct: true, why: 'Es la selección de actividades. Por el argumento de intercambio, siempre hay una solución óptima que incluye el pedido que termina primero.' },
+  ]}
+/>
+
+### Jump Game
+
+**Enunciado.** Cada posición de `nums` indica el salto **máximo** desde ahí. Empiezas en el índice 0: ¿puedes llegar al último? `[2,3,1,1,4]` → `true`; `[3,2,1,0,4]` → `false` (todos los caminos caen en el 0 del índice 3).
+
+**Qué preguntar.** ¿Los saltos pueden ser de cualquier largo hasta el máximo? ¿Me piden si es posible o el mínimo de saltos? (El mínimo es Jump Game II.)
+
+**Fuerza bruta.** Backtracking desde cada posición: exponencial. Con DP (`ok[i]` = se puede llegar al final desde i) es O(n²).
+
+**Idea clave.** No importa **cómo** llegas, solo **hasta dónde** puedes llegar. Lleva `farthest`, el índice más lejano alcanzable hasta ahora. Recorre: si el índice actual está más allá de `farthest`, quedaste atrapado; si no, actualiza `farthest = max(farthest, i + nums[i])`.
+
+**Señal para reconocer el patrón:** si una DP de alcanzabilidad solo usa "¿existe algún j anterior que llegue aquí?", probablemente basta con el máximo alcance.
+
+<CodeTabs>
+
+```java title="Java"
+public boolean canJump(int[] nums) {
+    int farthest = 0;
+    for (int i = 0; i < nums.length; i++) {
+        if (i > farthest) return false; // no hay forma de pisar esta posición
+        farthest = Math.max(farthest, i + nums[i]);
+    }
+    return true;
+}
+```
+
+```python title="Python"
+def can_jump(nums: list[int]) -> bool:
+    farthest = 0
+    for i, jump in enumerate(nums):
+        if i > farthest:      # no hay forma de pisar esta posición
+            return False
+        farthest = max(farthest, i + jump)
+    return True
+```
+
+```ts title="TypeScript"
+function canJump(nums: number[]): boolean {
+  let farthest = 0
+  for (let i = 0; i < nums.length; i++) {
+    if (i > farthest) return false // no hay forma de pisar esta posición
+    farthest = Math.max(farthest, i + nums[i])
+  }
+  return true
+}
+```
+
+</CodeTabs>
+
+**Complejidad.** O(n) tiempo, O(1) memoria. Por qué es correcto: todo índice menor o igual que `farthest` es alcanzable (llegaste a alguno que salta hasta ahí, y puedes saltar menos que el máximo), así que el conjunto de posiciones alcanzables siempre es un prefijo.
+
+**Variante.** Jump Game II (mínimo de saltos): un BFS por niveles implícito. Cada "nivel" es el rango de índices alcanzables con k saltos; el siguiente nivel llega hasta el máximo `i + nums[i]` del nivel actual.
+
+### Gas Station
+
+**Enunciado.** Hay `n` estaciones en un circuito. En la estación `i` cargas `gas[i]` y para ir a la siguiente gastas `cost[i]`. Empiezas con el tanque vacío. ¿Desde qué estación puedes dar la vuelta completa? La respuesta, si existe, es única. `gas = [1,2,3,4,5]`, `cost = [3,4,5,1,2]` → `3`.
+
+**Qué preguntar.** ¿Qué devuelvo si no hay solución? (`-1`.) ¿Está garantizado que la solución es única?
+
+**Fuerza bruta.** Simular desde cada estación: O(n²).
+
+**Idea clave.** Dos observaciones. Primera: si el gas total es menor que el costo total, es imposible, y si no, hay solución. Segunda: si sales de `s` y te quedas sin combustible al llegar a `i + 1`, **ninguna estación entre `s` e `i` sirve como inicio**: a cada una llegaste con el tanque en cero o más, así que empezar ahí con el tanque vacío solo puede ser peor. Por eso, cuando el tanque queda negativo, el siguiente candidato es `i + 1`. Una sola pasada.
+
+**Señal para reconocer el patrón:** si al fallar desde un candidato puedes descartar en bloque todos los candidatos intermedios, hay un greedy de una pasada.
+
+<CodeTabs>
+
+```java title="Java"
+public int canCompleteCircuit(int[] gas, int[] cost) {
+    int total = 0, tank = 0, start = 0;
+    for (int i = 0; i < gas.length; i++) {
+        int diff = gas[i] - cost[i];
+        total += diff;
+        tank += diff;
+        if (tank < 0) { // desde start no se llega a i + 1,
+            start = i + 1; // ni desde nada entre start e i
+            tank = 0;
+        }
+    }
+    return total >= 0 ? start : -1;
+}
+```
+
+```python title="Python"
+def can_complete_circuit(gas: list[int], cost: list[int]) -> int:
+    total = tank = start = 0
+    for i in range(len(gas)):
+        diff = gas[i] - cost[i]
+        total += diff
+        tank += diff
+        if tank < 0:        # desde start no se llega a i + 1
+            start = i + 1   # ni desde nada entre start e i
+            tank = 0
+    return start if total >= 0 else -1
+```
+
+```ts title="TypeScript"
+function canCompleteCircuit(gas: number[], cost: number[]): number {
+  let total = 0
+  let tank = 0
+  let start = 0
+  for (let i = 0; i < gas.length; i++) {
+    const diff = gas[i] - cost[i]
+    total += diff
+    tank += diff
+    if (tank < 0) {
+      // desde start no se llega a i + 1, ni desde nada entre start e i
+      start = i + 1
+      tank = 0
+    }
+  }
+  return total >= 0 ? start : -1
+}
+```
+
+</CodeTabs>
+
+**Complejidad.** O(n) tiempo, O(1) memoria.
+
+**Errores típicos.** Simular la vuelta completa desde cada candidato (vuelve a O(n²)). Olvidar el chequeo del total: sin él, el algoritmo devuelve un `start` aunque no haya solución.
+
+## Problemas típicos de este patrón
+
+| Problema (LeetCode) | Ordenar por | Idea |
+|---|---|---|
+| [Merge Intervals](https://leetcode.com/problems/merge-intervals/) | inicio | comparar con el último bloque, usar max |
+| [Insert Interval](https://leetcode.com/problems/insert-interval/) | ya viene ordenado | tres fases en O(n) |
+| [Interval List Intersections](https://leetcode.com/problems/interval-list-intersections/) | ya vienen ordenadas | dos punteros; avanza el que termina antes |
+| [Meeting Rooms](https://leetcode.com/problems/meeting-rooms/) | inicio | ¿algún par consecutivo se solapa? |
+| [Meeting Rooms II](https://leetcode.com/problems/meeting-rooms-ii/) | inicio | heap de finales o dos arreglos ordenados |
+| [Car Pooling](https://leetcode.com/problems/car-pooling/) | tiempo de evento | barrido con suma de pasajeros |
+| [Non-overlapping Intervals](https://leetcode.com/problems/non-overlapping-intervals/) | fin | selección de actividades |
+| [Minimum Number of Arrows to Burst Balloons](https://leetcode.com/problems/minimum-number-of-arrows-to-burst-balloons/) | fin | una flecha por grupo compatible |
+| [Jump Game](https://leetcode.com/problems/jump-game/) | (no ordena) | máximo alcance |
+| [Jump Game II](https://leetcode.com/problems/jump-game-ii/) | (no ordena) | niveles de alcance |
+| [Gas Station](https://leetcode.com/problems/gas-station/) | (no ordena) | descartar candidatos en bloque |
+| [Partition Labels](https://leetcode.com/problems/partition-labels/) | (última aparición) | estirar el corte hasta la última aparición |
+
+Meeting Rooms y Meeting Rooms II son problemas premium en LeetCode. Si no tienes acceso, el widget de arriba y Car Pooling cubren el mismo barrido.
+
+<Takeaways>
+
+- La receta de intervalos es **ordenar y barrer**. Ordena por **inicio** para fusionar o contar simultáneos; por **fin** para elegir la mayor cantidad compatible.
+- Pregunta siempre si los extremos que se tocan cuentan como solapados: cambia un `<` por un `<=`, y LeetCode usa convenciones distintas en problemas distintos.
+- En Merge Intervals el fin del bloque es `max(fin, nuevo_fin)`: un intervalo contenido no puede achicar el bloque.
+- Meeting Rooms II es "máximo de simultáneos": un heap de finales o dos arreglos ordenados, ambos O(n log n).
+- Un greedy es correcto si puedes armar un **argumento de intercambio**: cambiar la primera elección de una solución óptima por la tuya no la empeora.
+- Antes de confiar en un greedy, busca un contraejemplo chico. Las monedas `[1, 3, 4]` con monto 6 rompen el greedy y piden DP.
+
+</Takeaways>
+
+## Fuentes y lecturas
+
+- Tech Interview Handbook, [Interval cheatsheet](https://www.techinterviewhandbook.org/algorithms/interval/).
+- Jon Kleinberg y Éva Tardos, *Algorithm Design*, capítulo 4, "Greedy Algorithms": selección de actividades (*interval scheduling*), partición de intervalos (el problema de las salas) y los argumentos "greedy stays ahead" y de intercambio.
+- Jeff Erickson, [*Algorithms*](https://jeffe.cs.illinois.edu/teaching/algorithms/), capítulo 4, "Greedy Algorithms", con la demostración de selección de actividades por intercambio.
+- Documentación de Python, [`heapq`](https://docs.python.org/3/library/heapq.html).
+- LeetCode, problemas enlazados en la tabla de arriba.

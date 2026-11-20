@@ -1,0 +1,805 @@
+import { BracketStack } from '../../components/widgets/entrevistas/BracketStack'
+import { MonotonicStack } from '../../components/widgets/entrevistas/MonotonicStack'
+import { DequeMax } from '../../components/widgets/entrevistas/DequeMax'
+
+Una pila y una cola son las estructuras más simples que existen después del arreglo, y justamente por eso aparecen tanto en entrevistas: el problema nunca es implementarlas, sino **darse cuenta de que el problema es una pila**. Paréntesis que se abren y se cierran, una calculadora, "deshacer", el siguiente día más caluroso, el máximo de una ventana que se mueve: todos se resuelven guardando elementos pendientes en el orden correcto y sacándolos en el momento justo.
+
+Este tema va de lo básico a lo que más se pregunta en entrevistas de nivel medio: la **pila monótona**, una técnica que resuelve en O(n) problemas cuya fuerza bruta es O(n²) y que, una vez que la ves, empiezas a reconocer en todas partes. Cerramos con la **deque**, que combina pila y cola, y con la cola como motor de BFS, que retomas en [grafos](/casos/grafos).
+
+<Sketch
+  width={640}
+  height={300}
+  caption="Lo último que abrió es lo primero que cierra: los pares anidados de los paréntesis son exactamente el orden en que una pila saca sus elementos."
+  items={[
+    { type: 'text', x: 24, y: 28, text: 'lo último que abrió es lo primero que cierra', size: 21, tone: 'pencil' },
+    { type: 'cells', x: 40, y: 150, values: ['(', '[', '{', '}', ']', ')'], size: 50 },
+    { type: 'arrow', from: [165, 146], to: [215, 146], bend: -26, head: 'none', tone: 'line' },
+    { type: 'arrow', from: [115, 146], to: [265, 146], bend: -52, head: 'none', tone: 'line' },
+    { type: 'arrow', from: [65, 146], to: [315, 146], bend: -80, head: 'none', tone: 'line' },
+    { type: 'line', points: [[440, 86], [440, 252], [570, 252], [570, 86]] },
+    { type: 'box', x: 450, y: 202, w: 110, h: 42, label: '(', font: 'code', fill: true },
+    { type: 'box', x: 450, y: 154, w: 110, h: 42, label: '[', font: 'code', fill: true },
+    { type: 'box', x: 450, y: 106, w: 110, h: 42, label: '{', font: 'code', fill: true, tone: 'line' },
+    { type: 'text', x: 580, y: 134, text: 'tope', size: 19, tone: 'line' },
+    { type: 'text', x: 40, y: 236, text: ['abrir = push', 'cerrar = pop del tope'], size: 20, tone: 'ink' },
+    { type: 'text', x: 450, y: 284, text: 'la pila', size: 19, tone: 'pencil' },
+  ]}
+/>
+
+## Pila, cola y deque: qué garantizan
+
+- **Pila** (*stack*, LIFO): el último que entra es el primero que sale. Operaciones `push`, `pop` y `peek` (mirar el tope), todas O(1).
+- **Cola** (*queue*, FIFO): el primero que entra es el primero que sale. `enqueue` al final y `dequeue` al frente, O(1).
+- **Deque** (*double-ended queue*): agrega y saca por ambos extremos en O(1). Sirve como pila, como cola o como las dos cosas.
+
+En el lenguaje que uses, conoce la implementación correcta:
+
+| | Java | Python | TypeScript / JavaScript |
+| --- | --- | --- | --- |
+| Pila | `ArrayDeque` con `push`, `pop` y `peek` | `list` con `append` y `pop()` | `Array` con `push` y `pop` |
+| Cola | `ArrayDeque` con `offer` y `poll` | `collections.deque` con `append` y `popleft` | arreglo con un índice de inicio, o una cola propia |
+| Deque | `ArrayDeque` (`offerFirst`, `pollLast`…) | `collections.deque` | no hay nativa: arreglo circular o lista doblemente enlazada |
+
+Dos trampas clásicas: en Python, `list.pop(0)` es O(n) porque desplaza todos los elementos; usa `deque.popleft()`. En JavaScript, `Array.prototype.shift()` también puede costar O(n); en una entrevista basta con decirlo y usar un índice que avanza.
+
+<Callout type="tip" title="En Java">
+
+No uses la clase `Stack`: es de Java 1.0, hereda de `Vector` (sincroniza cada operación y permite insertar en cualquier posición) y la propia documentación recomienda `Deque`. Declara `Deque<Integer> stack = new ArrayDeque<>()`. Detalles de `ArrayDeque` que conviene saber: `push`, `pop` y `peek` trabajan sobre el **frente**, así que si la recorres con un `for` la ves del tope a la base; no admite `null`; y `pop` lanza `NoSuchElementException` con la pila vacía, mientras que `poll` y `peek` devuelven `null`. Los fragmentos de Java de este tema suponen `import java.util.*;`.
+
+</Callout>
+
+**Señales para reconocer una pila:**
+
+- Si ves **anidamiento** o "lo último que abrió es lo primero que cierra" (paréntesis, etiquetas HTML, rutas de archivos con `..`), piensa en una pila.
+- Si ves "evalúa una expresión" o "deshacer", piensa en una pila.
+- Si ves "el **siguiente mayor**", "el anterior menor" o "cuántos días hasta…", piensa en una **pila monótona**.
+- Si ves "el máximo o mínimo de cada ventana", piensa en una **deque monótona**.
+- Si ves "por niveles", "el camino más corto en pasos" o "en orden de llegada", piensa en una **cola**.
+
+<Callout type="interview">
+
+En estos problemas el entrevistador evalúa si **identificas qué queda pendiente** y en qué orden se resuelve, si cuidas los casos borde de la pila vacía (hacer `pop` sin elementos es el bug número uno) y, en la pila monótona, si puedes **justificar que es O(n)** aunque haya un `while` dentro de un `for`.
+
+</Callout>
+
+## Valid Parentheses
+
+**Enunciado.** Dada una cadena con `(`, `)`, `[`, `]`, `{` y `}`, decide si está balanceada: cada símbolo que abre se cierra con el de su tipo y en el orden correcto. `"()[]{}"` → `true`; `"([)]"` → `false`; `"(("` → `false`.
+
+**Qué preguntar.** ¿Solo esos seis caracteres o puede haber otros (que se ignoran)? ¿La cadena vacía es válida? (Sí.)
+
+**Fuerza bruta.** Borrar repetidamente los pares adyacentes `()`, `[]` y `{}` hasta que no quede ninguno: O(n²). Funciona, pero cada pasada recorre la cadena entera.
+
+**La idea.** El símbolo que cierra tiene que corresponder al **último que abrió y sigue abierto**. "El último pendiente" es exactamente el tope de una pila. Lo que abre se apila; lo que cierra debe coincidir con el tope, y si coincide, lo saca.
+
+<BracketStack />
+
+<CodeTabs>
+
+```java title="Java"
+public boolean isValid(String s) {
+    Map<Character, Character> pairs = Map.of(')', '(', ']', '[', '}', '{');
+    Deque<Character> stack = new ArrayDeque<>();
+    for (char c : s.toCharArray()) {
+        if (pairs.containsKey(c)) {
+            char open = pairs.get(c); // char primitivo: != compara valores, no referencias
+            if (stack.isEmpty() || stack.peek() != open) return false;
+            stack.pop();
+        } else {
+            stack.push(c);
+        }
+    }
+    return stack.isEmpty();
+}
+```
+
+```python title="Python"
+def is_valid(s: str) -> bool:
+    pairs = {')': '(', ']': '[', '}': '{'}
+    stack: list[str] = []
+    for c in s:
+        if c in pairs:
+            if not stack or stack[-1] != pairs[c]:
+                return False
+            stack.pop()
+        else:
+            stack.append(c)
+    return not stack
+```
+
+```ts title="TypeScript"
+function isValid(s: string): boolean {
+  const pairs: Record<string, string> = { ')': '(', ']': '[', '}': '{' }
+  const stack: string[] = []
+  for (const c of s) {
+    if (c in pairs) {
+      if (stack.length === 0 || stack[stack.length - 1] !== pairs[c]) return false
+      stack.pop()
+    } else {
+      stack.push(c)
+    }
+  }
+  return stack.length === 0
+}
+```
+
+</CodeTabs>
+
+**Complejidad.** O(n) tiempo, O(n) memoria en el peor caso (todo abre).
+
+**Casos borde y errores típicos.**
+
+- Un cierre con la pila vacía (`"())"`): hay que chequear antes de mirar el tope.
+- Terminar con elementos en la pila (`"(()"`): devolver `true` solo porque nunca hubo un cierre equivocado es el error más común.
+- Optimización que vale mencionar: si el largo es impar, la respuesta es `false` sin recorrer nada.
+- En Java, la pila guarda `Character` (objetos). Por eso el código compara con un `char open` primitivo: `stack.peek() != pairs.get(c)` compararía dos `Character` por referencia. Funciona por casualidad con ASCII, porque Java reutiliza los `Character` de 0 a 127, pero es exactamente el tipo de bug que un entrevistador busca.
+
+**Variantes.** *Minimum Remove to Make Valid Parentheses* (apila índices en vez de caracteres y elimina los que sobran). *Longest Valid Parentheses* (pila de índices con un centinela `-1`). *Generate Parentheses* (eso es [backtracking](/casos/backtracking)).
+
+## Min Stack y Evaluate Reverse Polish Notation
+
+### Min Stack
+
+**Enunciado.** Diseña una pila con `push`, `pop`, `top` y `getMin`, todas en O(1).
+
+**Qué preguntar.** ¿`pop` y `getMin` se llaman con la pila vacía? (En LeetCode, no.) ¿Puede haber valores repetidos? (Sí, y es la trampa.)
+
+**La idea.** Guardar el mínimo en una sola variable no alcanza: cuando sacas el mínimo, no sabes cuál era el anterior. La solución es una **pila auxiliar** donde cada posición guarda el mínimo de la pila **hasta ese nivel**. Al apilar `x`, apilas también `min(x, mínimo actual)`; al desapilar, sacas de las dos. El mínimo histórico de cada nivel viaja con él.
+
+<CodeTabs>
+
+```java title="Java"
+class MinStack {
+    private final Deque<Integer> stack = new ArrayDeque<>();
+    private final Deque<Integer> mins = new ArrayDeque<>(); // tope = mínimo de toda la pila
+
+    public void push(int x) {
+        stack.push(x);
+        mins.push(mins.isEmpty() ? x : Math.min(x, mins.peek()));
+    }
+
+    public void pop() {
+        stack.pop();
+        mins.pop();
+    }
+
+    public int top() {
+        return stack.peek();
+    }
+
+    public int getMin() {
+        return mins.peek();
+    }
+}
+```
+
+```python title="Python"
+class MinStack:
+    def __init__(self) -> None:
+        self.stack: list[int] = []
+        self.mins: list[int] = []  # mins[i] = mínimo de stack[0..i]
+
+    def push(self, x: int) -> None:
+        self.stack.append(x)
+        self.mins.append(x if not self.mins else min(x, self.mins[-1]))
+
+    def pop(self) -> None:
+        self.stack.pop()
+        self.mins.pop()
+
+    def top(self) -> int:
+        return self.stack[-1]
+
+    def get_min(self) -> int:
+        return self.mins[-1]
+```
+
+```ts title="TypeScript"
+class MinStack {
+  private stack: number[] = []
+  private mins: number[] = [] // mins[i] = mínimo de stack[0..i]
+
+  push(x: number): void {
+    this.stack.push(x)
+    const m = this.mins.length ? Math.min(x, this.mins[this.mins.length - 1]) : x
+    this.mins.push(m)
+  }
+  pop(): void {
+    this.stack.pop()
+    this.mins.pop()
+  }
+  top(): number {
+    return this.stack[this.stack.length - 1]
+  }
+  getMin(): number {
+    return this.mins[this.mins.length - 1]
+  }
+}
+```
+
+</CodeTabs>
+
+Todas las operaciones O(1); memoria O(n) extra. **Repregunta:** "¿Puedes ahorrar memoria?". Apila en `mins` solo cuando `x <= mínimo actual` (con `<=`, no `<`, por los repetidos) y desapila de `mins` solo cuando el valor que sale es igual al mínimo. En el peor caso sigue siendo O(n), pero en la práctica suele ser mucho menos.
+
+<Callout type="tip" title="En Java">
+
+En esa versión optimizada, la comparación "el valor que sale es igual al mínimo" es la trampa clásica de Java: `stack.pop() == mins.peek()` compara dos `Integer` por referencia. Da `true` para valores entre −128 y 127 (Java los guarda en caché) y `false` para 1000 aunque sean iguales. Escribe `stack.pop().equals(mins.peek())`, o desempaqueta a `int` antes de comparar.
+
+</Callout>
+
+### Evaluate Reverse Polish Notation
+
+**Enunciado.** Evalúa una expresión en notación polaca inversa: los operadores van después de sus operandos. `["2", "1", "+", "3", "*"]` → `(2 + 1) × 3 = 9`. La división trunca hacia cero.
+
+**La idea.** Los números se apilan. Un operador saca los dos de arriba, opera y apila el resultado. Ojo con el orden: el primero que sale es el operando **derecho**.
+
+<CodeTabs>
+
+```java title="Java"
+public int evalRPN(String[] tokens) {
+    Deque<Integer> stack = new ArrayDeque<>();
+    for (String tok : tokens) {
+        switch (tok) {
+            case "+", "-", "*", "/" -> {
+                int b = stack.pop(); // el derecho sale primero
+                int a = stack.pop();
+                stack.push(switch (tok) {
+                    case "+" -> a + b;
+                    case "-" -> a - b;
+                    case "*" -> a * b;
+                    default -> a / b; // la división entera de Java ya trunca hacia cero
+                });
+            }
+            default -> stack.push(Integer.parseInt(tok));
+        }
+    }
+    return stack.pop();
+}
+```
+
+```python title="Python"
+def eval_rpn(tokens: list[str]) -> int:
+    stack: list[int] = []
+    for tok in tokens:
+        if tok in {'+', '-', '*', '/'}:
+            b = stack.pop()  # el derecho sale primero
+            a = stack.pop()
+            if tok == '+':
+                stack.append(a + b)
+            elif tok == '-':
+                stack.append(a - b)
+            elif tok == '*':
+                stack.append(a * b)
+            else:
+                stack.append(int(a / b))  # trunca hacia cero; a // b redondea hacia abajo
+        else:
+            stack.append(int(tok))
+    return stack[0]
+```
+
+```ts title="TypeScript"
+function evalRPN(tokens: string[]): number {
+  const stack: number[] = []
+  const ops: Record<string, (a: number, b: number) => number> = {
+    '+': (a, b) => a + b,
+    '-': (a, b) => a - b,
+    '*': (a, b) => a * b,
+    '/': (a, b) => Math.trunc(a / b),
+  }
+  for (const tok of tokens) {
+    const op = ops[tok]
+    if (op) {
+      const b = stack.pop()! // el derecho sale primero
+      const a = stack.pop()!
+      stack.push(op(a, b))
+    } else {
+      stack.push(Number(tok))
+    }
+  }
+  return stack[0]
+}
+```
+
+</CodeTabs>
+
+O(n) tiempo y memoria. El error clásico en Python es usar `a // b`: con `-7 // 2` da `-4`, no `-3`. En Java y en C++, `/` entre enteros ya trunca hacia cero, así que `-7 / 2` da `-3` sin hacer nada especial. Los `switch` con flechas de Java 14+ dejan el despacho por operador en pocas líneas. **Variante:** *Basic Calculator* (expresiones infijas con paréntesis), que se resuelve con una pila de signos o con el algoritmo *shunting-yard* de Dijkstra.
+
+## Una cola con dos pilas: costo amortizado
+
+**Enunciado.** Implementa una cola FIFO usando solo dos pilas. (*Implement Queue using Stacks*.)
+
+**La idea.** Una pila de entrada recibe los `push`. Cuando hay que sacar y la pila de salida está vacía, vuelcas toda la entrada en la salida: el orden se invierte y el más antiguo queda arriba. Mientras la salida tenga elementos, sacas de ahí sin tocar la entrada.
+
+<CodeTabs>
+
+```java title="Java"
+class MyQueue {
+    private final Deque<Integer> inbox = new ArrayDeque<>();
+    private final Deque<Integer> outbox = new ArrayDeque<>();
+
+    public void push(int x) {
+        inbox.push(x);
+    }
+
+    private void shift() {
+        if (outbox.isEmpty()) {                // solo cuando la salida se vació
+            while (!inbox.isEmpty()) outbox.push(inbox.pop());
+        }
+    }
+
+    public int pop() {
+        shift();
+        return outbox.pop();
+    }
+
+    public int peek() {
+        shift();
+        return outbox.peek();
+    }
+
+    public boolean empty() {
+        return inbox.isEmpty() && outbox.isEmpty();
+    }
+}
+```
+
+```python title="Python"
+class MyQueue:
+    def __init__(self) -> None:
+        self.inbox: list[int] = []
+        self.outbox: list[int] = []
+
+    def push(self, x: int) -> None:
+        self.inbox.append(x)
+
+    def _shift(self) -> None:
+        if not self.outbox:          # solo cuando la salida se vació
+            while self.inbox:
+                self.outbox.append(self.inbox.pop())
+
+    def pop(self) -> int:
+        self._shift()
+        return self.outbox.pop()
+
+    def peek(self) -> int:
+        self._shift()
+        return self.outbox[-1]
+
+    def empty(self) -> bool:
+        return not self.inbox and not self.outbox
+```
+
+```ts title="TypeScript"
+class MyQueue {
+  private inbox: number[] = []
+  private outbox: number[] = []
+
+  push(x: number): void {
+    this.inbox.push(x)
+  }
+  private shift(): void {
+    if (this.outbox.length === 0) {
+      // solo cuando la salida se vació
+      while (this.inbox.length) this.outbox.push(this.inbox.pop()!)
+    }
+  }
+  pop(): number {
+    this.shift()
+    return this.outbox.pop()!
+  }
+  peek(): number {
+    this.shift()
+    return this.outbox[this.outbox.length - 1]
+  }
+  empty(): boolean {
+    return this.inbox.length === 0 && this.outbox.length === 0
+  }
+}
+```
+
+</CodeTabs>
+
+**El argumento amortizado.** Un `pop` individual puede costar O(n), cuando vuelca toda la entrada. Pero cada elemento se mueve de la entrada a la salida **una sola vez** en toda su vida: entra una vez a cada pila y sale una vez de cada una. Sobre cualquier secuencia de m operaciones, el trabajo total es O(m), así que cada operación cuesta O(1) **amortizado**. Esta distinción entre peor caso por operación y costo amortizado es una pregunta conceptual frecuente; la ves también con los arreglos dinámicos en [estructuras de datos](/casos/estructuras-de-datos).
+
+El error típico es volcar en cada `pop` aunque la salida tenga elementos: rompe el orden FIFO. La salida solo se rellena cuando está vacía.
+
+<Quiz
+  question="En la cola con dos pilas, ¿cuál es el costo de un pop en el peor caso y cuál el amortizado?"
+  options={[
+    { text: 'O(1) en ambos casos.', why: 'Un pop que encuentra la salida vacía y n elementos en la entrada debe moverlos todos: ese pop individual cuesta O(n).' },
+    { text: 'O(n) en el peor caso, O(1) amortizado.', correct: true, why: 'Cada elemento se mueve de una pila a la otra una sola vez en toda su vida, así que en m operaciones el trabajo total es O(m).' },
+    { text: 'O(n) en ambos casos, porque siempre hay que invertir la pila.', why: 'Solo se invierte cuando la salida está vacía. Los pops siguientes salen directo de la salida en O(1).' },
+  ]}
+/>
+
+## La pila monótona
+
+Una **pila monótona** mantiene sus elementos ordenados (crecientes o decrecientes de la base al tope). Antes de apilar un elemento nuevo, sacas todos los que romperían el orden. Lo valioso no es la pila sino **el momento del pop**: cuando un elemento sale, acabas de encontrar su "siguiente mayor" (o menor), porque el elemento que lo saca es el primero a su derecha que rompe el orden.
+
+<Sketch
+  width={640}
+  height={300}
+  caption="Cada día apunta a su próximo día más cálido. Esa flecha aparece en el momento en que el día más cálido saca al otro de la pila monótona."
+  items={[
+    { type: 'text', x: 24, y: 28, text: 'cada día apunta a su próximo día más cálido', size: 21, tone: 'pencil' },
+    { type: 'box', x: 40, y: 134, w: 44, h: 96, label: '73', size: 18 },
+    { type: 'box', x: 120, y: 122, w: 44, h: 108, label: '74', size: 18, with: true },
+    { type: 'box', x: 200, y: 110, w: 44, h: 120, label: '75', size: 18, with: true },
+    { type: 'box', x: 280, y: 158, w: 44, h: 72, label: '71', size: 18, with: true },
+    { type: 'box', x: 360, y: 182, w: 44, h: 48, label: '69', size: 18, with: true },
+    { type: 'box', x: 440, y: 146, w: 44, h: 84, label: '72', size: 18, with: true },
+    { type: 'box', x: 520, y: 98, w: 44, h: 132, label: '76', size: 18, with: true, tone: 'line' },
+    { type: 'arrow', from: [62, 128], to: [138, 116], bend: -14, tone: 'line' },
+    { type: 'arrow', from: [142, 116], to: [218, 104], bend: -14, tone: 'line' },
+    { type: 'arrow', from: [382, 176], to: [458, 140], bend: -14, tone: 'line' },
+    { type: 'arrow', from: [302, 152], to: [454, 140], bend: -30, tone: 'line' },
+    { type: 'arrow', from: [466, 140], to: [536, 92], bend: -14, tone: 'line' },
+    { type: 'arrow', from: [222, 104], to: [530, 92], bend: -46, tone: 'line' },
+    { type: 'text', x: 24, y: 270, text: 'la flecha nace cuando el día más cálido saca al otro de la pila', size: 19, tone: 'ink' },
+  ]}
+/>
+
+### Daily Temperatures
+
+**Enunciado.** Para cada día, ¿cuántos días hay que esperar hasta una temperatura **más alta**? 0 si no llega nunca. `[73, 74, 75, 71, 69, 72, 76, 73]` → `[1, 1, 4, 2, 1, 1, 0, 0]`.
+
+**Qué preguntar.** ¿"Más alta" es estricta? (Sí: un día igual no cuenta.) ¿Cuál es el rango de n? (Hasta 10⁵ en LeetCode: O(n²) no pasa.)
+
+**Fuerza bruta.** Para cada día, recorrer hacia la derecha hasta encontrar uno más caluroso: O(n²) en el peor caso (temperaturas que solo bajan).
+
+**La idea.** Recorre los días de izquierda a derecha. La pila guarda los **índices de los días que todavía esperan** un día más caluroso. Cuando llega el día `i` con temperatura `t`, saca de la pila todos los días más fríos que `t`: para cada uno, `i` es la respuesta. Después apila `i`. Como antes de apilar sacaste todo lo más frío, cada día queda encima de uno igual o más caluroso: la pila es **decreciente** de la base al tope. Por eso el `while` puede cortar en cuanto el tope es igual o más caluroso que `t`: todo lo que está debajo también lo es, y ninguno de esos días se resuelve con `t`.
+
+<MonotonicStack />
+
+<CodeTabs>
+
+```java title="Java"
+public int[] dailyTemperatures(int[] temps) {
+    int[] answer = new int[temps.length];
+    Deque<Integer> stack = new ArrayDeque<>(); // índices; temperaturas decrecientes de la base al tope
+    for (int i = 0; i < temps.length; i++) {
+        while (!stack.isEmpty() && temps[stack.peek()] < temps[i]) {
+            int j = stack.pop();
+            answer[j] = i - j;
+        }
+        stack.push(i);
+    }
+    return answer;
+}
+```
+
+```python title="Python"
+def daily_temperatures(temps: list[int]) -> list[int]:
+    answer = [0] * len(temps)
+    stack: list[int] = []  # índices; temperaturas decrecientes de la base al tope
+    for i, t in enumerate(temps):
+        while stack and temps[stack[-1]] < t:
+            j = stack.pop()
+            answer[j] = i - j
+        stack.append(i)
+    return answer
+```
+
+```ts title="TypeScript"
+function dailyTemperatures(temps: number[]): number[] {
+  const answer = new Array<number>(temps.length).fill(0)
+  const stack: number[] = [] // índices; temperaturas decrecientes de la base al tope
+  for (let i = 0; i < temps.length; i++) {
+    while (stack.length && temps[stack[stack.length - 1]] < temps[i]) {
+      const j = stack.pop()!
+      answer[j] = i - j
+    }
+    stack.push(i)
+  }
+  return answer
+}
+```
+
+</CodeTabs>
+
+**Por qué es O(n).** Cada índice entra a la pila exactamente una vez y sale **a lo sumo** una vez. El `while` puede iterar muchas veces en un día puntual, pero la suma de todas sus iteraciones a lo largo del algoritmo es como mucho n. Total: O(n) tiempo, O(n) memoria. El widget lleva la cuenta de `push` y `pop`: compruébalo con la entrada que sube y con la que baja.
+
+**Errores típicos.** Guardar temperaturas en vez de índices (necesitas el índice para calcular la distancia). En Java, si te preocupa el costo del *boxing* en una pila de `Integer`, puedes usar un `int[]` de tamaño n con un índice `top` como pila. Usar `<=` en la comparación: con temperaturas iguales sacarías días que todavía no encontraron uno **estrictamente** más caluroso.
+
+### Next Greater Element
+
+**Enunciado (versión I).** `nums1` es un subconjunto de `nums2`, sin repetidos. Para cada `x` de `nums1`, devuelve el primer elemento mayor que `x` a su derecha **en `nums2`**, o −1. `nums1 = [4, 1, 2]`, `nums2 = [1, 3, 4, 2]` → `[-1, 3, -1]`.
+
+**La idea.** Es Daily Temperatures con otra salida: recorre `nums2` con la pila monótona y, en cada pop, anota en un diccionario `siguiente_mayor[valor]`. Después respondes cada consulta de `nums1` en O(1).
+
+<CodeTabs>
+
+```java title="Java"
+public int[] nextGreaterElement(int[] nums1, int[] nums2) {
+    Map<Integer, Integer> nxt = new HashMap<>();
+    Deque<Integer> stack = new ArrayDeque<>(); // valores decrecientes
+    for (int x : nums2) {
+        while (!stack.isEmpty() && stack.peek() < x) nxt.put(stack.pop(), x);
+        stack.push(x);
+    }
+    int[] res = new int[nums1.length];
+    for (int i = 0; i < nums1.length; i++) res[i] = nxt.getOrDefault(nums1[i], -1);
+    return res;
+}
+```
+
+```python title="Python"
+def next_greater_element(nums1: list[int], nums2: list[int]) -> list[int]:
+    nxt: dict[int, int] = {}
+    stack: list[int] = []  # valores decrecientes
+    for x in nums2:
+        while stack and stack[-1] < x:
+            nxt[stack.pop()] = x
+        stack.append(x)
+    return [nxt.get(x, -1) for x in nums1]
+```
+
+```ts title="TypeScript"
+function nextGreaterElement(nums1: number[], nums2: number[]): number[] {
+  const nxt = new Map<number, number>()
+  const stack: number[] = [] // valores decrecientes
+  for (const x of nums2) {
+    while (stack.length && stack[stack.length - 1] < x) nxt.set(stack.pop()!, x)
+    stack.push(x)
+  }
+  return nums1.map((x) => nxt.get(x) ?? -1)
+}
+```
+
+</CodeTabs>
+
+O(n + m) tiempo. **Repregunta:** *Next Greater Element II*, con el arreglo **circular**. Recorre los índices de 0 a 2n − 1 usando `i % n`: la segunda vuelta les da a los elementos del final la oportunidad de encontrar su mayor al principio.
+
+**El catálogo de la pila monótona.** Cambiando el sentido del recorrido y la comparación obtienes las cuatro preguntas:
+
+| Quieres para cada elemento… | Recorre | La pila es | Sacas mientras el tope sea… |
+| --- | --- | --- | --- |
+| el siguiente mayor (a la derecha) | izquierda a derecha | decreciente | menor que el actual |
+| el siguiente menor | izquierda a derecha | creciente | mayor que el actual |
+| el anterior mayor (a la izquierda) | izquierda a derecha | decreciente | menor o igual; la respuesta es el tope que queda |
+| el anterior menor | izquierda a derecha | creciente | mayor o igual; la respuesta es el tope que queda |
+
+<Quiz
+  question="En Daily Temperatures, un día puede hacer que el while saque 5 elementos. ¿Por qué el algoritmo no es O(n²)?"
+  options={[
+    { text: 'Porque la pila nunca tiene más de unos pocos elementos.', why: 'Con temperaturas que solo bajan, la pila llega a tener n elementos.' },
+    { text: 'Porque cada índice se apila una vez y se desapila a lo sumo una vez, así que todos los while juntos hacen como mucho n pops.', correct: true, why: 'Es un argumento amortizado sobre todo el recorrido: el total de pushes es n y el total de pops no puede superarlo.' },
+    { text: 'Porque el while se corta en cuanto encuentra un elemento mayor.', why: 'Eso evita trabajo de más en un paso, pero no acota el total. La cota sale de contar cuántas veces puede salir cada índice: una.' },
+  ]}
+/>
+
+### Avanzado: Largest Rectangle in Histogram
+
+**Enunciado.** `heights[i]` es la altura de una barra de ancho 1. ¿Cuál es el rectángulo de área máxima dentro del histograma? `[2, 1, 5, 6, 2, 3]` → `10` (las barras 5 y 6, altura 5, ancho 2).
+
+**La idea.** El mejor rectángulo que usa la barra `j` como **la más baja** se extiende hacia la izquierda y hacia la derecha hasta la primera barra **más baja** que ella en cada lado. Eso es "el anterior menor" y "el siguiente menor": una pila monótona **creciente**. Cuando la barra `i` saca a `j` de la pila, `i` es el límite derecho, y el nuevo tope de la pila (lo que quedó debajo de `j`) es el límite izquierdo. Un 0 al final como centinela vacía la pila.
+
+<CodeTabs>
+
+```java title="Java"
+public int largestRectangleArea(int[] heights) {
+    int n = heights.length;
+    Deque<Integer> stack = new ArrayDeque<>(); // índices; alturas crecientes
+    int best = 0;
+    for (int i = 0; i <= n; i++) {
+        int h = i == n ? 0 : heights[i]; // centinela: saca todo al final
+        while (!stack.isEmpty() && heights[stack.peek()] >= h) {
+            int height = heights[stack.pop()];
+            int left = stack.isEmpty() ? -1 : stack.peek();
+            best = Math.max(best, height * (i - left - 1));
+        }
+        stack.push(i);
+    }
+    return best;
+}
+```
+
+```python title="Python"
+def largest_rectangle_area(heights: list[int]) -> int:
+    hs = heights + [0]          # centinela: saca todo al final
+    stack: list[int] = []       # índices; alturas crecientes
+    best = 0
+    for i, h in enumerate(hs):
+        while stack and hs[stack[-1]] >= h:
+            height = hs[stack.pop()]
+            left = stack[-1] if stack else -1
+            best = max(best, height * (i - left - 1))
+        stack.append(i)
+    return best
+```
+
+```ts title="TypeScript"
+function largestRectangleArea(heights: number[]): number {
+  const hs = [...heights, 0] // centinela: saca todo al final
+  const stack: number[] = [] // índices; alturas crecientes
+  let best = 0
+  for (let i = 0; i < hs.length; i++) {
+    while (stack.length && hs[stack[stack.length - 1]] >= hs[i]) {
+      const height = hs[stack.pop()!]
+      const left = stack.length ? stack[stack.length - 1] : -1
+      best = Math.max(best, height * (i - left - 1))
+    }
+    stack.push(i)
+  }
+  return best
+}
+```
+
+</CodeTabs>
+
+O(n) tiempo y memoria, con el mismo argumento de "entra una vez, sale una vez". El ancho `i - left - 1` es la parte más propensa a off-by-one: verifícalo en voz alta con el ejemplo. Este problema es la base de *Maximal Rectangle* (en una matriz binaria, aplicado fila por fila).
+
+## La deque monótona: Sliding Window Maximum
+
+**Enunciado.** Dada una ventana de tamaño `k` que se desliza por `nums`, devuelve el máximo de cada posición de la ventana. `nums = [1, 3, -1, -3, 5, 3, 6, 7]`, `k = 3` → `[3, 3, 5, 5, 6, 7]`.
+
+**Qué preguntar.** ¿`k` puede ser mayor que n? ¿Negativos? ¿Cuántos resultados se esperan? (n − k + 1.)
+
+**Fuerza bruta.** Calcular el máximo de cada ventana: O(n · k). Con un heap y borrado perezoso: O(n log n); en Java, `PriorityQueue` es un min-heap, así que para el máximo necesitas `new PriorityQueue<>(Collections.reverseOrder())` o un comparador sobre los valores. Ambas son respuestas intermedias válidas.
+
+**La idea.** Combina [sliding window](/casos/two-pointers-y-sliding-window) con la pila monótona. Una deque guarda **índices** de candidatos a máximo, con valores decrecientes de frente a atrás:
+
+1. **Por el frente** sale el índice que quedó fuera de la ventana (solo el frente puede vencer: es el más antiguo).
+2. **Por atrás** salen los índices con valor menor que el nuevo elemento: mientras el nuevo esté en la ventana, ellos nunca serán máximos, y el nuevo sale después que ellos. Son inútiles para siempre.
+3. Se agrega el nuevo índice atrás. El **frente** es el máximo de la ventana.
+
+<DequeMax />
+
+<CodeTabs>
+
+```java title="Java"
+public int[] maxSlidingWindow(int[] nums, int k) {
+    Deque<Integer> dq = new ArrayDeque<>(); // índices; valores decrecientes de frente a atrás
+    int[] res = new int[nums.length - k + 1];
+    for (int i = 0; i < nums.length; i++) {
+        if (!dq.isEmpty() && dq.peekFirst() <= i - k) dq.pollFirst();     // venció por el frente
+        while (!dq.isEmpty() && nums[dq.peekLast()] < nums[i]) dq.pollLast(); // ya no puede ser máximo
+        dq.offerLast(i);
+        if (i >= k - 1) res[i - k + 1] = nums[dq.peekFirst()];
+    }
+    return res;
+}
+```
+
+```python title="Python"
+from collections import deque
+
+def max_sliding_window(nums: list[int], k: int) -> list[int]:
+    dq: deque[int] = deque()  # índices; valores decrecientes de frente a atrás
+    res = []
+    for i, x in enumerate(nums):
+        if dq and dq[0] <= i - k:
+            dq.popleft()                  # venció por el frente
+        while dq and nums[dq[-1]] < x:
+            dq.pop()                      # ya no puede ser máximo
+        dq.append(i)
+        if i >= k - 1:
+            res.append(nums[dq[0]])
+    return res
+```
+
+```ts title="TypeScript"
+function maxSlidingWindow(nums: number[], k: number): number[] {
+  // deque sobre un arreglo: head avanza en vez de usar shift(), que es O(n)
+  const dq: number[] = [] // índices; valores decrecientes de frente a atrás
+  let head = 0
+  const res: number[] = []
+  for (let i = 0; i < nums.length; i++) {
+    if (head < dq.length && dq[head] <= i - k) head++ // venció por el frente
+    while (dq.length > head && nums[dq[dq.length - 1]] < nums[i]) dq.pop() // ya no puede ser máximo
+    dq.push(i)
+    if (i >= k - 1) res.push(nums[dq[head]])
+  }
+  return res
+}
+```
+
+</CodeTabs>
+
+**Complejidad.** O(n) tiempo: cada índice entra una vez y sale una vez, por el frente o por atrás. O(k) memoria para la deque.
+
+**Errores típicos.** Guardar valores en vez de índices (no sabrías cuándo vencen). Revisar el vencimiento con `<` en vez de `<=`: el índice `i − k` ya no pertenece a la ventana `[i − k + 1, i]`. Empezar a escribir resultados antes de que la primera ventana esté completa.
+
+## La cola en BFS: un adelanto de grafos
+
+La cola es el motor del recorrido en anchura (BFS): procesa los nodos **en orden de distancia** desde el origen. Como la cola es FIFO, todos los nodos a distancia 1 salen antes que cualquiera a distancia 2. Por eso BFS encuentra el camino más corto en número de pasos cuando las aristas no tienen peso.
+
+Un ejemplo con un dominio real: en una red de referidos, ¿a cuántos saltos está un usuario de otro?
+
+<CodeTabs>
+
+```java title="Java"
+public int degreesOfSeparation(Map<String, List<String>> graph, String start, String target) {
+    Map<String, Integer> dist = new HashMap<>(Map.of(start, 0));
+    Deque<String> queue = new ArrayDeque<>(List.of(start));
+    while (!queue.isEmpty()) {
+        String user = queue.pollFirst();
+        if (user.equals(target)) return dist.get(user);
+        for (String friend : graph.getOrDefault(user, List.of())) {
+            if (!dist.containsKey(friend)) {   // marcar al encolar, no al sacar
+                dist.put(friend, dist.get(user) + 1);
+                queue.offerLast(friend);
+            }
+        }
+    }
+    return -1;
+}
+```
+
+```python title="Python"
+from collections import deque
+
+def degrees_of_separation(graph: dict[str, list[str]], start: str, target: str) -> int:
+    dist = {start: 0}
+    queue = deque([start])
+    while queue:
+        user = queue.popleft()
+        if user == target:
+            return dist[user]
+        for friend in graph.get(user, []):
+            if friend not in dist:        # marcar al encolar, no al sacar
+                dist[friend] = dist[user] + 1
+                queue.append(friend)
+    return -1
+```
+
+```ts title="TypeScript"
+function degreesOfSeparation(graph: Map<string, string[]>, start: string, target: string): number {
+  const dist = new Map<string, number>([[start, 0]])
+  const queue: string[] = [start]
+  for (let head = 0; head < queue.length; head++) {
+    const user = queue[head]
+    if (user === target) return dist.get(user)!
+    for (const friend of graph.get(user) ?? []) {
+      if (!dist.has(friend)) {
+        // marcar al encolar, no al sacar
+        dist.set(friend, dist.get(user)! + 1)
+        queue.push(friend)
+      }
+    }
+  }
+  return -1
+}
+```
+
+</CodeTabs>
+
+O(V + E) tiempo y O(V) memoria. El detalle que más se olvida: marcar un nodo como visitado **al encolarlo**, no al sacarlo; si no, el mismo nodo entra varias veces. El recorrido por niveles de un árbol (*Binary Tree Level Order Traversal*) es el mismo algoritmo; lo ves en [árboles](/casos/arboles), y BFS sobre grillas, orden topológico y Dijkstra en [grafos](/casos/grafos).
+
+## Problemas típicos de este patrón
+
+| Problema (LeetCode) | Estructura | Tiempo |
+| --- | --- | --- |
+| [Valid Parentheses](https://leetcode.com/problems/valid-parentheses/) | pila | O(n) |
+| [Min Stack](https://leetcode.com/problems/min-stack/) | pila + pila de mínimos | O(1) por operación |
+| [Evaluate Reverse Polish Notation](https://leetcode.com/problems/evaluate-reverse-polish-notation/) | pila de operandos | O(n) |
+| [Implement Queue using Stacks](https://leetcode.com/problems/implement-queue-using-stacks/) | dos pilas | O(1) amortizado |
+| [Daily Temperatures](https://leetcode.com/problems/daily-temperatures/) | pila monótona decreciente | O(n) |
+| [Next Greater Element I](https://leetcode.com/problems/next-greater-element-i/) | pila monótona + mapa | O(n + m) |
+| [Car Fleet](https://leetcode.com/problems/car-fleet/) | ordenar + pila de tiempos | O(n log n) |
+| [Largest Rectangle in Histogram](https://leetcode.com/problems/largest-rectangle-in-histogram/) | pila monótona creciente | O(n) |
+| [Sliding Window Maximum](https://leetcode.com/problems/sliding-window-maximum/) | deque monótona | O(n) |
+| [Binary Tree Level Order Traversal](https://leetcode.com/problems/binary-tree-level-order-traversal/) | cola (BFS) | O(n) |
+
+<Takeaways>
+
+- Piensa en una **pila** cuando lo último pendiente es lo primero que se resuelve: anidamiento, expresiones, deshacer.
+- Valid Parentheses tiene dos errores clásicos: cerrar con la pila vacía y terminar con elementos sin cerrar.
+- Min Stack guarda el mínimo **por nivel** en una pila auxiliar; una sola variable no alcanza porque se pierde al hacer pop.
+- La cola con dos pilas cuesta O(n) por operación en el peor caso pero O(1) **amortizado**: cada elemento se mueve una sola vez.
+- La **pila monótona** resuelve "siguiente mayor / menor" en O(n): el elemento que provoca el pop es la respuesta, y cada índice entra y sale una vez.
+- La **deque monótona** da el máximo de cada ventana en O(n): vencidos por el frente, inútiles por atrás, máximo en el frente.
+- La cola FIFO hace que BFS visite por distancia; marca al encolar.
+
+</Takeaways>
+
+## Fuentes y lecturas
+
+- [Tech Interview Handbook: Stack](https://www.techinterviewhandbook.org/algorithms/stack/) y [Queue](https://www.techinterviewhandbook.org/algorithms/queue/): cheatsheets con casos borde y listas de práctica.
+- [NeetCode: roadmap](https://neetcode.io/roadmap): el bloque "Stack" incluye casi todos los problemas de este tema con video.
+- [Python: collections.deque](https://docs.python.org/3/library/collections.html#collections.deque): por qué `popleft` es O(1) y `list.pop(0)` no.
+- [cp-algorithms: Minimum stack / Minimum queue](https://cp-algorithms.com/data_structures/stack_queue_modification.html): la pila con mínimo, la cola con dos pilas y la cola con mínimo, con su análisis.
+- [Python: TimeComplexity](https://wiki.python.org/moin/TimeComplexity): costos de `list` y `deque` operación por operación.
+- Cormen, Leiserson, Rivest y Stein, *Introduction to Algorithms* (MIT Press): capítulos de estructuras elementales y de análisis amortizado.
+- Robert Sedgewick y Kevin Wayne, *Algorithms* (Addison-Wesley), sección 1.3 "Bags, Queues, and Stacks", incluida la evaluación de expresiones con dos pilas de Dijkstra.
+

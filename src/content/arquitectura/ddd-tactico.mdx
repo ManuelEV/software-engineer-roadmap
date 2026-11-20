@@ -1,0 +1,420 @@
+import { AggregateInvariant } from '../../components/widgets/arquitectura/AggregateInvariant'
+
+DDD estratégico te dice dónde trazar fronteras. DDD táctico te dice cómo escribir el código **dentro** de un bounded context para que las reglas del negocio sean explícitas, imposibles de saltarse y fáciles de cambiar. Sus piezas (entidades, value objects, agregados, repositorios, servicios de dominio, eventos y factories) aparecen en casi todas las entrevistas de backend senior, y casi siempre se explican mal: como una lista de patrones para aplicar en todos lados.
+
+Este tema las construye juntas, alrededor de un solo ejemplo: el agregado `Order` de una tienda online, en TypeScript. Al final vas a poder justificar cada pieza y, lo que es más útil, decir cuándo no la necesitas.
+
+<Callout type="warn" title="Solo donde vale la pena">
+
+El DDD táctico tiene costo: más clases, más reglas, más disciplina. Úsalo en subdominios **core** con reglas de negocio ricas. Para un subdominio de soporte que es un CRUD, un *transaction script* o un framework con *active record* es más honesto y más rápido.
+
+</Callout>
+
+## Value objects
+
+Un **value object** es un objeto definido por sus atributos, no por una identidad. Dos billetes de $10 son intercambiables; dos direcciones con la misma calle, número y ciudad son la misma dirección. Fowler los resume así: su igualdad se basa en valores, no en identidad.
+
+Tres propiedades los definen:
+
+- **Inmutables.** Para "cambiar" un value object, creas otro. Esto elimina toda una familia de bugs de aliasing.
+- **Igualdad por valor.** `Money(10, 'USD')` es igual a cualquier otro `Money(10, 'USD')`.
+- **Auto-validados.** No existe un `Money` con moneda inválida ni un `Email` sin arroba: si el constructor no lanza error, el objeto es válido para siempre.
+
+```ts title="src/orders/domain/money.ts"
+export class Money {
+  private constructor(
+    readonly cents: number,
+    readonly currency: 'USD' | 'CLP' | 'MXN',
+  ) {
+    if (!Number.isInteger(cents)) throw new DomainError('Money usa centavos enteros')
+  }
+
+  static of(cents: number, currency: Money['currency']): Money {
+    return new Money(cents, currency)
+  }
+  static zero(currency: Money['currency']): Money {
+    return new Money(0, currency)
+  }
+
+  add(other: Money): Money {
+    this.assertSameCurrency(other)
+    return new Money(this.cents + other.cents, this.currency)
+  }
+  times(qty: number): Money {
+    return new Money(this.cents * qty, this.currency)
+  }
+  greaterThan(other: Money): boolean {
+    this.assertSameCurrency(other)
+    return this.cents > other.cents
+  }
+  equals(other: Money): boolean {
+    return this.cents === other.cents && this.currency === other.currency
+  }
+
+  private assertSameCurrency(other: Money) {
+    if (other.currency !== this.currency) throw new DomainError(`No se puede operar ${this.currency} con ${other.currency}`)
+  }
+}
+
+export class DomainError extends Error {}
+```
+
+El beneficio no es estético. Con `number` suelto, nada impide sumar dólares con pesos chilenos o guardar 19.99 como flotante y perder un centavo en cada redondeo. Con `Money`, esos errores son imposibles de escribir. A esto se le llama a veces combatir la *primitive obsession*: usar `string` y `number` para conceptos que tienen reglas.
+
+Los identificadores también se benefician. Un tipo "marcado" (*branded*) evita pasar un `CustomerId` donde se esperaba un `OrderId`, sin costo en tiempo de ejecución:
+
+```ts title="src/orders/domain/ids.ts"
+export type OrderId = string & { readonly __brand: 'OrderId' }
+export type CustomerId = string & { readonly __brand: 'CustomerId' }
+export type Sku = string & { readonly __brand: 'Sku' }
+
+export const OrderId = (raw: string) => raw as OrderId
+export const Sku = (raw: string) => {
+  if (!/^[A-Z0-9-]{3,32}$/.test(raw)) throw new DomainError(`SKU inválido: ${raw}`)
+  return raw as Sku
+}
+```
+
+## Entidades
+
+Una **entidad** es un objeto con **identidad** que persiste a lo largo del tiempo aunque sus atributos cambien. Un pedido sigue siendo el mismo pedido aunque le agregues líneas, cambie de estado o se modifique la dirección. Dos pedidos con exactamente los mismos datos siguen siendo dos pedidos distintos.
+
+La pregunta para decidir entre entidad y value object es: **¿me importa cuál es, o solo cómo es?** Si necesitas seguirlo en el tiempo, referirte a él desde otro lado o tiene un ciclo de vida, es entidad. Si no, prefiere value object: son más simples, más seguros y más fáciles de probar. Un error común es modelar todo como entidad con un `id` autoincremental porque así lo pide el ORM.
+
+En nuestro ejemplo, `Order` es una entidad. ¿Y cada línea del pedido? Depende. Si las líneas se identifican por su SKU dentro del pedido y nadie fuera del pedido se refiere a ellas, pueden ser value objects. Las modelaremos así.
+
+## Agregados: la frontera de consistencia
+
+Aquí está el corazón del DDD táctico. Un **agregado** es un grupo de objetos (entidades y value objects) que se trata como **una unidad para los cambios de datos**. Tiene una **raíz**, la única entidad que el exterior puede referenciar, y una frontera dentro de la cual todas las **invariantes** se cumplen al terminar cada transacción.
+
+Una invariante es una regla que debe ser verdadera siempre, no "eventualmente". Para nuestro pedido:
+
+- Un pedido tiene como máximo 3 líneas distintas y entre 1 y 5 unidades por línea (reglas de la promoción actual).
+- El total no puede superar $500 para clientes nuevos.
+- Un pedido confirmado no se modifica.
+
+La única forma de garantizar esas reglas es que **todo cambio pase por la raíz**. Si cualquier código puede hacer `order.lines.push(...)`, la invariante depende de que todos se acuerden de validar. Pruébalo:
+
+<AggregateInvariant />
+
+Ahora el agregado completo:
+
+```ts title="src/orders/domain/order.ts" {39-46}
+import { DomainError, Money } from './money'
+import type { CustomerId, OrderId, Sku } from './ids'
+import type { OrderEvent } from './events'
+
+export interface OrderLine {
+  readonly sku: Sku
+  readonly quantity: number
+  readonly unitPrice: Money
+}
+
+type Status = 'DRAFT' | 'CONFIRMED' | 'CANCELLED'
+
+const MAX_LINES = 3
+const MAX_QTY_PER_LINE = 5
+
+export class Order {
+  private events: OrderEvent[] = []
+
+  private constructor(
+    readonly id: OrderId,
+    readonly customerId: CustomerId, // referencia por ID, no el objeto Customer
+    private lines: OrderLine[],
+    private status: Status,
+    private readonly creditLimit: Money,
+    readonly version: number, // para concurrencia optimista
+  ) {}
+
+  // ── Comandos: la única forma de cambiar el pedido ──
+
+  addLine(sku: Sku, quantity: number, unitPrice: Money): void {
+    this.assertDraft()
+    if (quantity < 1) throw new DomainError('La cantidad mínima es 1')
+
+    const existing = this.lines.find((l) => l.sku === sku)
+    const newQty = (existing?.quantity ?? 0) + quantity
+    if (newQty > MAX_QTY_PER_LINE) throw new DomainError(`Máximo ${MAX_QTY_PER_LINE} unidades por producto`)
+    if (!existing && this.lines.length >= MAX_LINES) throw new DomainError(`Máximo ${MAX_LINES} productos por pedido`)
+
+    const next = existing
+      ? this.lines.map((l) => (l.sku === sku ? { ...l, quantity: newQty } : l))
+      : [...this.lines, { sku, quantity, unitPrice }]
+
+    if (totalOf(next, this.creditLimit.currency).greaterThan(this.creditLimit)) {
+      throw new DomainError('El total supera el límite de crédito del cliente')
+    }
+    this.lines = next // solo se asigna si TODAS las reglas pasaron
+  }
+
+  removeLine(sku: Sku): void {
+    this.assertDraft()
+    this.lines = this.lines.filter((l) => l.sku !== sku)
+  }
+
+  confirm(): void {
+    this.assertDraft()
+    if (this.lines.length === 0) throw new DomainError('No se puede confirmar un pedido vacío')
+    this.status = 'CONFIRMED'
+    this.events.push({ type: 'OrderConfirmed', orderId: this.id, customerId: this.customerId, totalCents: this.total().cents, lines: this.lines.map((l) => ({ sku: l.sku, quantity: l.quantity })) })
+  }
+
+  cancel(reason: string): void {
+    if (this.status === 'CANCELLED') return // idempotente
+    this.status = 'CANCELLED'
+    this.events.push({ type: 'OrderCancelled', orderId: this.id, reason })
+  }
+
+  // ── Consultas ──
+
+  total(): Money {
+    return totalOf(this.lines, this.creditLimit.currency)
+  }
+  get currentStatus(): Status {
+    return this.status
+  }
+  get orderLines(): readonly OrderLine[] {
+    return this.lines // readonly: el exterior no puede hacer push
+  }
+
+  /** El repositorio publica los eventos después de guardar. */
+  pullEvents(): OrderEvent[] {
+    const out = this.events
+    this.events = []
+    return out
+  }
+
+  private assertDraft() {
+    if (this.status !== 'DRAFT') throw new DomainError(`Un pedido ${this.status} no se puede modificar`)
+  }
+
+  // ── Factories ──
+
+  static draft(id: OrderId, customerId: CustomerId, creditLimit: Money): Order {
+    return new Order(id, customerId, [], 'DRAFT', creditLimit, 0)
+  }
+
+  /** Reconstruye desde persistencia sin re-ejecutar reglas ni emitir eventos. */
+  static reconstitute(s: { id: OrderId; customerId: CustomerId; lines: OrderLine[]; status: Status; creditLimit: Money; version: number }): Order {
+    return new Order(s.id, s.customerId, s.lines, s.status, s.creditLimit, s.version)
+  }
+}
+
+function totalOf(lines: readonly OrderLine[], currency: Money['currency']): Money {
+  return lines.reduce((sum, l) => sum.add(l.unitPrice.times(l.quantity)), Money.zero(currency))
+}
+```
+
+Fíjate en las líneas resaltadas de `addLine`: el nuevo estado se calcula aparte (`next`) y solo se asigna cuando todas las reglas pasaron. Si una regla falla a la mitad, el agregado queda exactamente como estaba. Y `orderLines` devuelve un arreglo `readonly`: el compilador impide el `push` desde afuera.
+
+### Las cuatro reglas de Vaughn Vernon
+
+En su serie *Effective Aggregate Design* (2011) y luego en *Implementing Domain-Driven Design*, Vaughn Vernon propone cuatro reglas que siguen siendo la mejor guía para diseñar agregados:
+
+1. **Modela invariantes verdaderas dentro de fronteras de consistencia.** Un agregado existe para proteger reglas que deben cumplirse de inmediato. Si no hay invariante que proteja, no necesitas agruparlos.
+2. **Diseña agregados pequeños.** Un agregado grande se carga entero en memoria, bloquea más en la base y genera conflictos de concurrencia. Lo típico es una raíz y unos pocos value objects.
+3. **Referencia otros agregados por identidad.** `Order` guarda `customerId`, no un objeto `Customer`. Así nadie puede modificar el cliente a través del pedido, y cada agregado se carga y se guarda por separado.
+4. **Usa consistencia eventual fuera de la frontera.** Si confirmar un pedido debe reservar stock, eso es otro agregado (`StockItem`) y otra transacción, coordinada con un evento de dominio.
+
+La regla práctica derivada: **una transacción modifica un solo agregado**. Si sientes que necesitas cambiar dos agregados atómicamente, o tus fronteras están mal o la regla en realidad tolera consistencia eventual (pregúntale al negocio: casi siempre la tolera).
+
+<Callout type="example" title="Dimensionar un agregado">
+
+¿Las líneas van dentro de `Order`? Sí: "máximo 3 productos" y "total bajo el límite" son invariantes que involucran todas las líneas a la vez. ¿Los pedidos van dentro de `Customer`? No: ninguna regla obliga a verificar todos los pedidos de un cliente en la misma transacción, y cargar diez mil pedidos para cambiar un correo sería absurdo. ¿El stock va dentro de `Order`? No: varios pedidos compiten por el mismo stock, y meterlo adentro haría que cada pedido bloquee el inventario completo.
+
+</Callout>
+
+<Quiz
+  question="Un compañero propone que el agregado Customer contenga la lista completa de sus Orders, 'para poder validar que un cliente no tenga más de 3 pedidos pendientes'. ¿Qué respondes?"
+  options={[
+    { text: 'Buena idea: así la invariante queda protegida en un solo agregado.', why: 'Protege la regla, pero a un costo enorme: cada cambio de un pedido carga y bloquea todos los pedidos del cliente, y dos pedidos simultáneos del mismo cliente chocan.' },
+    { text: 'Primero confirmaría con el negocio si la regla debe cumplirse de inmediato. Si tolera unos segundos de inconsistencia, la valido al crear el pedido con una consulta y la compenso con un evento; si de verdad es estricta, la modelo con un agregado pequeño dedicado (un contador de pedidos pendientes por cliente).', correct: true, why: 'Exacto. Agregados pequeños, referencia por ID y la pregunta clave: ¿esta invariante es realmente transaccional? Si lo es, un agregado pequeño dedicado la protege sin cargar todos los pedidos.' },
+    { text: 'Que la validación vaya en el controlador HTTP.', why: 'Saca la regla del dominio y no la protege de otros puntos de entrada (jobs, colas).' },
+    { text: 'Que use una transacción que modifique Customer y Order a la vez.', why: 'Rompe la regla de una transacción por agregado y reintroduce el acoplamiento que los agregados evitan.' },
+  ]}
+/>
+
+## Repositorios
+
+Un **repositorio** da la ilusión de una colección de agregados en memoria: lo agregas, lo buscas por ID, lo guardas. Hay **un repositorio por agregado** (por raíz), nunca por tabla: no existe `OrderLineRepository`, porque las líneas solo se tocan a través de `Order`.
+
+```ts title="src/orders/domain/order-repository.ts"
+import type { Order } from './order'
+import type { OrderId } from './ids'
+
+export interface OrderRepository {
+  byId(id: OrderId): Promise<Order | null>
+  /** Guarda el agregado completo. Lanza ConcurrencyError si la versión cambió. */
+  save(order: Order): Promise<void>
+}
+
+export class ConcurrencyError extends Error {}
+```
+
+La interfaz vive en el dominio (es un puerto, en términos hexagonales) y la implementación en infraestructura. Dos detalles de la implementación importan mucho: guardar el agregado **completo** en una transacción y usar **concurrencia optimista** con la versión.
+
+```ts title="src/orders/infra/pg-order-repository.ts (extracto)"
+async save(order: Order): Promise<void> {
+  await this.db.transaction(async (tx) => {
+    const updated = await tx.query(
+      `UPDATE orders SET status = $1, lines = $2, version = version + 1
+       WHERE id = $3 AND version = $4`,
+      [order.currentStatus, serializeLines(order.orderLines), order.id, order.version],
+    )
+    if (updated.rowCount === 0) {
+      const exists = await tx.query('SELECT 1 FROM orders WHERE id = $1', [order.id])
+      if (exists.rowCount) throw new ConcurrencyError(`El pedido ${order.id} cambió mientras lo editabas`)
+      await tx.query('INSERT INTO orders (id, customer_id, status, lines, version) VALUES ($1, $2, $3, $4, 1)', [
+        order.id, order.customerId, order.currentStatus, serializeLines(order.orderLines),
+      ])
+    }
+    // Los eventos se guardan en la misma transacción (outbox), no se publican aquí.
+    for (const event of order.pullEvents()) {
+      await tx.query('INSERT INTO outbox (id, aggregate_id, type, payload) VALUES (gen_random_uuid(), $1, $2, $3)', [
+        order.id, event.type, JSON.stringify(event),
+      ])
+    }
+  })
+}
+```
+
+El `WHERE version = $4` es la concurrencia optimista: si dos personas cargan el mismo pedido y ambas lo modifican, la segunda en guardar recibe un `ConcurrencyError` en lugar de pisar silenciosamente los cambios de la primera. Es otra razón para que los agregados sean pequeños: cuanto más grande, más conflictos.
+
+<Callout type="warn" title="Repositorios que se vuelven DAOs">
+
+Si tu repositorio tiene `findByStatusAndDateRangeAndCustomerTier(...)` y diez métodos más para pantallas distintas, se convirtió en una capa de consultas. Las lecturas para pantallas y reportes van mejor en un **modelo de lectura** separado (consultas SQL directas o proyecciones): es la separación de CQRS. El repositorio es para cargar agregados que vas a modificar.
+
+</Callout>
+
+## Servicios de dominio
+
+A veces una regla de negocio no pertenece naturalmente a ninguna entidad. Calcular el precio final de un pedido con promociones que dependen del pedido, del nivel del cliente y de las campañas activas no es responsabilidad del `Order` (no conoce las campañas) ni del `Customer`. Para eso existe el **servicio de dominio**: una operación del dominio, sin estado, expresada en el lenguaje ubicuo.
+
+```ts title="src/orders/domain/pricing-service.ts"
+import { Money } from './money'
+import type { Order } from './order'
+
+export interface Promotion {
+  appliesTo(order: Order, tier: CustomerTier): boolean
+  discount(order: Order): Money
+}
+export type CustomerTier = 'NEW' | 'REGULAR' | 'GOLD'
+
+export class PricingService {
+  /** Regla de negocio: se aplica solo la mejor promoción, nunca se acumulan. */
+  bestPrice(order: Order, tier: CustomerTier, promotions: Promotion[]): Money {
+    const total = order.total()
+    const best = promotions
+      .filter((p) => p.appliesTo(order, tier))
+      .map((p) => p.discount(order))
+      .reduce((max, d) => (d.greaterThan(max) ? d : max), Money.zero(total.currency))
+    return Money.of(Math.max(0, total.cents - best.cents), total.currency)
+  }
+}
+```
+
+No lo confundas con un **servicio de aplicación** (el caso de uso). El servicio de aplicación orquesta: carga agregados del repositorio, llama al dominio, guarda, maneja transacciones. No contiene reglas de negocio. El servicio de dominio contiene reglas y no sabe nada de repositorios ni transacciones.
+
+<Callout type="tip" title="Señal de alerta">
+
+Si la mayoría de tu lógica vive en servicios y tus entidades solo tienen *getters* y *setters*, tienes un modelo de dominio anémico. Los servicios de dominio son la excepción para reglas que cruzan entidades, no el lugar por defecto para toda la lógica.
+
+</Callout>
+
+## Eventos de dominio
+
+Un **evento de dominio** registra algo que pasó y que le importa al negocio: `OrderConfirmed`, `PaymentAuthorized`, `StockReserved`. Se nombran en pasado, son inmutables y llevan los datos necesarios para que otros reaccionen.
+
+```ts title="src/orders/domain/events.ts"
+import type { CustomerId, OrderId, Sku } from './ids'
+
+export type OrderEvent =
+  | { type: 'OrderConfirmed'; orderId: OrderId; customerId: CustomerId; totalCents: number; lines: { sku: Sku; quantity: number }[] }
+  | { type: 'OrderCancelled'; orderId: OrderId; reason: string }
+```
+
+Los eventos son la herramienta para la regla 4 de Vernon. Confirmar el pedido no reserva stock directamente; emite `OrderConfirmed`, y un *handler* en el contexto de Inventario reacciona con su propia transacción sobre su propio agregado.
+
+El patrón que usamos arriba (el agregado **registra** eventos en una lista y el repositorio los **guarda** en la misma transacción que el agregado) evita el problema clásico de publicar un evento y que después falle el guardado, o al revés. Esa tabla `outbox` se publica luego al broker; el tema de transacciones distribuidas lo cubre a fondo.
+
+```ts title="src/orders/application/confirm-order.ts"
+export class ConfirmOrder {
+  constructor(private readonly orders: OrderRepository) {}
+
+  async execute(orderId: OrderId): Promise<void> {
+    const order = await this.orders.byId(orderId)
+    if (!order) throw new DomainError('Pedido inexistente')
+    order.confirm()               // reglas + registra OrderConfirmed
+    await this.orders.save(order) // estado + evento en una sola transacción
+  }
+}
+```
+
+<Quiz
+  question="Al confirmar un pedido hay que (1) cambiar su estado, (2) reservar stock en el agregado StockItem y (3) enviar un correo. ¿Cómo lo diseñas con DDD táctico?"
+  options={[
+    { text: 'Una transacción que modifica Order y StockItem y envía el correo antes del commit.', why: 'Rompe "una transacción por agregado", bloquea stock compartido y, si el commit falla, el correo ya salió.' },
+    { text: 'Order.confirm() cambia el estado y registra OrderConfirmed; se guarda junto con el evento. Handlers separados reservan stock (otra transacción) y envían el correo, de forma idempotente.', correct: true, why: 'Exacto. El agregado protege sus invariantes, los demás efectos se coordinan con un evento y consistencia eventual, y los handlers idempotentes toleran reintentos.' },
+    { text: 'Order llama a stockRepository.reserve() dentro de confirm().', why: 'El agregado dependería de un repositorio de otro agregado; el dominio no debe hacer I/O ni modificar otros agregados.' },
+    { text: 'Meter StockItem dentro del agregado Order para que todo sea atómico.', why: 'El stock es compartido por muchos pedidos; dentro de Order provocaría conflictos de concurrencia constantes.' },
+  ]}
+/>
+
+## Factories
+
+Crear un agregado válido puede ser complejo. Una **factory** encapsula esa creación. En la forma más simple es un método estático en la raíz, como `Order.draft()` arriba, que deja claro que un pedido nace en borrador y sin líneas.
+
+Observa también `Order.reconstitute()`. Es una distinción importante: **crear** un pedido nuevo aplica reglas y puede emitir eventos; **reconstituir** uno desde la base solo rehidrata un estado que ya fue válido cuando se guardó. Mezclarlos produce eventos duplicados o validaciones que fallan con datos históricos.
+
+Cuando la creación necesita información de otros lugares, una factory separada lo deja explícito:
+
+```ts title="src/orders/domain/order-factory.ts"
+export class OrderFactory {
+  constructor(private readonly ids: () => OrderId) {}
+
+  /** Convierte un carrito (otro contexto) en un pedido de este contexto. */
+  fromCart(cart: { customerId: CustomerId; items: { sku: string; qty: number; priceCents: number }[] }, creditLimit: Money): Order {
+    const order = Order.draft(this.ids(), cart.customerId, creditLimit)
+    for (const item of cart.items) {
+      order.addLine(Sku(item.sku), item.qty, Money.of(item.priceCents, creditLimit.currency))
+    }
+    return order // si alguna línea viola una regla, addLine ya lanzó
+  }
+}
+```
+
+Fíjate que la factory construye el pedido **a través de sus propios comandos**: no hay atajo que se salte las invariantes.
+
+## Cómo encaja todo
+
+| Pieza | Responsabilidad | Pregunta para identificarla |
+| --- | --- | --- |
+| Value object | Concepto sin identidad, inmutable y auto-validado | ¿Solo me importa cómo es? |
+| Entidad | Concepto con identidad y ciclo de vida | ¿Necesito saber cuál es a lo largo del tiempo? |
+| Agregado | Frontera de consistencia con una raíz | ¿Qué reglas deben cumplirse siempre, en la misma transacción? |
+| Repositorio | Cargar y guardar agregados completos | ¿Cómo obtengo este agregado para modificarlo? |
+| Servicio de dominio | Regla que cruza varias entidades | ¿A quién pertenece esta regla si no es a una sola entidad? |
+| Evento de dominio | Hecho del pasado que otros necesitan saber | ¿Quién más tiene que reaccionar a esto? |
+| Factory | Crear agregados válidos | ¿Crear esto requiere más que un constructor? |
+
+<Takeaways>
+
+- Usa DDD táctico en subdominios core con reglas ricas; en CRUD es costo sin beneficio.
+- Prefiere value objects (inmutables, igualdad por valor, auto-validados) sobre primitivos y sobre entidades.
+- Un agregado es una frontera de consistencia: todos los cambios pasan por la raíz y las invariantes se cumplen al final de cada transacción.
+- Reglas de Vernon: invariantes verdaderas, agregados pequeños, referencias por ID y consistencia eventual entre agregados; una transacción, un agregado.
+- Un repositorio por raíz, que guarda el agregado completo con concurrencia optimista; las lecturas para pantallas van a modelos de lectura.
+- Los eventos de dominio coordinan agregados y contextos; guárdalos en la misma transacción que el agregado (outbox).
+- Las factories crean pasando por los comandos del agregado; reconstituir desde la base es otra operación.
+
+</Takeaways>
+
+## Fuentes y lecturas
+
+- Eric Evans, *Domain-Driven Design* (2003), parte II, y la [DDD Reference](https://www.domainlanguage.com/ddd/reference/).
+- Vaughn Vernon, *Effective Aggregate Design*: [parte I](https://www.dddcommunity.org/wp-content/uploads/files/pdf_articles/Vernon_2011_1.pdf), [parte II](https://www.dddcommunity.org/wp-content/uploads/files/pdf_articles/Vernon_2011_2.pdf), [parte III](https://www.dddcommunity.org/wp-content/uploads/files/pdf_articles/Vernon_2011_3.pdf) (2011).
+- Vaughn Vernon, *Implementing Domain-Driven Design* (Addison-Wesley, 2013).
+- Martin Fowler, [*DDD Aggregate*](https://martinfowler.com/bliki/DDD_Aggregate.html), [*Value Object*](https://martinfowler.com/bliki/ValueObject.html) y [*Anemic Domain Model*](https://martinfowler.com/bliki/AnemicDomainModel.html).
+- Vlad Khononov, *Learning Domain-Driven Design* (O'Reilly, 2021): patrones de lógica de negocio (transaction script, active record, domain model).
+- Kamil Grzybek, [modular-monolith-with-ddd](https://github.com/kgrzybek/modular-monolith-with-ddd): agregados, eventos de dominio y outbox en un proyecto completo.

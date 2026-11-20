@@ -1,0 +1,499 @@
+import { QuestionDeck } from '../../components/widgets/entrevistas/QuestionDeck'
+import { HashTableLab } from '../../components/widgets/entrevistas/HashTableLab'
+import { DynamicArrayGrowth } from '../../components/widgets/entrevistas/DynamicArrayGrowth'
+
+Hay una parte de la entrevista técnica en la que nadie te pide código. El entrevistador pregunta "¿qué pasa por dentro cuando haces `map.put(key, value)` en un `HashMap`?" o "¿por qué una base de datos usa un árbol B y no una tabla hash?", y espera que expliques el mecanismo en un minuto, con sus costos. Estas preguntas aparecen en screenings telefónicos, en la conversación que sigue a un ejercicio de live coding ("¿por qué usaste un `Set` acá?") y, con más profundidad, en entrevistas para roles senior.
+
+Lo que separa una respuesta buena de una mediocre no es recitar la tabla de complejidades. Es explicar **por qué** cada operación cuesta lo que cuesta, y **cuándo** ese costo teórico no es lo que importa en la práctica. Este tema recorre las estructuras que más se preguntan con ese enfoque: qué pasa en memoria, qué se paga, y cómo decirlo bien.
+
+<Sketch
+  width={640}
+  height={320}
+  caption="Una tabla hash por dentro, con las cuentas reales de HashMap: hashCode(), una mezcla de bits (h ^ (h >>> 16)) y una máscara con capacidad − 1. Dos llaves distintas pueden caer en el mismo bucket."
+  items={[
+    { type: 'text', x: 24, y: 40, text: 'h = "luis".hashCode()', size: 20, font: 'code' },
+    { type: 'highlight', x: 20, y: 54, w: 330, h: 26 },
+    { type: 'text', x: 24, y: 74, text: 'bucket = mezcla(h) & 7 = 1', size: 20, font: 'code', tone: 'line', with: true },
+    { type: 'cells', x: 60, y: 124, values: ['', '', '', '', '', '', '', ''], size: 52, index: true, states: [null, 'line', null, null, null, null, null, null] },
+    { type: 'arrow', from: [166, 84], to: [148, 106], tone: 'line' },
+    { type: 'arrow', from: [138, 178], to: [138, 206] },
+    { type: 'box', x: 98, y: 208, w: 80, h: 36, label: 'luis', font: 'code', size: 18 },
+    { type: 'arrow', from: [178, 226], to: [226, 226] },
+    { type: 'box', x: 228, y: 208, w: 120, h: 36, label: 'pedido-17', font: 'code', size: 18, tone: 'bad' },
+    { type: 'text', x: 364, y: 232, text: 'misma posición: colisión', size: 19, tone: 'bad' },
+    { type: 'text', x: 24, y: 298, text: 'más de 0,75 llaves por bucket → el doble de buckets', size: 19, tone: 'pencil' },
+  ]}
+/>
+
+<Callout type="interview">
+
+En las preguntas teóricas, el entrevistador evalúa si entiendes el mecanismo o solo memorizaste el resultado. Una señal clara: cuando dices "O(1)", ¿agregas "en promedio" o "amortizado" cuando corresponde, y sabes explicar cuál es el peor caso y por qué? La otra: ¿conectas la teoría con decisiones reales, como por qué tu servicio usa un `TreeMap` o por qué un índice acelera esa consulta?
+
+</Callout>
+
+## El arreglo dinámico
+
+Un arreglo guarda sus elementos **contiguos en memoria**. Por eso el acceso por índice es O(1): la dirección del elemento `i` es `inicio + i × tamaño_del_elemento`, una multiplicación y una suma, sin recorrer nada.
+
+El problema es que un bloque contiguo no puede crecer en el lugar: lo que está justo después en memoria puede estar ocupado. Un **arreglo dinámico** (la `list` de Python, el `ArrayList` de Java, el `Array` de JavaScript, el `std::vector` de C++, los slices de Go) resuelve esto reservando más espacio del que usa. Cuando se llena, pide un bloque más grande, **copia todo** y libera el viejo.
+
+¿Entonces `append` es O(n)? A veces sí: el append que encuentra el arreglo lleno copia n elementos. Pero si la capacidad crece **en proporción** (por ejemplo, se duplica), esas copias caras son cada vez más raras. Con capacidades 1, 2, 4, 8… hasta n, el total de copias es 1 + 2 + 4 + … + n/2, que es menor que n. Repartido entre los n appends, cada uno paga como mucho 1 por escribir más 2 por las copias: **O(1) amortizado**.
+
+Una forma de explicarlo que funciona bien en voz alta: cada append "paga" tres monedas. Una se gasta en escribirse. Las otras dos se ahorran: una para copiarse a sí mismo en el próximo crecimiento y otra para copiar a un elemento viejo que ya gastó sus ahorros. Cuando llega el crecimiento, la caja alcanza justo.
+
+Mira qué pasa con distintas políticas de crecimiento. Con **+4 fijo**, el promedio no se estabiliza: sube con cada crecimiento, porque las copias suman 4 + 8 + 12 + …, que es cuadrático.
+
+<DynamicArrayGrowth />
+
+Detalles que suman en una entrevista:
+
+- **Amortizado no es promedio.** "Promedio" habla de entradas aleatorias; "amortizado" garantiza el costo total de **cualquier** secuencia de operaciones. Un append puntual puede tardar O(n), y eso importa en sistemas sensibles a la latencia: si tu bucle de juego o tu servicio de baja latencia no tolera un pico, reserva la capacidad por adelantado (`reserve` en C++, `new ArrayList<>(n)` en Java, `make([]T, 0, n)` en Go).
+- **El factor real varía.** Java `ArrayList` crece 1,5 veces; CPython sobreasigna alrededor de un 12,5 % más una constante. Cualquier factor mayor que 1 da O(1) amortizado; factores más chicos desperdician menos memoria y copian más seguido.
+- **Insertar o borrar en el medio es O(n)**, porque hay que desplazar todo lo que sigue. `list.add(0, x)` en un `ArrayList` y `list.insert(0, x)` en Python son O(n); si necesitas insertar por los dos extremos, usa una deque (`ArrayDeque` en Java, `collections.deque` en Python).
+
+### `ArrayList` en Java
+
+Java es el lenguaje por defecto de estos apuntes, así que conviene saber cómo lo hace `ArrayList` en concreto (todo esto está en el código fuente de OpenJDK):
+
+- `new ArrayList<>()` no reserva nada: el arreglo interno arranca vacío y el primer `add` reserva **10** lugares.
+- Cuando se llena, la nueva capacidad es `vieja + (vieja >> 1)`, es decir **×1,5**: 10, 15, 22, 33, 49, 73… Cada crecimiento es un `Arrays.copyOf` de todo el contenido.
+- Si sabes cuántos elementos vienen, `new ArrayList<>(n)` o `ensureCapacity(n)` evitan todas esas copias, y `trimToSize()` devuelve la memoria sobrante.
+- Un `ArrayList<Integer>` no guarda los números contiguos: guarda **referencias** a objetos `Integer`, cada uno en otro lugar del heap. Para millones de números, un `int[]` ocupa varias veces menos memoria y se recorre mucho más rápido.
+
+```java title="Java"
+List<Integer> ids = new ArrayList<>(List.of(10, 20, 30, 40, 50));
+ids.remove(1); // quita el índice 1 (el 20), no el valor 1
+ids.remove(Integer.valueOf(40)); // quita el valor 40: queda [10, 30, 50]
+// for (Integer id : ids) if (id == 10) ids.remove(id); // ConcurrentModificationException
+ids.removeIf(id -> id == 10); // así sí: queda [30, 50]
+```
+
+<Callout type="tip" title="En Java">
+
+En una `List<Integer>`, `remove(1)` borra **la posición** 1, no el valor 1: el `int` elige la sobrecarga `remove(int index)`. Para borrar el valor, `remove(Integer.valueOf(1))`. Y no borres dentro de un for-each: el iterador detecta el cambio y lanza `ConcurrentModificationException` (usa `removeIf` o `iterator.remove()`).
+
+</Callout>
+
+## La lista enlazada (y por qué rara vez gana)
+
+Una lista enlazada guarda cada elemento en un nodo separado, con un puntero al siguiente (y al anterior, si es doblemente enlazada). La teoría dice que gana en inserción y borrado: O(1) contra O(n) del arreglo. La práctica es más matizada, por dos razones.
+
+**Primera: el O(1) es "si ya tienes el nodo".** Para insertar en la posición 5.000, primero tienes que llegar ahí, y eso es O(n). En el arreglo también es O(n), pero por otra razón (desplazar), y desplazar memoria contigua es muchísimo más rápido que perseguir punteros.
+
+**Segunda: la localidad de caché.** El procesador no lee bytes sueltos de la RAM: trae bloques (líneas de caché, típicamente de 64 bytes) y además predice qué vas a leer después. Recorrer un arreglo es el mejor caso posible: cada línea trae varios elementos y el siguiente bloque ya viene en camino. Recorrer una lista enlazada es el peor: cada nodo puede estar en cualquier lado del heap, cada salto es un posible fallo de caché, y el prefetcher no puede adivinar a dónde apunta el siguiente puntero. A eso súmale el costo de memoria: cada nodo carga uno o dos punteros y, en lenguajes como Java o Python, el encabezado de un objeto.
+
+<Sketch
+  width={640}
+  height={350}
+  caption="Por qué la lista enlazada pierde en la práctica: el arreglo está contiguo y cada lectura de memoria trae varios vecinos; los nodos de una lista están dispersos y cada salto puede ser un fallo de caché."
+  items={[
+    { type: 'text', x: 24, y: 32, text: 'arreglo: todo contiguo', size: 20, tone: 'line' },
+    { type: 'cells', x: 40, y: 52, values: [12, 7, 31, 5, 9, 18], size: 44 },
+    { type: 'underline', x: 40, y: 104, w: 176, tone: 'ok' },
+    { type: 'text', x: 40, y: 130, text: 'una lectura de memoria trae varios vecinos', size: 18, tone: 'pencil', with: true },
+    { type: 'text', x: 24, y: 172, text: 'lista enlazada: cada nodo en cualquier lado', size: 20, tone: 'bad' },
+    { type: 'box', x: 40, y: 192, w: 56, h: 38, label: '12', font: 'code', size: 18 },
+    { type: 'arrow', from: [96, 211], to: [498, 215], bend: -12, tone: 'bad' },
+    { type: 'box', x: 500, y: 196, w: 56, h: 38, label: '7', font: 'code', size: 18 },
+    { type: 'arrow', from: [512, 236], to: [360, 290], bend: 14, tone: 'bad' },
+    { type: 'box', x: 302, y: 276, w: 56, h: 38, label: '31', font: 'code', size: 18 },
+    { type: 'arrow', from: [300, 296], to: [178, 298], bend: -10, tone: 'bad' },
+    { type: 'box', x: 120, y: 280, w: 56, h: 38, label: '5', font: 'code', size: 18 },
+    { type: 'text', x: 24, y: 342, text: 'cada salto: un posible fallo de caché', size: 18, tone: 'pencil', with: true },
+  ]}
+/>
+
+Resultado: para la gran mayoría de los usos, un arreglo dinámico le gana a una lista enlazada incluso en operaciones donde la teoría dice lo contrario. Bjarne Stroustrup lo mostró con un experimento conocido en su charla de GoingNative 2012: insertar números en orden en una secuencia (buscando la posición linealmente) y después borrarlos fue mucho más rápido con `vector` que con `list`, aunque la lista "debería" ganar en inserciones.
+
+**Dónde sí gana una lista enlazada:**
+
+- Cuando **ya tienes el puntero al nodo** y necesitas sacarlo o moverlo en O(1). El ejemplo canónico es la [caché LRU](/casos/listas-enlazadas): un diccionario apunta a cada nodo y la lista doble mantiene el orden de uso. En Java, `LinkedHashMap` con orden de acceso y `removeEldestEntry` ya hace exactamente eso.
+- Cuando necesitas que las referencias a los elementos **no se invaliden** al insertar (en un arreglo, crecer mueve todo).
+- Colas concurrentes sin locks y listas intrusivas en sistemas operativos.
+
+En Java, `LinkedList` implementa `List` y `Deque`, pero casi nunca es la mejor opción: para pilas y colas, la documentación de `ArrayDeque` (un arreglo circular) dice que probablemente sea más rápida que `Stack` como pila y que `LinkedList` como cola. `collections.deque` de Python es un caso intermedio interesante: una lista doblemente enlazada de **bloques** de elementos, que recupera parte de la localidad de caché y da O(1) en ambos extremos.
+
+<Quiz
+  question="Tienes que guardar 10 millones de lecturas de un sensor que llegan en orden y después recorrerlas para calcular promedios. ¿Qué estructura usas?"
+  options={[
+    { text: 'Una lista enlazada, porque insertar al final es O(1) sin copias.', why: 'Append en un arreglo dinámico también es O(1) amortizado, y el recorrido posterior sobre una lista enlazada sufre un fallo de caché por nodo, además de gastar memoria en punteros.' },
+    { text: 'Un arreglo dinámico (o uno de tamaño fijo si conoces el total).', correct: true, why: 'Append amortizado O(1), memoria contigua y un recorrido que el procesador puede precargar. Si sabes cuántas lecturas llegan, reservar la capacidad elimina hasta las copias.' },
+    { text: 'Una tabla hash con el timestamp como llave.', why: 'Agrega hashing y memoria extra sin necesidad: no hay búsquedas por llave, solo appends y un recorrido en orden, que la tabla hash además no garantiza.' },
+  ]}
+/>
+
+## La tabla hash por dentro
+
+Es la estructura más preguntada, porque está detrás de `dict`, `HashMap`, `Map`, `set` y de la mitad de las soluciones de live coding. Conviene saber contarla en cinco piezas.
+
+**1. La función hash.** Convierte la llave en un número. Tiene que ser **determinista** (la misma llave da siempre el mismo número), **rápida** y **repartir bien** (llaves parecidas deberían caer lejos). Ese número se reduce a una posición del arreglo de buckets: `hash(llave) % capacidad`, o con una máscara de bits si la capacidad es potencia de 2, que es lo que hace `HashMap`.
+
+**2. Las colisiones.** Si hay más llaves posibles que buckets (siempre las hay), dos llaves distintas van a caer en el mismo bucket. No es un error: es parte del diseño. Hay dos familias de soluciones:
+
+- **Encadenamiento** (*separate chaining*): cada bucket guarda una lista de pares. Si choca, se agrega a la lista. Es lo que hace `HashMap` de Java. Es simple y tolera factores de carga altos, pero cada bucket es una estructura aparte (otra vez, punteros y fallos de caché).
+- **Direccionamiento abierto** (*open addressing*): todo vive en el mismo arreglo. Si el bucket está ocupado, se prueba otro siguiendo una secuencia: el siguiente (sondeo lineal), saltos crecientes (cuadrático) o un segundo hash. Es lo que hace el `dict` de CPython, con una secuencia de sondeo que mezcla bits altos del hash. Aprovecha mejor la caché, pero se degrada rápido cuando la tabla se llena, y **borrar** es delicado: no puedes vaciar la celda, porque cortarías la cadena de sondeo de otras llaves; se marca con una "lápida" (*tombstone*).
+
+**3. El factor de carga.** `α = llaves / buckets`. Mide qué tan llena está la tabla. Con encadenamiento, `α` es el largo promedio de las cadenas; con direccionamiento abierto, determina cuántos sondeos esperas. Java `HashMap` crece cuando `α` pasa de 0,75; CPython, cuando el `dict` llega a dos tercios.
+
+**4. El rehash.** Al pasar el umbral, se reserva un arreglo más grande (típicamente el doble) y **cada llave se vuelve a insertar**, porque `hash % capacidad` cambia con la capacidad. Es O(n), pero por el mismo argumento del arreglo dinámico, el costo amortizado por inserción sigue siendo O(1).
+
+**5. El peor caso.** Si todas las llaves caen en el mismo bucket, buscar es recorrer una lista: **O(n)**. Pasa con una función hash mala o con un atacante que elige llaves que chocan a propósito (*hash flooding*). Por eso Python aleatoriza el hash de cadenas en cada proceso y usa SipHash, y Java 8 convierte en árbol rojo-negro los buckets que crecen demasiado, para que el peor caso dentro de un bucket sea O(log n).
+
+Prueba el laboratorio: inserta hasta pasar el umbral para ver el rehash, cambia a sondeo lineal para ver cómo se forman racimos, y elige la función mala para ver cómo todo cae en pocos buckets.
+
+<HashTableLab />
+
+### `HashMap` de Java, en concreto
+
+Las cinco piezas, con los números reales de `HashMap` (verificables en su código fuente):
+
+- **Capacidad inicial 16**, siempre potencia de 2. La tabla no se crea hasta el primer `put`.
+- **Índice**: `(h ^ (h >>> 16)) & (capacidad − 1)`, con `h = key.hashCode()`. La máscara solo mira los bits bajos, así que antes mezcla los 16 bits altos con los bajos: dos hashes que solo difieren arriba no terminan siempre en el mismo bucket.
+- **Factor de carga 0,75**: con 16 buckets, el `put` número 13 duplica la tabla a 32. En el resize, cada llave queda en su mismo índice o en `índice + capacidad vieja`, según un bit más del hash; no hace falta recalcular `hashCode()`.
+- **Colisiones por encadenamiento**, y desde Java 8 con una defensa: cuando un bucket pasa de **8** nodos y la tabla tiene al menos **64** buckets, ese bucket se convierte en un **árbol rojo-negro**, y buscar ahí cuesta O(log n) en vez de O(n). Si la tabla es más chica, en vez de eso se duplica. Si en un resize el bucket baja a 6 nodos o menos, vuelve a ser una lista.
+- Acepta **una** llave `null` (va al bucket 0). El orden de iteración no está definido y puede cambiar después de un resize: si necesitas el orden de inserción, `LinkedHashMap`; si necesitas orden por llave, `TreeMap`.
+
+<CodeTabs>
+
+```java title="Java"
+// Si sabes cuántos elementos vas a guardar, resérvalo de entrada: sin copias ni rehash
+List<String> ids = new ArrayList<>(10_000);
+Map<String, Integer> stock = HashMap.newHashMap(10_000); // Java 19+: calcula la capacidad
+Map<String, Integer> antes = new HashMap<>(16_384); // a mano: capacidad > 10.000 / 0,75
+```
+
+```python title="Python"
+# Python no expone la capacidad: list y dict crecen solos.
+# Lo más parecido es construir de una vez en vez de agregar de a uno:
+skus = [f"SKU-{i}" for i in range(10_000)]
+ids = [None] * 10_000
+stock = dict.fromkeys(skus, 0)
+```
+
+</CodeTabs>
+
+### Por qué las llaves deben ser inmutables
+
+La posición de una llave se calcula **una vez**, al insertarla. Si después la llave cambia, su hash cambia, pero la entrada sigue en el bucket viejo. Al buscarla, la tabla calcula el hash nuevo, va a otro bucket y no la encuentra. La entrada queda perdida: ocupa memoria, no se puede consultar ni borrar.
+
+Por eso Python no deja usar una `list` como llave (`TypeError: unhashable type: 'list'`) pero sí una `tuple`. En Java nada te lo impide: si usas como llave un objeto con `hashCode()` basado en campos mutables y los cambias, el bug es silencioso. La regla, en ambos lenguajes: **si dos objetos son iguales según `equals`/`__eq__`, deben tener el mismo hash**, y ese hash no puede cambiar mientras el objeto esté dentro de una tabla. En Java, si sobrescribes `equals`, sobrescribe también `hashCode` con los mismos campos; un `record` genera los dos.
+
+<CodeTabs>
+
+```java title="Java"
+record Pedido(String pais, int numero) {} // inmutable: equals y hashCode por valor
+
+void ejemplo() {
+    Map<Pedido, String> estado = new HashMap<>();
+    estado.put(new Pedido("MX", 1042), "en camino");
+    System.out.println(estado.get(new Pedido("MX", 1042))); // en camino
+
+    List<Integer> clave = new ArrayList<>(List.of(1, 2));
+    Map<List<Integer>, String> roto = new HashMap<>();
+    roto.put(clave, "x");
+    clave.add(3); // la llave cambia, y su hashCode también
+    System.out.println(roto.get(clave)); // null: busca en otro bucket
+    System.out.println(roto.containsKey(List.of(1, 2))); // false: mismo hash, pero equals ya no
+    System.out.println(roto.size()); // 1: la entrada sigue ahí, inalcanzable
+}
+```
+
+```python title="Python"
+pedido = ["MX", 1042]
+indice = {}
+indice[tuple(pedido)] = "en camino"   # bien: la tupla no puede cambiar
+indice[pedido] = "en camino"          # TypeError: unhashable type: 'list'
+```
+
+</CodeTabs>
+
+<Quiz
+  question="En Java, usas un objeto Usuario como llave de un HashMap. Su hashCode() usa el email. Después de insertarlo, el usuario cambia su email y map.get(usuario) devuelve null. ¿Por qué?"
+  options={[
+    { text: 'Porque HashMap copia la llave al insertarla y compara contra la copia vieja.', why: 'HashMap guarda una referencia al mismo objeto, no una copia. El problema es dónde lo guardó.' },
+    { text: 'Porque el nuevo hashCode() lleva a otro bucket, y la entrada sigue en el bucket que correspondía al email viejo.', correct: true, why: 'El bucket se eligió con el hash del momento de la inserción. Con el hash nuevo, get mira en otro lado. La entrada queda inalcanzable, y ni siquiera un resize la arregla: HashMap guarda el hash calculado al insertar y redistribuye usando ese valor viejo.' },
+    { text: 'Porque HashMap no permite llaves que sean objetos, solo String o números.', why: 'Cualquier objeto puede ser llave; lo que hace falta es que equals y hashCode sean coherentes y estables.' },
+  ]}
+/>
+
+## Árboles balanceados y árboles B
+
+Una tabla hash es rapidísima para "¿está esta llave?", pero **no sabe nada del orden**. No puede responder "dame el siguiente pedido después del 1042", "todas las ventas entre el 1 y el 15 de marzo" ni "el menor precio mayor que 100". Para eso están los **árboles de búsqueda balanceados** (rojo-negro, AVL): mantienen las llaves ordenadas y garantizan altura O(log n), así que buscar, insertar, borrar, encontrar el mínimo, el sucesor o un rango cuestan O(log n) (más k para devolver k resultados).
+
+`TreeMap` y `TreeSet` en Java y `std::map` en C++ son árboles rojo-negro. Python no trae uno en la biblioteca estándar; se usa `bisect` sobre una lista ordenada (inserción O(n)) o la librería `sortedcontainers`.
+
+**Hash o árbol.** Si solo necesitas pertenencia o búsqueda exacta, hash: O(1) promedio contra O(log n). Si necesitas orden, rangos o "el más cercano", árbol. Y si necesitas el peor caso garantizado, árbol también: no tiene la degradación a O(n) de un hash con colisiones.
+
+### Por qué las bases de datos usan árboles B+
+
+Un árbol binario de búsqueda con mil millones de llaves tiene unos 30 niveles. En memoria eso está bien; **en disco es un desastre**, porque cada nivel puede ser una lectura de página, y leer del disco cuesta órdenes de magnitud más que comparar en memoria.
+
+<Sketch
+  width={640}
+  height={300}
+  caption="El mismo millar de millones de llaves en dos formas: un árbol binario necesita unos 30 niveles; un árbol B+ con cientos de llaves por nodo, 3 o 4, y sus hojas enlazadas sirven para recorrer rangos."
+  items={[
+    { type: 'text', x: 24, y: 32, text: 'binario: alto y flaco', size: 20, tone: 'bad' },
+    { type: 'path', d: 'M60 70 L100 112 L70 154 L110 196', len: 180, tone: 'muted' },
+    { type: 'circle', x: 60, y: 70, r: 16, fill: true },
+    { type: 'circle', x: 100, y: 112, r: 16, fill: true },
+    { type: 'circle', x: 70, y: 154, r: 16, fill: true },
+    { type: 'circle', x: 110, y: 196, r: 16, fill: true },
+    { type: 'brace', x: 250, y1: 54, y2: 250, dir: 1, label: '≈ 30 niveles', tone: 'bad' },
+    { type: 'text', x: 24, y: 286, text: 'mil millones de llaves', size: 18, tone: 'pencil' },
+    { type: 'text', x: 330, y: 32, text: 'árbol B+: bajo y ancho', size: 20, tone: 'ok' },
+    { type: 'box', x: 380, y: 56, w: 220, h: 40, label: '8 · 37 · 90 · …', font: 'code', size: 18 },
+    { type: 'path', d: 'M400 96 L360 140 M490 96 L490 140 M580 96 L600 140', len: 150, tone: 'muted' },
+    { type: 'box', x: 320, y: 140, w: 80, h: 36, label: '…', size: 20 },
+    { type: 'box', x: 450, y: 140, w: 80, h: 36, label: '…', size: 20, with: true },
+    { type: 'box', x: 570, y: 140, w: 60, h: 36, label: '…', size: 20, with: true },
+    { type: 'arrow', from: [402, 158], to: [448, 158], tone: 'line' },
+    { type: 'arrow', from: [532, 158], to: [568, 158], tone: 'line', with: true },
+    { type: 'text', x: 330, y: 210, text: 'hojas enlazadas: rangos', size: 18, tone: 'line' },
+    { type: 'text', x: 330, y: 252, text: ['3 o 4 niveles, cientos', 'de llaves por nodo'], size: 19, tone: 'ok' },
+  ]}
+/>
+
+Un **árbol B** cambia la forma del árbol para minimizar las lecturas: cada nodo ocupa una página completa del disco (8 KB en PostgreSQL, 16 KB por defecto en InnoDB de MySQL) y guarda **cientos de llaves** con sus punteros a hijos. Con un factor de ramificación tan alto, el árbol es bajísimo. Supongamos 500 llaves por nodo: tres niveles alcanzan para 500³ = 125 millones de llaves, y cuatro para 62.500 millones. Además, los niveles superiores son pocos y se quedan en memoria, así que buscar una fila suele costar una o dos lecturas reales de disco.
+
+El **árbol B+**, la variante que usan casi todas las bases relacionales, agrega dos cosas:
+
+- **Los datos (o los punteros a las filas) viven solo en las hojas.** Los nodos internos guardan solo llaves de guía, así que caben más por página y el árbol es todavía más bajo.
+- **Las hojas están enlazadas entre sí** en orden. Una consulta por rango (`WHERE fecha BETWEEN …`, `ORDER BY`, `LIMIT`) baja una vez hasta la primera hoja y después recorre hojas vecinas en secuencia, sin volver a subir.
+
+¿Y por qué no un índice hash? Existen (PostgreSQL los tiene), pero solo sirven para igualdad: no ayudan con rangos, `ORDER BY`, prefijos (`LIKE 'abc%'`) ni con índices compuestos usados por su primera columna. El árbol B+ cubre todos esos casos con un costo casi igual para la búsqueda exacta. Por eso es el tipo de índice por defecto. Hay más sobre índices en [bases de datos](/system-design/bases-de-datos).
+
+## Heap, trie, grafo, set y map
+
+**Heap (montículo binario).** Un árbol binario completo guardado en un arreglo, sin punteros: los hijos de `i` están en `2i + 1` y `2i + 2`, y el padre en `(i − 1) // 2`. Solo garantiza que cada padre es menor (o mayor) que sus hijos, no un orden total. Eso basta para lo que hace: ver el mínimo en O(1), insertar y extraer el mínimo en O(log n), y construirse a partir de n elementos en O(n). **No sirve para buscar** un elemento arbitrario (O(n)). Se usa para colas de prioridad, top-K, planificadores y Dijkstra. En Java es `PriorityQueue`, un min-heap por defecto (para un max-heap, `Collections.reverseOrder()`); en Python, `heapq`. Lo ves en acción en [heaps y top-K](/casos/heaps-y-top-k) y en el problema de las salas de [intervalos](/casos/intervalos-y-greedy).
+
+**Trie (árbol de prefijos).** Cada arista es un carácter y cada camino desde la raíz es un prefijo. Buscar, insertar o preguntar "¿hay palabras que empiecen con…?" cuesta O(L), con L el largo de la palabra, **sin importar cuántas palabras hay**. El costo es la memoria: muchos nodos con pocos hijos. Es la base del [autocompletado](/casos/autocompletado) y del corrector ortográfico; también aparece en tablas de ruteo IP. Si solo necesitas búsquedas exactas, un set de hash es más simple y más compacto.
+
+**Grafo.** Dos representaciones. La **lista de adyacencia** (un diccionario de nodo a lista de vecinos) usa O(V + E) memoria y recorre los vecinos de un nodo en O(grado): es la elección por defecto, porque la mayoría de los grafos reales son dispersos (una red social tiene millones de usuarios, pero cada uno conecta con pocos cientos). La **matriz de adyacencia** usa O(V²) memoria y responde "¿hay arista entre u y v?" en O(1): conviene con grafos densos o chicos. Los recorridos están en [grafos](/casos/grafos).
+
+**Set contra map.** Un set es un map sin valores: guarda solo llaves y responde "¿está?". Por dentro son la misma estructura; en Java, `HashSet` está implementado sobre un `HashMap`. Ambos vienen en sabor hash (`HashSet`/`HashMap`: sin orden, O(1) promedio) y en sabor árbol (`TreeSet`/`TreeMap`: ordenado, O(log n)). En JavaScript, prefiere `Map` y `Set` sobre objetos planos cuando las llaves son dinámicas: aceptan llaves de cualquier tipo, conservan el orden de inserción y no chocan con propiedades heredadas como `constructor`.
+
+## Tabla de complejidades
+
+Todos los costos son de tiempo. "Prom." es caso promedio con una buena función hash; "amort." es costo amortizado.
+
+| Estructura | Acceso por posición | Buscar | Insertar | Borrar | Comentario |
+|---|---|---|---|---|---|
+| Arreglo dinámico (`ArrayList`, `list`) | O(1) | O(n) | O(1) amort. al final; O(n) en medio | O(1) al final; O(n) en medio | contiguo, el mejor para recorrer |
+| Lista enlazada doble (`LinkedList`) | O(n) | O(n) | O(1) con el nodo en mano | O(1) con el nodo en mano | punteros, mala localidad |
+| Pila / cola / deque (`ArrayDeque`, `deque`) | solo extremos | O(n) | O(1) en los extremos | O(1) en los extremos | deque: O(1) en ambos lados |
+| Tabla hash (`HashMap`, `HashSet`, `dict`, `set`) | no aplica | O(1) prom., O(n) peor | O(1) prom. amort. | O(1) prom. | sin orden; llaves inmutables |
+| Árbol balanceado (`TreeMap`, `TreeSet`) | O(log n) por rango | O(log n) | O(log n) | O(log n) | ordenado: mínimo, sucesor, rangos |
+| Árbol B+ (índice) | no aplica | O(log n), base enorme | O(log n) | O(log n) | rango: O(log n + k), pocas lecturas de disco |
+| Heap binario (`PriorityQueue`, `heapq`) | mínimo en O(1) | O(n) | O(log n) | extraer mínimo: O(log n) | construir desde n: O(n) |
+| Trie | no aplica | O(L) | O(L) | O(L) | L = largo de la palabra; prefijos |
+| Grafo, lista de adyacencia | no aplica | arista: O(grado) | arista: O(1) | arista: O(grado) | memoria O(V + E) |
+| Grafo, matriz de adyacencia | no aplica | arista: O(1) | arista: O(1) | arista: O(1) | memoria O(V²) |
+
+Dos advertencias para cuando la recites. La primera: Big-O esconde constantes, y en la práctica la localidad de caché pesa muchísimo (por eso el arreglo le gana a la lista enlazada aunque la tabla diga lo contrario). La segunda: el "O(1)" de la tabla hash supone que calcular el hash es O(1), pero hashear una cadena de largo L cuesta O(L). Con llaves largas, ese costo domina.
+
+## Cómo lo preguntan
+
+Estas aparecen una y otra vez. Las respuestas modelo están pensadas para decirse en 30 a 60 segundos; después, el entrevistador elige por dónde profundizar.
+
+### "¿Qué pasa cuando haces `map.put(key, value)` en un `HashMap`?"
+
+> "Java llama a `key.hashCode()` y mezcla los 16 bits altos con los bajos, porque el índice sale de una máscara: `(capacidad − 1) & hash`, con una capacidad que siempre es potencia de 2. Si ese bucket está vacío, crea un nodo ahí. Si no, recorre la cadena comparando primero el hash y después la llave con `equals`: si la encuentra, reemplaza el valor y devuelve el anterior; si no, agrega un nodo al final. Si esa cadena pasa de 8 nodos y la tabla tiene al menos 64 buckets, la convierte en un árbol rojo-negro. Al final, si el tamaño supera capacidad × 0,75, duplica la tabla y redistribuye. En promedio es O(1), amortizado por los resize; con muchas colisiones, los árboles limitan el daño a O(log n) dentro de un bucket."
+
+Puntos que suman: el contrato entre `equals` y `hashCode` (y qué se rompe si solo sobrescribes uno), que `put` devuelve el valor anterior o `null`, que acepta una llave `null`, y que reservar la capacidad con `HashMap.newHashMap(n)` evita los resize.
+
+### "¿Y en Python, con `dict[key] = v`?"
+
+> "Python calcula `hash(key)`, que para un string ya viene cacheado en el objeto. Con los bits bajos de ese hash elige una posición en la tabla. Si está vacía, guarda ahí el par. Si está ocupada, compara: primero el hash guardado y después la llave con `==`. Si es la misma llave, reemplaza el valor; si es otra, es una colisión, y sigue probando otras posiciones con una secuencia de sondeo que mezcla los bits altos del hash, porque CPython usa direccionamiento abierto. Después de insertar, si la tabla quedó llena en más de dos tercios, reserva una más grande y reinserta todo. En promedio es O(1); el rehash ocasional es O(n) pero amortizado sigue siendo O(1); y el peor caso, si todo colisiona, es O(n)."
+
+Puntos que suman: mencionar que la llave tiene que ser hasheable (y por qué), que desde Python 3.7 el `dict` conserva el orden de inserción porque guarda las entradas en un arreglo compacto aparte de la tabla de índices, y que el hash de strings se aleatoriza por proceso para evitar ataques.
+
+### "¿Arreglo o lista enlazada para X?"
+
+> "Mi respuesta por defecto es el arreglo dinámico, un `ArrayList` en Java: acceso O(1) por índice, append O(1) amortizado y, sobre todo, memoria contigua, que el procesador recorre mucho más rápido que una cadena de punteros. Elegiría una lista enlazada solo si necesito insertar o sacar elementos en el medio **teniendo ya la referencia al nodo**, como en una caché LRU, o si necesito que las referencias a los elementos sigan siendo válidas cuando la colección crece. Si lo que necesito es insertar en los dos extremos, uso una deque, `ArrayDeque` en Java; `LinkedList` casi nunca."
+
+Lo que el entrevistador quiere oír es que la respuesta **depende de las operaciones**, y que conoces el costo oculto de la lista enlazada (buscar la posición sigue siendo O(n), y la caché).
+
+### "¿Por qué un HashMap no es thread-safe?"
+
+> "Porque sus operaciones no son atómicas: un `put` lee el bucket, compara, escribe, actualiza el contador de tamaño y a veces dispara un resize que mueve todas las entradas. Si dos hilos hacen `put` al mismo tiempo, uno puede pisar la escritura del otro y se pierden datos; si uno lee mientras otro hace el resize, puede ver la tabla a medio construir. En Java 7, un resize concurrente podía incluso dejar un ciclo en una cadena y un `get` quedaba en un loop infinito. La solución es no compartirlo, o usar una estructura pensada para eso: `ConcurrentHashMap` en Java, que permite lecturas sin bloqueo y escrituras con bloqueos finos por bucket, en vez de un lock global como `Collections.synchronizedMap`."
+
+<CodeTabs>
+
+```java title="Java"
+final ConcurrentHashMap<String, Integer> conteo = new ConcurrentHashMap<>();
+
+void registrar(String palabra) {
+    conteo.merge(palabra, 1, Integer::sum); // atómico: leer, sumar y escribir en un paso
+    // conteo.put(palabra, conteo.getOrDefault(palabra, 0) + 1); // NO: otro hilo se mete en medio
+}
+```
+
+```python title="Python"
+from collections import Counter
+from threading import Lock
+
+conteo = Counter()
+candado = Lock()
+
+def registrar(palabra: str) -> None:
+    with candado:  # += es leer y escribir: sin el lock se pierden incrementos
+        conteo[palabra] += 1
+```
+
+</CodeTabs>
+
+Si el entrevistador viene de otro lenguaje: en Go, si varias goroutines escriben en un `map` sin sincronizar, el runtime suele detectarlo y aborta el programa con un error de escrituras concurrentes (`sync.Map` o un mutex lo resuelven). En CPython con GIL, una operación suelta sobre un `dict` es atómica en la práctica, pero `conteo[k] += 1` no lo es: son una lectura y una escritura separadas, y otro hilo puede meterse entre las dos.
+
+<Callout type="tip" title="La estructura de una buena respuesta teórica">
+
+Mecanismo (qué pasa en memoria) → costo (Big-O, con "promedio" o "amortizado" si corresponde) → peor caso y por qué → cuándo lo usarías y cuándo no. Si en 60 segundos cubriste esas cuatro cosas, la respuesta es sólida. No sigas hablando: deja que el entrevistador elija la repregunta.
+
+</Callout>
+
+## Practica en voz alta
+
+<QuestionDeck
+  cards={[
+    {
+      q: '¿Cuál es la diferencia entre un arreglo y una lista enlazada?',
+      level: 'junior',
+      checks: 'Que conozcas el modelo de memoria, no solo la tabla de Big-O.',
+      answer: <><p>Un arreglo guarda los elementos contiguos en memoria: acceso por índice O(1) y recorridos muy rápidos por la caché, pero insertar en el medio es O(n) porque hay que desplazar. Una lista enlazada guarda cada elemento en un nodo con un puntero al siguiente: insertar o borrar es O(1) si ya tienes el nodo, pero llegar a una posición es O(n) y cada salto puede ser un fallo de caché.</p><p>En la práctica uso arreglos casi siempre; la lista enlazada tiene sentido cuando ya tengo la referencia al nodo, como en una caché LRU.</p></>,
+      strong: ['Mencionar memoria contigua y caché', 'Aclarar que el O(1) de la lista es con el nodo en mano'],
+      weak: ['"La lista enlazada es mejor para insertar" sin matices'],
+      followups: ['¿Cómo implementarías una caché LRU?', '¿Qué es una deque?'],
+    },
+    {
+      q: '¿Qué complejidad tiene buscar una llave en un HashMap (o un dict), y por qué?',
+      level: 'junior',
+      checks: 'Promedio contra peor caso, y el mecanismo detrás.',
+      answer: <><p>O(1) en promedio: el hash de la llave dice directamente en qué bucket mirar, y con un factor de carga bajo cada bucket tiene muy pocas llaves. En el peor caso es O(n), si muchas llaves colisionan en el mismo bucket por una función hash mala o por llaves elegidas a propósito.</p><p>También vale aclarar que calcular el hash de una cadena de largo L es O(L).</p></>,
+      strong: ['Distinguir promedio y peor caso', 'Explicar el porqué con buckets y factor de carga'],
+      weak: ['"Es O(1)" sin más', 'No saber cuándo se degrada'],
+      followups: ['¿Qué es el factor de carga?', '¿Cómo se defiende Python del hash flooding?'],
+    },
+    {
+      q: '¿Qué es una colisión en una tabla hash y cómo se resuelve?',
+      level: 'junior',
+      checks: 'Las dos familias de soluciones y su trade-off.',
+      answer: <><p>Es cuando dos llaves distintas caen en el mismo bucket. Es inevitable, porque hay muchas más llaves posibles que buckets. Se resuelve con encadenamiento, donde cada bucket guarda una lista de pares, como el HashMap de Java; o con direccionamiento abierto, donde se prueba otra posición del mismo arreglo, como el dict de Python.</p><p>El encadenamiento tolera tablas más llenas; el direccionamiento abierto usa mejor la caché pero se degrada rápido cerca del límite y necesita lápidas para borrar.</p></>,
+      strong: ['Nombrar ambas estrategias con un ejemplo real', 'Mencionar el borrado con lápidas'],
+      weak: ['Creer que una buena función hash evita todas las colisiones'],
+      followups: ['¿Qué es el sondeo lineal y qué problema tiene?', '¿Por qué hace falta una lápida al borrar?'],
+    },
+    {
+      q: '¿Por qué ArrayList.add (o append en Python) es O(1) si a veces tiene que copiar todo el arreglo?',
+      level: 'semi',
+      checks: 'Que entiendas el análisis amortizado de verdad.',
+      answer: <><p>Porque la capacidad crece en proporción al tamaño, no de a un número fijo. Las copias caras pasan cada vez menos seguido: si la capacidad se duplica, copiar hasta n elementos cuesta en total menos que 2n, así que repartido entre n appends es una constante por append. Eso es costo amortizado: está garantizado para cualquier secuencia de operaciones, no es un promedio sobre entradas aleatorias.</p><p>ArrayList crece 1,5 veces; cualquier factor mayor que 1 da lo mismo. Si creciera de a una cantidad fija, las copias sumarían algo cuadrático y el append sería O(n) amortizado.</p></>,
+      strong: ['Hacer la suma geométrica', 'Diferenciar amortizado de promedio', 'Mencionar que un append puntual sí puede ser O(n)'],
+      weak: ['"Porque Java lo optimiza"', 'No saber que existe la copia'],
+      followups: ['¿Qué pasa con la latencia de un append puntual?', '¿Cómo evitarías las copias si conoces el tamaño final?'],
+    },
+    {
+      q: '¿Por qué no puedo usar una lista como llave de un diccionario en Python?',
+      level: 'semi',
+      checks: 'La relación entre hash, igualdad e inmutabilidad.',
+      answer: <><p>Porque la lista es mutable. El diccionario ubica cada llave según su hash al momento de insertarla; si la llave cambiara después, su hash cambiaría y la búsqueda iría a otro bucket: la entrada quedaría perdida. Python lo evita no dándole hash a los tipos mutables. Uso una tupla, o un frozenset si el orden no importa.</p></>,
+      strong: ['Explicar qué se rompería, no solo citar la regla', 'Proponer tupla o frozenset'],
+      weak: ['"Porque Python no lo permite"'],
+      followups: ['¿Qué contrato deben cumplir __eq__ y __hash__?', '¿Una tupla que contiene una lista es hasheable?'],
+    },
+    {
+      q: '¿Qué pasa si sobrescribes equals pero no hashCode en una clase que usas como llave?',
+      level: 'semi',
+      checks: 'El contrato entre equals y hashCode y cómo lo usa HashMap.',
+      answer: <><p>Se rompe el contrato: dos objetos iguales según equals tienen hashCode distintos, el de Object, que depende de la identidad. HashMap primero elige el bucket por hash, así que un get con un objeto igual pero distinto mira en otro bucket y devuelve null, y un HashSet acepta duplicados.</p><p>La regla es sobrescribir los dos, con los mismos campos, y que esos campos no cambien mientras el objeto está en la tabla. Un record los genera solo.</p></>,
+      strong: ['Explicar que el hash decide el bucket antes que equals', 'Mencionar records o los generadores del IDE'],
+      weak: ['"No pasa nada, equals alcanza"'],
+      followups: ['¿Qué pasa al revés, hashCode sin equals?', '¿Puede un hashCode constante ser correcto?'],
+    },
+    {
+      q: '¿Cuándo usarías un TreeMap en vez de un HashMap?',
+      level: 'semi',
+      checks: 'Saber cuándo el orden vale más que la velocidad.',
+      answer: <><p>Cuando necesito orden: recorrer las llaves ordenadas, consultas por rango, el mínimo o el máximo, o la llave más cercana a un valor, como el turno disponible más próximo a una hora pedida. TreeMap hace todo eso en O(log n) porque es un árbol rojo-negro. Si solo necesito buscar por llave exacta, HashMap es más rápido en promedio.</p><p>El árbol además garantiza O(log n) en el peor caso, sin depender de la calidad del hash.</p></>,
+      strong: ['Dar un caso de uso concreto con rangos o vecinos', 'Mencionar el peor caso garantizado'],
+      weak: ['"TreeMap está ordenado" sin decir para qué sirve'],
+      followups: ['¿Qué estructura usarías en Python para lo mismo?', '¿Qué es floorKey o ceilingKey?'],
+    },
+    {
+      q: '¿Qué es un heap y para qué lo usarías?',
+      level: 'semi',
+      checks: 'La propiedad del heap y sus límites.',
+      answer: <><p>Un árbol binario completo guardado en un arreglo donde cada padre es menor o igual que sus hijos (en un min-heap). Ver el mínimo es O(1), insertar y extraer el mínimo es O(log n), y construirlo a partir de n elementos es O(n). No está ordenado del todo, así que buscar un elemento cualquiera es O(n).</p><p>Lo uso para colas de prioridad: el k-ésimo mayor, fusionar k listas ordenadas, planificar tareas por vencimiento o Dijkstra.</p></>,
+      strong: ['Representación en arreglo con los índices de padre e hijos', 'Aclarar qué no hace bien'],
+      weak: ['Confundirlo con el heap de memoria', 'Creer que está ordenado'],
+      followups: ['¿Por qué construirlo es O(n) y no O(n log n)?', '¿Cómo encuentras los k mayores de un flujo infinito?'],
+    },
+    {
+      q: '¿Lista de adyacencia o matriz de adyacencia para representar un grafo?',
+      level: 'semi',
+      checks: 'Elegir según la densidad del grafo y las operaciones.',
+      answer: <><p>Lista de adyacencia por defecto: usa O(V + E) memoria y recorrer los vecinos de un nodo cuesta su grado, que es lo que hacen BFS y DFS. La mayoría de los grafos reales son dispersos. Matriz cuando el grafo es denso o chico, o cuando necesito preguntar muchas veces si existe una arista entre dos nodos en O(1); el costo es O(V²) memoria aunque haya pocas aristas.</p></>,
+      strong: ['Hablar de grafos dispersos contra densos', 'Calcular la memoria de la matriz para un caso grande'],
+      weak: ['Elegir sin mencionar memoria'],
+      followups: ['¿Cuánta memoria usaría una matriz para un millón de usuarios?'],
+    },
+    {
+      q: '¿Por qué los índices de las bases de datos usan árboles B+ y no tablas hash?',
+      level: 'senior',
+      checks: 'Conectar estructura de datos, disco y patrones de consulta.',
+      answer: <><p>Por dos razones. La primera es el disco: un árbol B+ pone cientos de llaves en cada nodo, del tamaño de una página, así que es bajísimo y encontrar una fila cuesta muy pocas lecturas de página, con los niveles altos ya en memoria. La segunda es el orden: las hojas están enlazadas y ordenadas, así que sirve para rangos, ORDER BY, prefijos e índices compuestos. Un índice hash solo sirve para igualdad.</p><p>Por eso el B+ es el índice por defecto, y el hash queda para casos puntuales de igualdad pura.</p></>,
+      strong: ['Mencionar páginas de disco y factor de ramificación', 'Las hojas enlazadas para rangos', 'Saber que existen índices hash y cuándo sirven'],
+      weak: ['"Porque los árboles son más rápidos"', 'Confundir árbol B con árbol binario'],
+      followups: ['¿Qué es un índice clustered?', '¿Por qué un UUID aleatorio como llave primaria puede ser lento al insertar?'],
+    },
+    {
+      q: '¿Por qué un HashMap no es thread-safe y qué usarías en su lugar?',
+      level: 'senior',
+      checks: 'Entender qué se rompe, no solo saber el nombre de la alternativa.',
+      answer: <><p>Porque un put no es atómico: lee el bucket, compara, escribe, actualiza el tamaño y a veces dispara un resize. Con dos hilos se pueden perder escrituras o leer la tabla a medio redimensionar; en Java 7 un resize concurrente podía crear un ciclo y colgar un get. Uso ConcurrentHashMap, que bloquea por bucket y permite lecturas sin lock, y operaciones atómicas como computeIfAbsent o merge para los patrones de leer y escribir.</p><p>Aun con un mapa concurrente, una secuencia de dos operaciones, como "si no está, insertar", no es atómica si la escribo como dos llamadas.</p></>,
+      strong: ['Explicar la carrera concreta', 'Mencionar las operaciones atómicas compuestas', 'Advertir sobre check-then-act'],
+      weak: ['"Uso synchronized en todo" sin pensar en la contención'],
+      followups: ['¿Qué diferencia hay entre Collections.synchronizedMap y ConcurrentHashMap?', '¿Cómo cuentas palabras con varios hilos?'],
+    },
+    {
+      q: 'Tu servicio se pone lentísimo con ciertos requests y el profiler muestra el tiempo dentro de un HashMap. ¿Qué sospechas?',
+      level: 'senior',
+      checks: 'Diagnóstico a partir del peor caso de una tabla hash.',
+      answer: <><p>Que muchas llaves están cayendo en el mismo bucket y las búsquedas se volvieron lineales. Revisaría dos cosas: un hashCode malo en una clase propia, por ejemplo uno que devuelve una constante o usa un solo campo con pocos valores; o un ataque de hash flooding, donde alguien manda llaves elegidas para colisionar, como los parámetros de un formulario.</p><p>Arreglaría el hashCode o limitaría la cantidad de llaves por request. Java 8 ya mitiga el peor caso convirtiendo en árboles los buckets muy largos, y Python aleatoriza el hash de strings por proceso.</p></>,
+      strong: ['Ir directo al peor caso O(n)', 'Mencionar hash flooding', 'Proponer una verificación concreta'],
+      weak: ['"Aumentaría la memoria"', 'Culpar al garbage collector sin evidencia'],
+      followups: ['¿Cómo comprobarías que es un problema de colisiones?', '¿Qué es SipHash?'],
+    },
+    {
+      q: '¿Qué diferencia hay entre un set y un map, y cuándo usarías cada uno?',
+      level: 'junior',
+      checks: 'Elegir la estructura mínima que resuelve el problema.',
+      answer: <><p>Un set guarda solo llaves y responde si algo está; un map asocia cada llave con un valor. Por dentro son la misma estructura, en Java HashSet usa un HashMap. Uso un set para deduplicar o marcar visitados en un BFS, y un map cuando necesito guardar algo por llave, como el conteo de cada palabra o el índice donde vi cada número.</p></>,
+      strong: ['Un ejemplo de cada uno', 'Saber que comparten implementación'],
+      weak: ['Usar un map con valores en true para todo'],
+      followups: ['¿Qué pasa con el orden de iteración de un set en Python y en JavaScript?'],
+    },
+  ]}
+/>
+
+<Takeaways>
+
+- El arreglo dinámico tiene **append O(1) amortizado** porque la capacidad crece en proporción: las copias suman menos que 2n. Con crecimiento fijo, el promedio sube sin parar.
+- La lista enlazada pierde contra el arreglo en casi todo por la **localidad de caché**; gana cuando ya tienes la referencia al nodo, como en una caché LRU.
+- Una tabla hash es función hash + buckets + resolución de colisiones + factor de carga + rehash. Es **O(1) promedio**, **O(n) en el peor caso**, y sus llaves deben ser inmutables.
+- Hash para búsqueda exacta; **árbol balanceado** cuando necesitas orden, rangos o vecinos, con O(log n) garantizado.
+- Las bases de datos usan **árboles B+** porque minimizan lecturas de disco (nodos del tamaño de una página, altura de 3 o 4) y sirven para rangos gracias a las hojas enlazadas.
+- Una buena respuesta teórica sigue el orden **mecanismo, costo, peor caso, cuándo usarlo**, y cabe en un minuto.
+
+</Takeaways>
+
+## Fuentes y lecturas
+
+- Python Wiki, [TimeComplexity](https://wiki.python.org/moin/TimeComplexity): costos de `list`, `deque`, `dict` y `set` en CPython.
+- CPython, [`Objects/dictobject.c`](https://github.com/python/cpython/blob/main/Objects/dictobject.c): los comentarios al principio del archivo explican la tabla compacta, la secuencia de sondeo y el umbral de dos tercios.
+- PEP 456, [Secure and interchangeable hash algorithm](https://peps.python.org/pep-0456/): por qué Python adoptó SipHash tras los ataques de hash flooding.
+- OpenJDK, [`HashMap.java`](https://github.com/openjdk/jdk/blob/master/src/java.base/share/classes/java/util/HashMap.java) y [`ArrayList.java`](https://github.com/openjdk/jdk/blob/master/src/java.base/share/classes/java/util/ArrayList.java): los umbrales de treeificación (8, 6 y 64), la mezcla `h ^ (h >>> 16)` y el crecimiento `oldCapacity >> 1`.
+- Oracle, [`ArrayDeque` (Java SE 21)](https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/ArrayDeque.html) y [`LinkedHashMap`](https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/LinkedHashMap.html).
+- Oracle, [`HashMap` (Java SE 21)](https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/HashMap.html): capacidad inicial, factor de carga 0,75 y la advertencia sobre acceso concurrente; y [`ConcurrentHashMap`](https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/concurrent/ConcurrentHashMap.html).
+- PostgreSQL, [B-Tree Indexes](https://www.postgresql.org/docs/current/btree.html), y Markus Winand, [Use The Index, Luke: Anatomy of an Index](https://use-the-index-luke.com/sql/anatomy).
+- Cormen, Leiserson, Rivest y Stein, *Introduction to Algorithms* (CLRS): capítulos de tablas hash, árboles rojo-negro, árboles B y análisis amortizado.
+- Tech Interview Handbook, [Hash table cheatsheet](https://www.techinterviewhandbook.org/algorithms/hash-table/) y [Big-O Cheat Sheet](https://www.bigocheatsheet.com/).

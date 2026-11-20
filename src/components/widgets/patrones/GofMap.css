@@ -1,0 +1,111 @@
+/* three rows, one per family: a classification chart on squared paper */
+.gof-chart {
+  display: grid;
+  gap: var(--s-4);
+}
+.gof-fam {
+  display: grid;
+  gap: var(--s-2);
+}
+.gof-fam__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 10px;
+  font-family: var(--font-sign);
+  font-size: 0.92rem;
+  color: var(--ink-3);
+}
+.gof-fam__head b {
+  font-family: var(--font-display);
+  font-size: 1.05rem;
+  font-weight: 650;
+  color: var(--ink);
+  text-decoration-line: underline;
+  text-decoration-color: color-mix(in oklab, var(--gof-c) 40%, transparent);
+  text-decoration-thickness: 0.45em;
+  text-underline-offset: -0.25em;
+  text-decoration-skip-ink: none;
+}
+.gof-fam__cells {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(118px, 1fr));
+  gap: 4px;
+}
+.gof-cell {
+  min-height: 44px;
+  padding: 6px 10px;
+  border-radius: 3px;
+  border: 1.5px solid color-mix(in oklab, var(--gof-c) 55%, var(--rule));
+  background: color-mix(in oklab, var(--gof-c) 7%, var(--paper));
+  font-family: var(--font-sign);
+  font-weight: 600;
+  font-size: 0.92rem;
+  line-height: 1.2;
+  text-align: left;
+  color: var(--ink);
+  transition:
+    background-color 160ms var(--ease-out),
+    opacity 200ms var(--ease-out),
+    border-color 160ms var(--ease-out);
+}
+.gof-cell:hover {
+  background: color-mix(in oklab, var(--gof-c) 18%, var(--paper));
+  border-color: var(--gof-c);
+}
+.gof-cell.is-on {
+  background: var(--gof-c);
+  border-color: var(--gof-c);
+  color: var(--paper);
+}
+/* amber is light in both themes: dark text on it */
+.gof-fam:nth-child(2) .gof-cell.is-on {
+  color: oklch(22% 0.03 70);
+}
+.gof-cell.is-faded {
+  opacity: 0.32;
+}
+@media (max-width: 420px) {
+  .gof-fam__cells {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.gof-read__head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  margin-bottom: var(--s-1);
+  color: var(--ink);
+  font-size: 1.05rem;
+}
+.gof-read__dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 2px solid var(--ink);
+}
+.gof-read__fam {
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.gof-read__hint {
+  color: var(--ink-3);
+}
+.gof-read__link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 40px;
+  margin-top: var(--s-1);
+  font-weight: 700;
+  color: var(--line-ink);
+  text-decoration: none;
+}
+.gof-read__link:hover {
+  text-decoration: underline;
+}

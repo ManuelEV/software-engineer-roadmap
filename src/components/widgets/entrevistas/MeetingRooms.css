@@ -1,0 +1,121 @@
+.mtr-pick {
+  display: grid;
+  gap: 4px;
+}
+.mtr-pick select {
+  min-height: 40px;
+  padding: 0 10px;
+  border: 1.5px solid var(--rule-strong);
+  border-radius: 8px;
+  background: var(--card);
+  font-family: var(--font-code);
+  font-size: 0.86rem;
+}
+.mtr-pending {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  font-family: var(--font-code);
+  font-size: 0.84rem;
+}
+.mtr-pending__lbl {
+  color: var(--ink-3);
+  margin-right: 4px;
+}
+.mtr-pending__none {
+  color: var(--ink-3);
+  font-style: italic;
+}
+.mtr-chip {
+  padding: 3px 9px;
+  border: 1.5px solid var(--rule-strong);
+  border-radius: 6px;
+  background: var(--card);
+  color: var(--ink);
+  font-weight: 600;
+}
+.mtr-chip.is-next {
+  border-color: var(--line);
+}
+
+.mtr-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-width: 520px;
+}
+.mtr-grid {
+  stroke: var(--rule);
+  stroke-width: 1;
+  stroke-dasharray: 2 4;
+}
+.mtr-tick {
+  font-size: 14px;
+  font-weight: 600;
+  fill: var(--ink-3);
+}
+.mtr-lane rect {
+  fill: none;
+  stroke: var(--rule);
+  stroke-width: 1.5;
+  stroke-dasharray: 4 4;
+  transition: stroke 220ms var(--ease-out);
+}
+.mtr-lane.is-open rect {
+  stroke: var(--rule-strong);
+  stroke-dasharray: none;
+  fill: color-mix(in oklab, var(--paper) 60%, transparent);
+}
+.mtr-room {
+  font-family: var(--font-sign);
+  font-size: 14px;
+  font-weight: 700;
+  fill: var(--ink-3);
+}
+.mtr-mtg rect {
+  stroke-width: 1.5;
+  transition:
+    fill 220ms var(--ease-out),
+    stroke 220ms var(--ease-out),
+    opacity 220ms var(--ease-out);
+}
+.mtr-mtg__lbl {
+  font-family: var(--font-code);
+  font-size: 14px;
+  font-weight: 700;
+}
+.mtr-mtg.is-live rect {
+  fill: var(--line-tint);
+  stroke: color-mix(in oklab, var(--line) 70%, var(--rule-strong));
+}
+.mtr-mtg.is-live .mtr-mtg__lbl {
+  fill: var(--ink);
+}
+.mtr-mtg.is-cur rect {
+  fill: var(--line);
+  stroke: var(--line);
+}
+.mtr-mtg.is-cur .mtr-mtg__lbl {
+  fill: var(--line-on);
+}
+.mtr-mtg.is-ended rect {
+  fill: var(--paper-3);
+  stroke: var(--rule-strong);
+  opacity: 0.75;
+}
+.mtr-mtg.is-ended .mtr-mtg__lbl {
+  fill: var(--ink-3);
+}
+.mtr-sweep line {
+  stroke: var(--line-ink);
+  stroke-width: 2;
+  stroke-dasharray: 6 4;
+}
+.mtr-sweep text {
+  font-family: var(--font-code);
+  font-size: 14px;
+  font-weight: 700;
+  fill: var(--line-ink);
+}

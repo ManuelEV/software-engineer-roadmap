@@ -1,0 +1,317 @@
+import { TradeoffExplorer } from '../../components/widgets/arquitectura/TradeoffExplorer'
+
+Todo sistema tiene arquitectura, la hayas diseñado o no. La pregunta es si la elegiste o si apareció sola, commit a commit, hasta que cambiar algo importante cuesta un trimestre. Este tema es el mapa de la unidad: qué cuenta como decisión de arquitectura, cómo se miden las cualidades que buscas, por qué todo es un intercambio y cómo dejar por escrito lo que decidiste para que el equipo del próximo año no tenga que adivinar.
+
+Si vienes a preparar una entrevista *senior*, esta es la base de todas las demás conversaciones. Cuando te pregunten "¿microservicios o monolito?", la respuesta correcta nunca es un nombre. Es una lista de atributos que importan en ese contexto, las opciones que los satisfacen y lo que cada una te cuesta.
+
+## Qué es (y qué no es) arquitectura
+
+Hay muchas definiciones y ninguna es perfecta. Las dos que más ayudan en la práctica vienen de lugares distintos.
+
+Ralph Johnson, citado por Martin Fowler en *Who Needs an Architect?*, dijo que la arquitectura es "the important stuff, whatever that is": lo importante, sea lo que sea. Suena evasivo, pero apunta a algo real. Lo que es arquitectura depende del sistema. En un servicio de pagos, el modelo de consistencia es arquitectura. En una landing page, probablemente no.
+
+Grady Booch le dio un criterio operativo: las decisiones de arquitectura son las que son **caras de cambiar**<Sidenote>Booch lo formuló como "significant is measured by cost of change". Es la mejor prueba rápida que conozco: si revertir la decisión cuesta una tarde, es diseño; si cuesta un trimestre, es arquitectura.</Sidenote>. Elegir entre `map` y un `for` no lo es. Elegir cómo se parte la base de datos entre equipos, sí.
+
+Mark Richards y Neal Ford, en *Fundamentals of Software Architecture*, proponen mirar cuatro dimensiones a la vez:
+
+- **Estructura**: el estilo (capas, hexagonal, microservicios, eventos). Es lo que la gente suele llamar "la arquitectura", pero es solo una parte.
+- **Características** (atributos de calidad): disponibilidad, escalabilidad, seguridad, mantenibilidad… Las *-ilities*.
+- **Decisiones**: las reglas que el sistema debe respetar. "La capa de presentación no habla con la base de datos". "Ningún servicio lee tablas de otro".
+- **Principios de diseño**: guías, no reglas. "Prefiere mensajería asíncrona entre servicios cuando sea posible".
+
+El mismo libro formula dos "leyes" que vale la pena memorizar. La primera: **todo en arquitectura de software es un trade-off**. Si crees haber encontrado algo que no lo es, todavía no identificaste el costo. La segunda: **el por qué importa más que el cómo**. Un diagrama te dice cómo está armado un sistema; casi nunca te dice por qué. Ese por qué es lo que se pierde cuando la gente rota, y es lo que vas a aprender a documentar al final de este tema.
+
+<Callout type="idea" title="Arquitectura no es un documento">
+
+Es el conjunto de decisiones que restringen cómo puede evolucionar el sistema. El diagrama y el documento son representaciones. Si el código no respeta lo que dice el diagrama, la arquitectura real es la del código.
+
+</Callout>
+
+## Atributos de calidad: lo que de verdad estás diseñando
+
+Los requisitos funcionales dicen **qué** hace el sistema: "el cliente puede pagar un pedido con tarjeta". Los atributos de calidad dicen **qué tan bien** lo hace: en cuánto tiempo, con qué disponibilidad, bajo qué carga, con qué costo de cambio. Dos sistemas con la misma lista de funcionalidades pueden necesitar arquitecturas completamente distintas porque sus atributos de calidad son distintos.
+
+Una clasificación útil, también de Richards y Ford:
+
+| Tipo | Ejemplos | Pregunta que responde |
+| --- | --- | --- |
+| Operacionales | disponibilidad, rendimiento, escalabilidad, elasticidad, recuperabilidad | ¿Cómo se comporta en producción? |
+| Estructurales | mantenibilidad, extensibilidad, testeabilidad, portabilidad | ¿Qué tan caro es cambiarlo? |
+| Transversales | seguridad, accesibilidad, privacidad, auditabilidad, cumplimiento legal | ¿Qué restricciones atraviesan todo? |
+
+La norma ISO/IEC 25010 tiene un catálogo más formal, pero en el día a día esta tabla alcanza.
+
+### Del adjetivo al escenario medible
+
+"El sistema debe ser rápido" no es un requisito, es un deseo. El libro *Software Architecture in Practice* (Bass, Clements y Kazman, del SEI) propone escribir cada atributo como un **escenario de calidad** con seis partes: fuente, estímulo, artefacto, entorno, respuesta y medida de la respuesta.
+
+<Callout type="example" title="Escenario de disponibilidad para un checkout">
+
+**Fuente**: un nodo de la base de datos primaria. **Estímulo**: deja de responder. **Artefacto**: el servicio de pedidos. **Entorno**: horario pico, Black Friday. **Respuesta**: el sistema promueve una réplica y sigue aceptando pedidos. **Medida**: menos de 30 segundos sin poder escribir y cero pedidos confirmados perdidos.
+
+</Callout>
+
+Escrito así, el requisito se puede probar, se puede negociar ("¿30 segundos o 5 minutos? El primero cuesta tres veces más") y se puede convertir en una prueba automática, que es la idea de las *fitness functions* que verás en el último tema de la unidad.
+
+### Elige pocos
+
+Ningún sistema puede maximizar todos los atributos. Cada uno que agregas a la lista de "imprescindibles" le resta grados de libertad al diseño. La recomendación práctica es identificar los **tres o cuatro** atributos que definen el éxito del sistema y tratar los demás como "suficientemente buenos".
+
+Para encontrarlos, busca en el negocio, no en la tecnología. "Black Friday triplica el tráfico" se traduce en elasticidad. "Si cobramos dos veces, salimos en las noticias" se traduce en consistencia e idempotencia. "Tenemos que lanzar en seis semanas y el modelo de negocio todavía cambia" se traduce en modificabilidad y simplicidad, y probablemente descarta todo lo distribuido.
+
+## Trade-offs: no hay almuerzo gratis
+
+Ford y Richards resumen el objetivo con una frase incómoda: no busques la mejor arquitectura, busca la **menos mala**<Sidenote>"Never shoot for the best architecture, but rather the least worst architecture." La idea es que cada característica que optimizas cuesta algo en otra, y el diseño "perfecto" en papel suele ser el más frágil frente a requisitos que cambian.</Sidenote>. Cada decisión mejora un atributo y empeora otro. Tu trabajo es elegir qué empeorar a sabiendas.
+
+Juega con las decisiones de abajo. Fíjate que agregar una cola mejora disponibilidad pero te cobra en consistencia y simplicidad, y que partir en microservicios casi nunca mejora la latencia: la empeora, porque ahora hay red entre cada llamada.
+
+<TradeoffExplorer />
+
+Algunos trade-offs aparecen tantas veces que vale la pena tenerlos a mano:
+
+- **Consistencia vs disponibilidad** ante una partición de red (CAP), y **consistencia vs latencia** cuando no hay partición (PACELC). Lo verás a fondo en la línea de *system design*.
+- **Acoplamiento vs duplicación.** Compartir una librería de modelos entre servicios elimina duplicación, pero acopla sus despliegues. A veces duplicar es la opción más barata.
+- **Flexibilidad vs simplicidad.** Cada punto de extensión ("por si mañana cambiamos de base de datos") es código que alguien tiene que leer hoy. Solo paga esa flexibilidad donde el cambio es probable.
+- **Autonomía de equipos vs costo operativo.** Más servicios independientes significan menos coordinación entre personas, pero más infraestructura, más observabilidad y más formas de fallar.
+
+<Quiz
+  question="Tu equipo propone agregar Redis como cache para el catálogo de productos porque la página tarda 900 ms. ¿Cuál es la mejor primera pregunta de arquitectura?"
+  options={[
+    { text: '¿Qué cliente de Redis usamos?', why: 'Es una decisión de implementación. Importa, pero solo después de decidir si el cache es la solución.' },
+    { text: '¿Cuánto tiempo puede mostrar el catálogo un precio desactualizado sin que sea un problema de negocio?', correct: true, why: 'Exacto. El cache compra latencia con consistencia. Si un precio viejo durante 60 segundos es aceptable, el cache es barato; si no, necesitas invalidación precisa y el costo sube mucho. Primero el trade-off, después la herramienta.' },
+    { text: '¿Podemos poner cache en todas las consultas para ser consistentes?', why: 'Aplicar cache en todos lados multiplica el problema de invalidación sin evidencia de que todas las consultas sean lentas.' },
+    { text: '¿Redis escala horizontalmente?', why: 'Es una pregunta válida, pero secundaria. Con un catálogo típico, la capacidad rara vez es el cuello de botella; la frescura de los datos sí.' },
+  ]}
+/>
+
+## Decisiones reversibles e irreversibles
+
+No todas las decisiones merecen el mismo cuidado. Jeff Bezos popularizó la distinción en sus cartas a los accionistas de Amazon: hay decisiones **tipo 1**, puertas de un solo sentido, casi imposibles de revertir, que conviene tomar con calma y con datos; y decisiones **tipo 2**, puertas de dos sentidos, que se pueden deshacer y conviene tomar rápido. El error más común en organizaciones grandes es tratar todo como tipo 1 y moverse con lentitud. En startups es el opuesto: tratar como reversible algo que no lo es.
+
+En software, las puertas de un solo sentido suelen ser:
+
+- **El modelo de datos y su partición.** Migrar datos vivos es lento y riesgoso. Separar una base compartida entre equipos puede tomar años.
+- **Contratos públicos.** Una API que usan clientes externos o apps móviles viejas no se puede cambiar cuando quieres.
+- **Las fronteras entre servicios.** Mover una responsabilidad de un servicio a otro implica migrar datos, contratos y equipos.
+- **El modelo de consistencia.** Pasar de consistencia eventual a fuerte (o al revés) cambia la semántica que asumen todos los consumidores.
+
+Y suelen ser puertas de dos sentidos:
+
+- La librería que usas detrás de una interfaz propia.
+- El framework web, si el dominio no depende de él (esto es exactamente lo que buscan hexagonal y Clean Architecture).
+- La configuración de infraestructura que puedes recrear con código.
+
+Dos técnicas convierten decisiones tipo 1 en tipo 2. La primera es **aislar detrás de una frontera**: si tu dominio solo conoce una interfaz `PaymentGateway`, cambiar de proveedor de pagos es un adaptador nuevo, no una reescritura. La segunda es **posponer hasta el último momento responsable**, un término del *lean software development*: decidir cuando ya tienes la información necesaria, pero antes de que no decidir empiece a costar. Posponer no es procrastinar; es diseñar para que la decisión pueda esperar.
+
+<Callout type="warn" title="El costo de la flexibilidad prematura">
+
+Volver todo reversible también cuesta. Una capa de abstracción sobre la base de datos "por si cambiamos de motor" se paga en cada consulta que no puede usar las capacidades del motor. Aísla lo que tiene una probabilidad real de cambiar, no todo.
+
+</Callout>
+
+## La ley de Conway
+
+En 1968, Melvin Conway publicó en la revista *Datamation* el artículo *How Do Committees Invent?*. Su tesis: las organizaciones que diseñan sistemas están condenadas a producir diseños que copian sus estructuras de comunicación<Sidenote>La frase original: "organizations which design systems (in the broad sense used here) are constrained to produce designs which are copies of the communication structures of these organizations".</Sidenote>.
+
+No es una metáfora. Si tres equipos construyen un compilador, sale un compilador de tres pasadas. Si tienes un equipo de frontend, uno de backend y uno de base de datos, tu sistema va a tener exactamente esas tres capas, y cada funcionalidad nueva va a necesitar coordinar a los tres. Recorre el diagrama.
+
+<FlowDiagram
+  caption="La ley de Conway en acción: equipos organizados por capa técnica producen un sistema en capas, y cada funcionalidad cruza a todos."
+  nodes={[
+    { id: 'tf', label: 'Equipo Frontend', kind: 'users', x: 0, y: 0, mx: 0, my: 0 },
+    { id: 'tb', label: 'Equipo Backend', kind: 'users', x: 0, y: 1, mx: 0, my: 1 },
+    { id: 'td', label: 'Equipo DBA', kind: 'users', x: 0, y: 2, mx: 0, my: 2 },
+    { id: 'web', label: 'Web app', kind: 'client', x: 2, y: 0, mx: 1, my: 0 },
+    { id: 'api', label: 'API', kind: 'service', x: 2, y: 1, mx: 1, my: 1, sub: 'toda la lógica' },
+    { id: 'db', label: 'Esquema único', kind: 'db', x: 2, y: 2, mx: 1, my: 2 },
+    { id: 'f', label: 'Feature: cupones', kind: 'decision', x: 4, y: 1, mx: 0.5, my: 3.2, tone: 'warn' },
+  ]}
+  edges={[
+    { from: 'tf', to: 'web', dashed: true },
+    { from: 'tb', to: 'api', dashed: true },
+    { from: 'td', to: 'db', dashed: true },
+    { from: 'web', to: 'api' },
+    { from: 'api', to: 'db' },
+    { from: 'f', to: 'web', route: 'straight' },
+    { from: 'f', to: 'api' },
+    { from: 'f', to: 'db', route: 'straight' },
+  ]}
+  steps={[
+    { title: 'La organización', body: 'Tres equipos, cada uno experto en una capa técnica. Parece eficiente: especialistas trabajando en lo suyo.', active: ['tf', 'tb', 'td'] },
+    { title: 'El sistema copia la organización', body: 'Cada equipo construye "su" capa. Las fronteras del sistema son exactamente las fronteras entre equipos.', active: ['web', 'api', 'db'], flow: ['tf-web', 'tb-api', 'td-db'] },
+    { title: 'Llega una funcionalidad', body: 'Agregar cupones de descuento necesita una pantalla, reglas de negocio y una tabla nueva. Tres equipos, tres backlogs, tres prioridades.', active: ['f', 'web', 'api', 'db'], flow: ['f-web', 'f-api', 'f-db'] },
+    { title: 'La maniobra inversa', body: 'Si en cambio organizas equipos por capacidad de negocio (Pedidos, Pagos, Catálogo), cada uno dueño de su pantalla, su lógica y sus datos, el sistema tiende a partirse en módulos verticales que se pueden cambiar sin coordinar.', active: ['tf', 'tb', 'td'] },
+  ]}
+/>
+
+La consecuencia práctica se llama **maniobra inversa de Conway** (*inverse Conway maneuver*): si quieres una arquitectura determinada, primero diseña la organización que la produciría. El libro *Team Topologies* de Matthew Skelton y Manuel Pais lo convirtió en un vocabulario concreto: equipos alineados a un flujo de valor (*stream-aligned*), equipos de plataforma, equipos habilitadores y equipos de subsistema complicado, más tres modos de interacción entre ellos.
+
+También aplica al revés, como advertencia. Si la organización no cambia, partir el monolito en microservicios no va a dar autonomía: vas a tener servicios que solo se pueden desplegar juntos porque los mismos tres equipos tienen que coordinarse para cada cambio.
+
+<Callout type="interview" title="Cómo usarlo en una entrevista">
+
+Cuando propongas fronteras de servicios o módulos, menciona quién sería dueño de cada uno. "Separaría pagos en su propio servicio porque tiene un equipo dedicado, requisitos de cumplimiento PCI y un ritmo de cambio distinto" es una respuesta senior. "Lo separaría porque es más escalable" no lo es.
+
+</Callout>
+
+<Quiz
+  question="Una empresa tiene un monolito y quiere pasar a microservicios para 'que los equipos sean autónomos'. Hoy los equipos están divididos en frontend, backend y QA. ¿Qué predice la ley de Conway?"
+  options={[
+    { text: 'Los microservicios van a crear la autonomía por sí solos.', why: 'La estructura de comunicación sigue igual: cada cambio necesita a frontend, backend y QA. Los servicios van a tener que coordinarse igual que los equipos.' },
+    { text: 'Van a obtener servicios acoplados que se despliegan juntos, porque la organización sigue partida por capa técnica.', correct: true, why: 'Exacto. Sin reorganizar alrededor de capacidades de negocio, lo más probable es un monolito distribuido: el mismo acoplamiento, ahora con red de por medio.' },
+    { text: 'Nada, la ley de Conway solo aplica a empresas de más de mil personas.', why: 'Conway aplica a cualquier escala. Incluso dos personas que no se hablan tienden a producir dos módulos con una interfaz pobre entre ellos.' },
+    { text: 'Van a terminar con un solo microservicio por equipo, que es lo ideal.', why: 'Un servicio por equipo técnico (un "servicio de frontend", uno de "backend") no es una partición por dominio; cada funcionalidad sigue cruzando todos.' },
+  ]}
+/>
+
+## Documentar decisiones con ADRs
+
+Seis meses después de una decisión, nadie recuerda por qué se tomó. Llega alguien nuevo, ve una cola de mensajes donde parecía bastar una llamada HTTP y la "simplifica", reintroduciendo el problema que la cola resolvía. Los **Architecture Decision Records** (ADRs) existen para cortar ese ciclo.
+
+Michael Nygard propuso el formato en 2011, en el blog de Cognitect. Un ADR es un archivo corto, de una o dos páginas, guardado en el repositorio junto al código, con cinco partes:
+
+<Steps>
+<Step title="Título">
+
+Una frase nominal corta y numerada: "ADR 7: Publicar eventos de pedidos con outbox transaccional". Los números nunca se reutilizan.
+
+</Step>
+<Step title="Estado">
+
+Propuesto, aceptado, obsoleto (*deprecated*) o reemplazado (*superseded*) por otro ADR, con enlace al nuevo. Un ADR aceptado no se edita: si cambias de opinión, escribes uno nuevo que lo reemplaza.
+
+</Step>
+<Step title="Contexto">
+
+Las fuerzas en juego, en lenguaje neutral: técnicas, de negocio, de equipo, de plazos. Es la parte más valiosa, porque es la que se olvida primero.
+
+</Step>
+<Step title="Decisión">
+
+En voz activa y frases completas: "Vamos a…". Una sola decisión por registro.
+
+</Step>
+<Step title="Consecuencias">
+
+Todas, no solo las buenas. Qué se vuelve más fácil, qué se vuelve más difícil, qué nuevos riesgos aparecen y qué trabajo queda pendiente.
+
+</Step>
+</Steps>
+
+Muchos equipos agregan una sección de **alternativas consideradas**, como propone la plantilla MADR. Es útil: documenta qué descartaste y por qué, que es justo lo que alguien va a querer reproponer dentro de un año.
+
+### Un ADR real, completo
+
+```text title="docs/adr/0003-empezar-con-monolito-modular.md"
+# 3. Empezar con un monolito modular en lugar de microservicios
+
+Fecha: 2026-03-14
+Estado: Aceptado
+
+## Contexto
+
+Estamos construyendo la plataforma de pedidos para el lanzamiento en
+tres países. Somos 9 ingenieros en dos equipos. El modelo de negocio
+(comisiones, promociones, logística propia vs tercerizada) todavía
+cambia cada pocas semanas según el feedback de los primeros comercios.
+
+No tenemos plataforma de observabilidad distribuida ni experiencia
+operando Kubernetes. El requisito de disponibilidad es 99,9 % mensual.
+El pico esperado en el primer año es de 50 pedidos por segundo, que
+una sola base PostgreSQL con réplica atiende con margen.
+
+Un equipo propuso cinco microservicios (catálogo, pedidos, pagos,
+envíos, notificaciones) para poder escalar y desplegar por separado.
+
+## Decisión
+
+Vamos a construir un único desplegable con cinco módulos internos,
+uno por capacidad de negocio. Cada módulo:
+
+- expone una API pública (un archivo index.ts) y oculta el resto;
+- es dueño de su propio esquema en PostgreSQL; ningún módulo
+  consulta tablas de otro;
+- se comunica con los demás por llamadas a su API pública o por
+  eventos de dominio en proceso.
+
+Las reglas se verifican en CI con dependency-cruiser.
+
+## Consecuencias
+
+Positivas:
+- Un pipeline, un despliegue, una base de datos que operar.
+- Transacciones locales donde hoy las necesitamos (pedido + stock).
+- Mover una responsabilidad entre módulos es un refactor, no una
+  migración de datos entre servicios.
+
+Negativas:
+- No podemos escalar pagos de forma independiente al resto.
+- Un error de memoria en un módulo tumba todo el proceso.
+- La disciplina de fronteras depende de las reglas de CI; si se
+  desactivan, el monolito se degrada a una bola de barro.
+
+Revisaremos esta decisión si: un módulo necesita un ritmo de
+despliegue o un perfil de escalado claramente distinto, o si el
+número de equipos supera cuatro.
+
+## Alternativas consideradas
+
+- Microservicios desde el inicio: descartado por costo operativo y
+  porque las fronteras del dominio todavía no son estables.
+- Monolito en capas sin módulos: descartado porque no deja una ruta
+  barata para extraer servicios más adelante.
+```
+
+Fíjate en tres detalles de este ejemplo. El contexto tiene **números** (9 ingenieros, 50 pedidos por segundo, 99,9 %). La decisión incluye **cómo se va a verificar** (reglas en CI). Y las consecuencias terminan con **condiciones de revisión**: la decisión dice explícitamente qué tendría que cambiar para reabrirla. Eso convierte un ADR en una herramienta viva y no en burocracia.
+
+<Callout type="tip" title="Dónde y cómo guardarlos">
+
+En `docs/adr/` dentro del repositorio, en Markdown, revisados en el mismo pull request que implementa la decisión. Herramientas como `adr-tools` generan el número y el esqueleto. Si una decisión afecta a varios repositorios, guárdala en un repositorio de arquitectura compartido y enlázala.
+
+</Callout>
+
+<Quiz
+  question="Hace un año tu equipo aceptó el ADR 12: 'Usar MongoDB para el catálogo'. Hoy deciden migrar a PostgreSQL. ¿Qué haces con el ADR 12?"
+  options={[
+    { text: 'Lo edito para que diga PostgreSQL, así la documentación queda al día.', why: 'Pierdes la historia: nadie sabrá que se probó MongoDB ni por qué se abandonó. Los ADRs aceptados no se reescriben.' },
+    { text: 'Lo borro, porque ya no aplica.', why: 'Borrarlo elimina justo el contexto que evita repetir el error. Las decisiones viejas son parte del registro.' },
+    { text: 'Escribo el ADR 31 con la nueva decisión y marco el 12 como reemplazado por el 31.', correct: true, why: 'Exacto. El registro es solo de agregar: el ADR 12 queda con estado "Reemplazado por ADR 31" y el nuevo explica el contexto que cambió.' },
+    { text: 'No hace falta un ADR: migrar de base de datos es un detalle de implementación.', why: 'Cambiar el motor de persistencia de un contexto es caro de revertir y afecta a operación, consultas y equipo: es exactamente el tipo de decisión que merece un ADR.' },
+  ]}
+/>
+
+## Qué hace (y qué no) quien diseña la arquitectura
+
+El rol cambia según la empresa, pero hay un núcleo estable:
+
+- **Traducir negocio a atributos de calidad.** Convertir "no podemos perder ventas en Black Friday" en escenarios medibles.
+- **Identificar y tomar las decisiones tipo 1**, y delegar las tipo 2 a los equipos.
+- **Hacer visibles los trade-offs** para que el negocio elija con información. "Podemos tener esto en seis semanas con consistencia eventual, o en diez con consistencia fuerte".
+- **Proteger las decisiones con automatización**, no con revisiones manuales: reglas de dependencias en CI, pruebas de contrato, alertas.
+- **Seguir escribiendo código.** Una arquitectura diseñada por alguien que no sufre sus consecuencias tiende a ignorar el costo real de las abstracciones.
+
+Lo que no es: dibujar diagramas en una herramienta y entregarlos. Fowler, en el mismo artículo de Johnson, describe al arquitecto útil como alguien que trabaja con el equipo y lo ayuda a mejorar, no alguien que decide todo desde arriba.
+
+<Takeaways>
+
+- Arquitectura son las decisiones caras de cambiar: estructura, atributos de calidad, reglas y principios.
+- Convierte cada atributo de calidad en un escenario medible (fuente, estímulo, entorno, respuesta, medida) y prioriza tres o cuatro.
+- Todo es un trade-off: busca la arquitectura menos mala para tu contexto, no la mejor en abstracto.
+- Distingue puertas de un sentido (datos, contratos públicos, fronteras de servicios) de puertas de dos sentidos, y aísla detrás de interfaces lo que probablemente cambie.
+- La ley de Conway es física organizacional: diseña los equipos junto con el sistema.
+- Documenta cada decisión importante en un ADR corto, en el repositorio, con contexto, consecuencias y condiciones de revisión; nunca edites uno aceptado, reemplázalo.
+
+</Takeaways>
+
+## Fuentes y lecturas
+
+- Martin Fowler, [*Who Needs an Architect?*](https://martinfowler.com/ieeeSoftware/whoNeedsArchitect.pdf) (IEEE Software, 2003), con la definición de Ralph Johnson.
+- Martin Fowler, [Software Architecture Guide](https://martinfowler.com/architecture/).
+- Mark Richards y Neal Ford, *Fundamentals of Software Architecture* (O'Reilly, 2.ª ed. 2025): leyes de la arquitectura, características y estilos.
+- Len Bass, Paul Clements y Rick Kazman, [*Software Architecture in Practice*, 4.ª ed.](https://www.sei.cmu.edu/library/software-architecture-in-practice-fourth-edition/) (SEI): escenarios de atributos de calidad.
+- Melvin Conway, [*How Do Committees Invent?*](https://www.melconway.com/Home/Committees_Paper.html) (Datamation, 1968) y el resumen de Fowler sobre la [ley de Conway](https://martinfowler.com/bliki/ConwaysLaw.html).
+- Matthew Skelton y Manuel Pais, [*Team Topologies*: conceptos clave](https://teamtopologies.com/key-concepts).
+- Michael Nygard, [*Documenting Architecture Decisions*](https://www.cognitect.com/blog/2011/11/15/documenting-architecture-decisions) (2011).
+- [adr.github.io](https://adr.github.io/), la plantilla [MADR](https://adr.github.io/madr/) y [adr-tools](https://github.com/npryce/adr-tools).
+- AWS Prescriptive Guidance, [ADR process](https://docs.aws.amazon.com/prescriptive-guidance/latest/architectural-decision-records/adr-process.html).
+- Thoughtworks Technology Radar, [Lightweight Architecture Decision Records](https://www.thoughtworks.com/radar/techniques/lightweight-architecture-decision-records).

@@ -1,0 +1,890 @@
+import { UmlDiagram } from '../../components/widgets/patrones/UmlDiagram'
+import { ChainOfResponsibility } from '../../components/widgets/patrones/ChainOfResponsibility'
+import { MementoTimeline } from '../../components/widgets/patrones/MementoTimeline'
+import { VisitorGrid } from '../../components/widgets/patrones/VisitorGrid'
+
+En [Comportamiento I](/patrones/comportamiento-1) viste cuatro patrones que encapsulan "lo que varía" en un objeto. Esta segunda parte reúne seis patrones de comportamiento que resuelven problemas más específicos: **cómo fijar el esqueleto de un algoritmo** (Template Method), **cómo pasar una petición por una serie de filtros** (Chain of Responsibility), **cómo recorrer una colección sin conocer su forma** (Iterator), **cómo evitar que muchos objetos se hablen entre todos** (Mediator), **cómo guardar y restaurar el estado sin romper el encapsulamiento** (Memento) y **cómo agregar operaciones a una jerarquía sin tocarla** (Visitor).
+
+Varios de estos ya los usas todos los días sin llamarlos por su nombre: cada `for...of` es un Iterator, cada middleware de Express es un eslabón de una cadena, cada regla de ESLint es un Visitor. La idea de este tema es que reconozcas la estructura, entiendas el trade-off y sepas cuándo **no** hace falta escribir el patrón a mano porque el lenguaje o el framework ya te lo dan.
+
+## Template Method: el esqueleto fijo, los pasos variables
+
+**Intención.** Definir el esqueleto de un algoritmo en una operación, delegando algunos pasos a las subclases, que pueden redefinirlos sin cambiar la estructura del algoritmo.
+
+### El problema
+
+Tienes tres exportadores de reportes de ventas: CSV, PDF y Excel. Los tres hacen lo mismo: consultan las ventas, filtran las anuladas, formatean y escriben el archivo. Solo cambia el formateo. Pero como cada uno se escribió por separado, el filtro de anuladas existe en tres versiones, y cuando alguien arregló un bug de zona horaria en el exportador CSV, los otros dos siguieron con el bug. Es *Duplicate Code* con un agravante: la duplicación es de **estructura**, no de líneas idénticas, así que cuesta verla.
+
+### La solución
+
+Una clase base define el método plantilla (`export()`) con la secuencia completa y deja **abstractos** solo los pasos que varían. Opcionalmente ofrece *hooks*: métodos con una implementación por defecto (a veces vacía) que las subclases pueden sobrescribir si quieren.
+
+<UmlDiagram
+  caption="Template Method: la base fija la secuencia en export(); las subclases rellenan los huecos."
+  classes={[
+    { id: 'base', name: 'ReportExporter', kind: 'abstract', methods: ['export(range)  «final»', 'fetchSales(range)', 'format(rows)  «abstract»', 'beforeWrite()  «hook»'], x: 0.7, y: 0, w: 1.3, tone: 'line', desc: 'Define el algoritmo completo en export(). Los pasos comunes (consultar, filtrar, escribir) viven aquí una sola vez.' },
+    { id: 'csv', name: 'CsvExporter', methods: ['format(rows)'], x: 0.2, y: 1.35, desc: 'Solo implementa el paso que cambia.' },
+    { id: 'pdf', name: 'PdfExporter', methods: ['format(rows)', 'beforeWrite()'], x: 1.2, y: 1.35, desc: 'Además sobrescribe el hook para agregar una portada.' },
+  ]}
+  relations={[
+    { from: 'csv', to: 'base', kind: 'inherits' },
+    { from: 'pdf', to: 'base', kind: 'inherits' },
+  ]}
+/>
+
+Se lo conoce también como el **principio de Hollywood**: "no nos llames, nosotros te llamamos". La subclase no decide cuándo se ejecuta `format()`; la base la llama cuando corresponde.
+
+<CodeTabs>
+
+```ts title="TypeScript"
+interface Sale {
+  id: string
+  total: number
+  status: 'paid' | 'voided'
+}
+
+abstract class ReportExporter {
+  // El método plantilla: la secuencia no se toca en las subclases.
+  async export(from: Date, to: Date): Promise<Uint8Array> {
+    const sales = await this.fetchSales(from, to)
+    const valid = sales.filter((s) => s.status !== 'voided')
+    this.beforeWrite(valid)
+    return this.format(valid)
+  }
+
+  protected async fetchSales(from: Date, to: Date): Promise<Sale[]> {
+    return db.sales.findBetween(from, to) // paso común
+  }
+
+  protected beforeWrite(_rows: Sale[]): void {} // hook opcional
+
+  protected abstract format(rows: Sale[]): Uint8Array // paso obligatorio
+}
+
+class CsvExporter extends ReportExporter {
+  protected format(rows: Sale[]) {
+    const lines = ['id,total', ...rows.map((r) => `${r.id},${r.total}`)]
+    return new TextEncoder().encode(lines.join('\n'))
+  }
+}
+
+class PdfExporter extends ReportExporter {
+  protected beforeWrite(rows: Sale[]) {
+    console.log(`Generando portada para ${rows.length} ventas`)
+  }
+  protected format(rows: Sale[]) {
+    return pdf.render({ title: 'Ventas', rows })
+  }
+}
+```
+
+```python title="Python"
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from datetime import date
+
+
+@dataclass(frozen=True)
+class Sale:
+    id: str
+    total: float
+    status: str  # "paid" | "voided"
+
+
+class ReportExporter(ABC):
+    def export(self, start: date, end: date) -> bytes:
+        """Método plantilla: no lo sobrescribas."""
+        sales = self.fetch_sales(start, end)
+        valid = [s for s in sales if s.status != "voided"]
+        self.before_write(valid)
+        return self.format(valid)
+
+    def fetch_sales(self, start: date, end: date) -> list[Sale]:
+        return db.sales.between(start, end)
+
+    def before_write(self, rows: list[Sale]) -> None:
+        """Hook: por defecto no hace nada."""
+
+    @abstractmethod
+    def format(self, rows: list[Sale]) -> bytes: ...
+
+
+class CsvExporter(ReportExporter):
+    def format(self, rows: list[Sale]) -> bytes:
+        lines = ["id,total", *(f"{r.id},{r.total}" for r in rows)]
+        return "\n".join(lines).encode()
+```
+
+</CodeTabs>
+
+### Dónde lo ves en la vida real
+
+- **`unittest.TestCase`** en Python y JUnit: el *runner* define la secuencia `setUp() → test → tearDown()`; tú rellenas los pasos.
+- **Ciclo de vida de componentes** en frameworks: los métodos `componentDidMount` de las clases de React, `ngOnInit` en Angular o los *hooks* de las *class-based views* de Django (`get_queryset`, `get_context_data`). El framework es la plantilla; tú implementas los huecos.
+- **`HttpServlet.service()`** en Java llama a `doGet()` o `doPost()` según el método HTTP. **`AbstractList`** te pide solo `get()` y `size()` y te regala el resto de `List`.
+
+### Cuándo NO usarlo
+
+- **Cuando las variaciones se combinan.** Si hay tres formatos y dos fuentes de datos, la herencia te lleva a seis subclases. Con [Strategy](/patrones/comportamiento-1) (composición) pasas un formateador y una fuente por separado.
+- **Jerarquías profundas.** Cada nivel puede sobrescribir pasos del anterior y terminas sin saber qué versión de `format()` corre. Es la *fragile base class*: un cambio en la base rompe subclases que no conoces.
+- **Si el lenguaje te deja pasar funciones**, a veces basta con `export(from, to, format)` donde `format` es un parámetro. Es Template Method sin herencia.
+
+**Template Method vs Strategy:** ambos varían partes de un algoritmo. Template Method lo hace con **herencia**, se fija al crear la clase y varía *pasos*. Strategy lo hace con **composición**, se puede cambiar en tiempo de ejecución y varía *el algoritmo entero*. La recomendación general de preferir composición sobre herencia ([introducción](/patrones/introduccion)) aplica aquí.
+
+## Chain of Responsibility: una petición, varios candidatos
+
+**Intención.** Evitar acoplar al emisor de una petición con su receptor, dando a más de un objeto la oportunidad de manejarla. Los receptores se encadenan y la petición pasa por la cadena hasta que alguien la maneja.
+
+### El problema
+
+Un endpoint `POST /orders` tiene que autenticar, aplicar *rate limiting*, validar el cuerpo y recién ahí crear el pedido. La primera versión mete todo en el handler:
+
+```ts title="create-order.ts (antes)"
+app.post('/orders', async (req, res) => {
+  const user = await verifyToken(req.headers.authorization)
+  if (!user) return res.status(401).end()
+  if (await rateLimiter.isOver(user.id)) return res.status(429).end()
+  const errors = validateOrder(req.body)
+  if (errors.length) return res.status(422).json({ errors })
+  // ...recién aquí empieza la lógica de negocio
+  const order = await orders.create(user.id, req.body)
+  res.status(201).json(order)
+})
+```
+
+Ahora imagina 40 endpoints. Las mismas cuatro verificaciones se copian en todos, en un orden que no siempre coincide, y cambiar la política de rate limiting implica tocar 40 archivos.
+
+### La solución
+
+Cada verificación se vuelve un **manejador** independiente con la misma firma. Cada uno hace su parte y decide: **cortar** (responder un error) o **pasar** la petición al siguiente. El cliente arma la cadena y solo conoce al primer eslabón.
+
+<ChainOfResponsibility />
+
+<UmlDiagram
+  caption="Chain of Responsibility: cada manejador conoce solo a su siguiente."
+  classes={[
+    { id: 'cl', name: 'Router', methods: ['route(request)'], x: -0.3, y: 0, desc: 'El cliente: arma la cadena una vez y solo conoce al primer eslabón.' },
+    { id: 'h', name: 'Handler', kind: 'interface', methods: ['handle(request)'], x: 1, y: 0, desc: 'El contrato común. En Express es la firma (req, res, next).' },
+    { id: 'b', name: 'BaseHandler', kind: 'abstract', fields: ['next?: Handler'], methods: ['setNext(h): Handler', 'handle(request)'], x: 1, y: 1.2, w: 1.1, desc: 'Guarda la referencia next (otro Handler) e implementa el "pasar al siguiente" por defecto, para que cada manejador concreto solo escriba su verificación.' },
+    { id: 'a', name: 'AuthHandler', methods: ['handle(request)'], x: 0, y: 2.45, desc: 'Corta con 401 si el token no es válido.' },
+    { id: 'r', name: 'RateLimitHandler', methods: ['handle(request)'], x: 1, y: 2.45, desc: 'Corta con 429 si el usuario superó su cuota.' },
+    { id: 'v', name: 'ValidationHandler', methods: ['handle(request)'], x: 2, y: 2.45, desc: 'Corta con 422 si el cuerpo es inválido; si no, pasa al handler final.' },
+  ]}
+  relations={[
+    { from: 'b', to: 'h', kind: 'implements' },
+    { from: 'cl', to: 'h', kind: 'uses', label: 'primer eslabón' },
+    { from: 'a', to: 'b', kind: 'inherits' },
+    { from: 'r', to: 'b', kind: 'inherits' },
+    { from: 'v', to: 'b', kind: 'inherits' },
+  ]}
+/>
+
+En TypeScript lo idiomático es la versión funcional que popularizaron Express y Koa: cada eslabón es una función que recibe `next`. En Java, la versión clásica del GoF con objetos enlazados.
+
+<CodeTabs>
+
+```ts title="TypeScript"
+interface Request {
+  headers: Record<string, string | undefined>
+  body: unknown
+  userId?: string
+}
+type Response = { status: number; body?: unknown }
+type Handler = (req: Request, next: () => Promise<Response>) => Promise<Response>
+
+const rateLimit: Handler = async (req, next) => {
+  const key = req.headers['x-forwarded-for'] ?? 'anon'
+  if (await limiter.isOver(key)) return { status: 429 } // corta la cadena
+  return next() // pasa al siguiente eslabón
+}
+
+const auth: Handler = async (req, next) => {
+  const userId = await verifyToken(req.headers.authorization)
+  if (!userId) return { status: 401 }
+  req.userId = userId
+  return next()
+}
+
+const validate: Handler = async (req, next) => {
+  const errors = validateOrder(req.body)
+  return errors.length ? { status: 422, body: { errors } } : next()
+}
+
+const createOrder: Handler = async (req) => ({
+  status: 201,
+  body: await orders.create(req.userId!, req.body),
+})
+
+// Arma la cadena: cada eslabón recibe como "next" al resto.
+function chain(...handlers: Handler[]) {
+  return (req: Request): Promise<Response> => {
+    const run = (i: number): Promise<Response> =>
+      i < handlers.length
+        ? handlers[i](req, () => run(i + 1))
+        : Promise.resolve({ status: 404 }) // nadie la manejó
+    return run(0)
+  }
+}
+
+const postOrders = chain(rateLimit, auth, validate, createOrder)
+```
+
+```java title="Java"
+abstract class Handler {
+    private Handler next;
+
+    public Handler setNext(Handler next) {
+        this.next = next;
+        return next; // permite encadenar: a.setNext(b).setNext(c)
+    }
+
+    public Response handle(Request req) {
+        return next != null ? next.handle(req) : Response.notFound();
+    }
+}
+
+class RateLimitHandler extends Handler {
+    private final RateLimiter limiter;
+    RateLimitHandler(RateLimiter limiter) { this.limiter = limiter; }
+
+    @Override public Response handle(Request req) {
+        if (limiter.isOver(req.clientIp())) return Response.status(429);
+        return super.handle(req);
+    }
+}
+
+class AuthHandler extends Handler {
+    private final TokenVerifier tokens;
+    AuthHandler(TokenVerifier tokens) { this.tokens = tokens; }
+
+    @Override public Response handle(Request req) {
+        var user = tokens.verify(req.header("Authorization"));
+        if (user.isEmpty()) return Response.status(401);
+        return super.handle(req.withUser(user.get()));
+    }
+}
+
+// Armado:
+// Handler chain = new RateLimitHandler(limiter);
+// chain.setNext(new AuthHandler(tokens))
+//      .setNext(new ValidationHandler())
+//      .setNext(new CreateOrderHandler(orders));
+// Response res = chain.handle(request);
+```
+
+</CodeTabs>
+
+### Dos sabores de cadena
+
+- **CoR "puro"**: exactamente un eslabón maneja la petición y los demás la dejan pasar. Ejemplos: la escalada de soporte (nivel 1 → nivel 2 → ingeniería), la aprobación de gastos según monto (supervisor hasta 500, gerente hasta 5.000, dirección por encima) y el *event bubbling* del DOM, donde un evento sube por los ancestros hasta que alguien llama `stopPropagation()`.
+- **Pipeline o middleware**: todos los eslabones procesan y pasan, y cualquiera puede cortar. Es lo que hacen Express, Koa, los *filters* de Servlet (`FilterChain.doFilter`) y NestJS, cuya documentación aclara que los *guards* corren después de todo el middleware y antes de cualquier *interceptor* o *pipe*. El middleware como patrón de aplicación (y la variante "cebolla" de Koa, que también procesa la respuesta de vuelta) se desarrolla en [patrones de aplicación](/patrones/patrones-aplicacion).
+
+### Cuándo NO usarlo
+
+- **Cuando el orden importa pero no se ve.** La cadena dependiente del orden es frágil: si alguien pone `validate` antes que `auth`, terminas validando peticiones de desconocidos. Arma la cadena en un solo lugar y documenta por qué ese orden.
+- **Cuando una petición puede caerse del final sin que nadie la maneje.** Siempre define un eslabón terminal o un resultado por defecto (el `404` del ejemplo).
+- **Cadenas larguísimas** en rutas críticas de latencia, o cuando depurar "quién cortó la petición" se vuelve arqueología. Registra en qué eslabón terminó cada petición.
+
+**Relacionados:** Decorator ([estructurales](/patrones/estructurales)) tiene una estructura casi igual, pero un decorador siempre delega y agrega comportamiento, mientras que un eslabón puede cortar. Command (la petición que viaja puede ser un comando). Composite (en el DOM, la cadena sigue la jerarquía padre-hijo).
+
+<Quiz
+  question="En el widget, con el orden «Auth → Rate limit», un atacante manda miles de peticiones con tokens inválidos. ¿Qué problema tiene ese orden?"
+  options={[
+    { text: 'Ninguno: el rate limit igual termina bloqueando al atacante.', why: 'Las peticiones con token inválido se cortan con 401 en Auth y nunca llegan al rate limiter, así que ese atacante no se limita nunca.' },
+    { text: 'Cada petición inválida ejecuta la autenticación (verificar firma, consultar usuarios) antes de cualquier límite, y como se corta con 401, el rate limiter ni se entera.', correct: true, why: 'Por eso el límite grueso (por IP o por cliente) suele ir primero: es barato y protege a los eslabones caros. El orden de la cadena es una decisión de diseño, no un detalle.' },
+    { text: 'El handler final se ejecuta dos veces.', why: 'Cada petición recorre la cadena una sola vez; el problema es de costo y de protección, no de duplicación.' },
+  ]}
+/>
+
+## Iterator: recorrer sin conocer la forma
+
+**Intención.** Proveer una forma de acceder secuencialmente a los elementos de una colección sin exponer su representación interna.
+
+### El problema
+
+Una API de pedidos devuelve resultados paginados con un cursor. Cada lugar que necesita recorrer todos los pedidos repite el mismo bucle: pedir la página, procesar, revisar `nextCursor`, volver a pedir. El código cliente conoce el detalle de la paginación, y si la API cambia de cursor a `offset`, hay que tocar todos esos bucles. Lo mismo pasa con un árbol de categorías: cada recorrido reimplementa la recursión.
+
+### La solución
+
+Un objeto iterador encapsula el recorrido y expone una interfaz mínima (`next()`, y saber si terminó). En el GoF eso eran dos jerarquías de clases, *Aggregate* e *Iterator*. Hoy casi todos los lenguajes lo traen incorporado: el **protocolo de iteración** de JavaScript (`Symbol.iterator`, `Symbol.asyncIterator`) y el de Python (`__iter__` y `__next__`). Con **generadores** escribirlo es trivial.
+
+<UmlDiagram
+  caption="Iterator: el cliente recorre a través de una interfaz; la colección decide cómo."
+  classes={[
+    { id: 'agg', name: 'Iterable', kind: 'interface', methods: ['[Symbol.iterator]()'], x: 0, y: 0, desc: 'La colección promete que sabe crear un iterador. Es lo que hace funcionar a for...of.' },
+    { id: 'it', name: 'Iterator', kind: 'interface', methods: ['next(): {value, done}'], x: 1.5, y: 0, desc: 'El cursor: entrega un elemento a la vez y avisa cuando termina.' },
+    { id: 'col', name: 'OrderHistory', fields: ['api: OrdersApi'], methods: ['[Symbol.iterator]()'], x: 0, y: 1.35, desc: 'Colección concreta: oculta si por debajo hay paginación por cursor, por offset o un array en memoria.' },
+    { id: 'pit', name: 'PageIterator', fields: ['cursor?: string'], methods: ['next()'], x: 1.5, y: 1.35, desc: 'Iterador concreto. Con un generador ni siquiera escribes esta clase.' },
+  ]}
+  relations={[
+    { from: 'col', to: 'agg', kind: 'implements' },
+    { from: 'pit', to: 'it', kind: 'implements' },
+    { from: 'col', to: 'pit', kind: 'depends', label: 'crea' },
+  ]}
+/>
+
+<CodeTabs>
+
+```ts title="TypeScript"
+interface Order {
+  id: string
+  total: number
+}
+interface Page {
+  items: Order[]
+  nextCursor?: string
+}
+
+// Un async generator ES un iterador: oculta la paginación por completo.
+async function* allOrders(api: { list(cursor?: string): Promise<Page> }) {
+  let cursor: string | undefined
+  do {
+    const page = await api.list(cursor)
+    yield* page.items
+    cursor = page.nextCursor
+  } while (cursor)
+}
+
+// El cliente no sabe nada de cursores:
+let revenue = 0
+for await (const order of allOrders(ordersApi)) {
+  revenue += order.total
+  if (revenue > 1_000_000) break // perezoso: no pide más páginas de las necesarias
+}
+```
+
+```python title="Python"
+from collections.abc import Iterator
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class Order:
+    id: str
+    total: float
+
+
+def all_orders(api) -> Iterator[Order]:
+    """Generador: cada yield entrega un pedido; la paginación queda oculta."""
+    cursor = None
+    while True:
+        page = api.list(cursor=cursor)
+        yield from page.items
+        cursor = page.next_cursor
+        if cursor is None:
+            return
+
+
+revenue = 0.0
+for order in all_orders(orders_api):
+    revenue += order.total
+```
+
+</CodeTabs>
+
+### Dónde lo ves en la vida real
+
+Cada `for...of` en JavaScript, cada `for x in` en Python, cada `Iterable` de Java. Los cursores de base de datos, los *streams* de Node, los iteradores perezosos de Rust y los SDK de AWS o Stripe, que ofrecen auto-paginación con esta misma forma. Iterator se combina naturalmente con [Composite](/patrones/estructurales): un generador recursivo recorre un árbol entero con `yield*` / `yield from`.
+
+### Cuándo NO usarlo
+
+- **No escribas clases iteradoras a mano** si tu lenguaje tiene generadores. Es el caso de Norvig otra vez: el patrón se volvió una característica del lenguaje.
+- **Si ya tienes un array en memoria**, devuelve el array. Un iterador perezoso tiene sentido cuando los datos son grandes, remotos o infinitos.
+- **Cuidado con modificar la colección mientras la recorres.** Java lanza `ConcurrentModificationException`; otros lenguajes simplemente se comportan raro. Itera sobre una copia o acumula los cambios.
+
+## Mediator: un centro en vez de una malla
+
+**Intención.** Definir un objeto que encapsula cómo interactúa un conjunto de objetos, evitando que se refieran unos a otros explícitamente y permitiendo variar su interacción de forma independiente.
+
+### El problema
+
+Un formulario de checkout: al cambiar el **país** cambian las **opciones de envío**; al elegir envío cambia el **total**; si aplicas un **cupón** de envío gratis se deshabilita *express*; si el método de pago es transferencia aparece un campo de RUT o CUIT. Si cada componente llama directamente a los otros, con *n* componentes tienes hasta *n(n-1)* conexiones. Nadie puede reutilizar `CountrySelect` en otra pantalla porque arrastra referencias a medio formulario.
+
+### La solución
+
+Los componentes solo conocen al **mediador** y le avisan cuando algo pasa (`notify(this, 'changed')`). El mediador concentra las reglas de coordinación y le dice a cada componente qué hacer.
+
+<UmlDiagram
+  caption="Mediator: los componentes no se conocen entre sí; solo conocen al mediador."
+  classes={[
+    { id: 'm', name: 'Mediator', kind: 'interface', methods: ['notify(sender, event)'], x: 1, y: 0, desc: 'El contrato mínimo que ven los componentes.' },
+    { id: 'cd', name: 'CheckoutDialog', fields: ['country', 'shipping', 'coupon'], methods: ['notify(sender, event)'], x: 1, y: 1.3, tone: 'line', desc: 'El mediador concreto: aquí viven todas las reglas de "si cambia X, actualiza Y". Es fácil de leer... y fácil de inflar.' },
+    { id: 'c', name: 'CountrySelect', methods: ['change(code)'], x: 0, y: 2.7, desc: 'Solo avisa al mediador. Se puede reutilizar en otra pantalla con otro mediador.' },
+    { id: 's', name: 'ShippingOptions', methods: ['setOptions(list)'], x: 1, y: 2.7, desc: 'No sabe que existe un selector de país.' },
+    { id: 'k', name: 'CouponInput', methods: ['apply(code)'], x: 2, y: 2.7, desc: 'Avisa al mediador; el mediador decide deshabilitar express.' },
+  ]}
+  relations={[
+    { from: 'cd', to: 'm', kind: 'implements' },
+    { from: 'cd', to: 'c', kind: 'composes' },
+    { from: 'cd', to: 's', kind: 'composes' },
+    { from: 'cd', to: 'k', kind: 'composes' },
+  ]}
+/>
+
+<CodeTabs>
+
+```ts title="TypeScript"
+interface Mediator {
+  notify(sender: object, event: string): void
+}
+
+class CountrySelect {
+  value = 'CL'
+  constructor(private mediator: Mediator) {}
+  change(code: string) {
+    this.value = code
+    this.mediator.notify(this, 'changed')
+  }
+}
+
+class CouponInput {
+  code = ''
+  constructor(private mediator: Mediator) {}
+  apply(code: string) {
+    this.code = code
+    this.mediator.notify(this, 'applied')
+  }
+}
+
+class ShippingOptions {
+  options: string[] = []
+  setOptions(options: string[]) {
+    this.options = options
+  }
+}
+
+class CheckoutDialog implements Mediator {
+  country = new CountrySelect(this)
+  coupon = new CouponInput(this)
+  shipping = new ShippingOptions()
+
+  notify(sender: object, event: string) {
+    // Todas las reglas de coordinación, en un solo lugar.
+    if (sender === this.country && event === 'changed') {
+      this.shipping.setOptions(this.country.value === 'CL' ? ['standard', 'express', 'pickup'] : ['international'])
+    }
+    if (sender === this.coupon && event === 'applied' && this.coupon.code === 'ENVIOGRATIS') {
+      this.shipping.setOptions(this.shipping.options.filter((o) => o !== 'express'))
+    }
+  }
+}
+```
+
+```python title="Python"
+from typing import Protocol
+
+
+class Mediator(Protocol):
+    def notify(self, sender: object, event: str) -> None: ...
+
+
+class CountrySelect:
+    def __init__(self, mediator: Mediator) -> None:
+        self.mediator = mediator
+        self.value = "CL"
+
+    def change(self, code: str) -> None:
+        self.value = code
+        self.mediator.notify(self, "changed")
+
+
+class ShippingOptions:
+    def __init__(self) -> None:
+        self.options: list[str] = []
+
+
+class CheckoutDialog:
+    def __init__(self) -> None:
+        self.country = CountrySelect(self)
+        self.shipping = ShippingOptions()
+
+    def notify(self, sender: object, event: str) -> None:
+        if sender is self.country and event == "changed":
+            local = self.country.value == "CL"
+            self.shipping.options = ["standard", "express"] if local else ["international"]
+```
+
+</CodeTabs>
+
+### Dónde lo ves en la vida real
+
+- La analogía clásica es la **torre de control**: los aviones no negocian la pista entre ellos; todos hablan con la torre.
+- **Salas de chat**: un usuario no manda mensajes directamente a cada participante, sino a la sala.
+- **Controladores de formularios** y diálogos de UI (el ejemplo original del GoF es un diálogo de selección de fuentes). En React, "subir el estado" al componente padre que coordina a sus hijos es, en la práctica, un mediador.
+- En .NET, la librería **MediatR** toma el nombre, pero funciona más como un despachador de peticiones en proceso (cada *request* va a su *handler*) que como el Mediator del GoF. Úsala por lo que es y no la confundas con el patrón.
+- A escala de servicios, un **orquestador** de sagas cumple un rol parecido ([sagas y outbox](/arquitectura/sagas-y-outbox)).
+
+### Cuándo NO usarlo
+
+- **Con dos o tres objetos** que se hablan poco: una llamada directa es más clara.
+- **Cuando el mediador empieza a crecer sin control.** Es el riesgo principal: todas las reglas migran al mediador y terminas con un *god object* ([antipatrones](/patrones/antipatrones)). Si pasa, divide por subflujos (un mediador por sección del formulario).
+
+**Mediator vs Observer:** Observer **difunde** (el sujeto avisa a quien quiera escuchar y no coordina nada). Mediator **centraliza** (sabe quiénes participan y orquesta sus reacciones). Es común implementar un mediador usando eventos por dentro.
+
+## Memento: deshacer sin romper el encapsulamiento
+
+**Intención.** Sin violar el encapsulamiento, capturar y externalizar el estado interno de un objeto para poder restaurarlo más tarde.
+
+### El problema
+
+Quieres un historial de deshacer para un editor de anuncios, con título, descripción, fotos, precio y la selección actual. La solución rápida es que el historial copie los campos del editor... lo que obliga a hacerlos públicos, o a que el historial conozca la estructura interna del editor. Cada campo nuevo rompe el historial, y cualquiera puede leer y modificar el estado desde afuera.
+
+### La solución
+
+Tres roles:
+
+- **Originator** (el editor): sabe crear un memento con su estado (`save()`) y restaurarse desde uno (`restore(m)`).
+- **Memento**: una "caja cerrada" con la foto del estado. Solo el originator sabe leerla.
+- **Caretaker** (el historial): guarda y devuelve mementos, pero **nunca mira adentro**.
+
+<MementoTimeline />
+
+<UmlDiagram
+  caption="Memento: el caretaker guarda cajas cerradas; solo el originator las abre."
+  classes={[
+    { id: 'ed', name: 'AdEditor', fields: ['title', 'body'], methods: ['save(): Memento', 'restore(m)'], x: 0, y: 0, tone: 'line', desc: 'El originator. Es el único que conoce el formato interno del memento.' },
+    { id: 'me', name: 'Memento', fields: ['- state (privado)'], methods: ['label: string'], x: 1.45, y: 0, desc: 'La foto del estado. Hacia afuera solo expone metadatos (hora, etiqueta).' },
+    { id: 'hi', name: 'History', fields: ['stack: Memento[]'], methods: ['push(m)', 'pop(): Memento'], x: 1.45, y: 1.3, desc: 'El caretaker: decide cuándo guardar y cuántos conservar, sin poder leer el contenido.' },
+  ]}
+  relations={[
+    { from: 'ed', to: 'me', kind: 'depends', label: 'crea / lee' },
+    { from: 'hi', to: 'me', kind: 'aggregates' },
+  ]}
+/>
+
+TypeScript no tiene clases "amigas" como C++, pero puedes lograr lo mismo exportando solo un **tipo opaco** y manteniendo la clase real privada al módulo. En Python, la convención del guion bajo comunica "no toques esto".
+
+<CodeTabs>
+
+```ts title="TypeScript"
+// editor.ts
+export interface EditorMemento {
+  readonly label: string // lo único visible desde afuera
+}
+
+// No se exporta: nadie fuera de este módulo puede leer el estado.
+class Snapshot implements EditorMemento {
+  constructor(
+    readonly label: string,
+    readonly state: Readonly<{ title: string; body: string }>,
+  ) {}
+}
+
+export class AdEditor {
+  private title = ''
+  private body = ''
+
+  edit(title: string, body: string) {
+    this.title = title
+    this.body = body
+  }
+
+  save(): EditorMemento {
+    return new Snapshot(new Date().toLocaleTimeString(), { title: this.title, body: this.body })
+  }
+
+  restore(m: EditorMemento) {
+    if (!(m instanceof Snapshot)) throw new Error('Memento ajeno')
+    ;({ title: this.title, body: this.body } = m.state)
+  }
+}
+
+// history.ts: el caretaker solo ve EditorMemento
+export class History {
+  private stack: EditorMemento[] = []
+  push(m: EditorMemento) {
+    this.stack.push(m)
+    if (this.stack.length > 50) this.stack.shift() // límite de memoria
+  }
+  pop() {
+    return this.stack.pop()
+  }
+}
+```
+
+```python title="Python"
+from dataclasses import dataclass, field
+from datetime import datetime
+
+
+@dataclass(frozen=True)
+class EditorMemento:
+    label: str
+    _state: tuple[str, str]  # guion bajo: solo AdEditor debería leerlo
+
+
+class AdEditor:
+    def __init__(self) -> None:
+        self._title = ""
+        self._body = ""
+
+    def edit(self, title: str, body: str) -> None:
+        self._title, self._body = title, body
+
+    def save(self) -> EditorMemento:
+        label = datetime.now().strftime("%H:%M:%S")
+        return EditorMemento(label, (self._title, self._body))
+
+    def restore(self, m: EditorMemento) -> None:
+        self._title, self._body = m._state
+
+
+@dataclass
+class History:
+    stack: list[EditorMemento] = field(default_factory=list)
+    limit: int = 50
+
+    def push(self, m: EditorMemento) -> None:
+        self.stack.append(m)
+        del self.stack[: -self.limit]  # conserva solo los últimos N
+```
+
+</CodeTabs>
+
+### El costo: memoria
+
+Cada memento es una **copia completa** del estado. Con un formulario chico no importa; con un documento de 50 MB y un snapshot por tecla, sí. Las salidas habituales:
+
+- **Limitar el historial** (los últimos N, como en el código).
+- **Guardar diferencias** en vez de fotos completas, o usar [Command](/patrones/comportamiento-1) con operaciones inversas.
+- **Estructuras inmutables con *structural sharing***: si el estado es inmutable, cada versión comparte casi todo con la anterior. Por eso las **Redux DevTools** pueden hacer "viaje en el tiempo" barato, y librerías como Immer producen versiones nuevas sin copiar todo.
+
+### Cuándo NO usarlo
+
+- **Estados enormes que cambian seguido**, sin estructuras compartidas: la memoria explota. Prefiere Command o *event sourcing*.
+- **Estado que referencia recursos externos** (conexiones, archivos abiertos, timers): restaurar la foto no restaura el mundo.
+- **Cuando no hace falta encapsular**: si el estado ya es un objeto inmutable público (un *store* de Redux), guardar referencias a versiones anteriores ya es un memento sin ceremonia.
+
+**Relacionados:** Command (deshacer por operación inversa vs por foto; suelen convivir), Iterator (un iterador puede guardar su posición como memento), Prototype (clonar es otra forma de capturar estado; en [creacionales](/patrones/creacionales)).
+
+## Visitor: operaciones nuevas sin tocar las clases
+
+**Intención.** Representar una operación que se aplica a los elementos de una estructura de objetos, permitiendo definir operaciones nuevas sin cambiar las clases de esos elementos.
+
+### El problema
+
+Un carrito tiene ítems de tres tipos: `Product`, `Service` y `GiftCard`. Necesitas calcular impuestos, exportar a JSON para el ERP y estimar el envío. Tienes dos caminos ingenuos y los dos huelen:
+
+1. **Un método por operación en cada clase** (`tax()`, `toJson()`, `shipping()`): las clases de dominio se llenan de responsabilidades ajenas (¿qué hace un producto sabiendo el formato del ERP?).
+2. **Un `switch (item.kind)` en cada operación**: si mañana agregas `Subscription`, tienes que encontrar todos los `switch` dispersos, y el compilador no te avisa si olvidas uno.
+
+### La solución
+
+Cada elemento implementa `accept(visitor)`, que llama de vuelta al método específico del visitante: `visitor.visitProduct(this)`. Cada operación es una clase visitante con un método por tipo. Esa doble llamada se llama **double dispatch**: el método que corre depende del tipo del elemento **y** del tipo del visitante.
+
+<VisitorGrid />
+
+<UmlDiagram
+  caption="Visitor: accept() hace rebotar la llamada al método correcto del visitante (double dispatch)."
+  wide
+  classes={[
+    { id: 'v', name: 'CartVisitor', kind: 'interface', methods: ['visitProduct(p)', 'visitService(s)', 'visitGiftCard(g)'], x: 0, y: 0, desc: 'Un método por tipo concreto. Agregar un tipo obliga a cambiar esta interfaz y todos sus implementadores.' },
+    { id: 'tax', name: 'TaxVisitor', methods: ['visitProduct(p)', '...'], x: -0.5, y: 1.4, desc: 'Una operación completa, en un solo archivo, para todos los tipos.' },
+    { id: 'json', name: 'JsonVisitor', methods: ['visitProduct(p)', '...'], x: 0.5, y: 1.4, desc: 'Otra operación. Agregarla no tocó ninguna clase de ítem.' },
+    { id: 'i', name: 'CartItem', kind: 'interface', methods: ['accept(v: CartVisitor)'], x: 2, y: 0, desc: 'Lo único que los elementos necesitan saber de los visitantes.' },
+    { id: 'p', name: 'Product', methods: ['accept(v)'], x: 1.5, y: 1.4, desc: 'accept(v) es una línea: v.visitProduct(this).' },
+    { id: 'g', name: 'GiftCard', methods: ['accept(v)'], x: 2.5, y: 1.4, desc: 'accept(v) llama a v.visitGiftCard(this).' },
+  ]}
+  relations={[
+    { from: 'tax', to: 'v', kind: 'implements' },
+    { from: 'json', to: 'v', kind: 'implements' },
+    { from: 'p', to: 'i', kind: 'implements' },
+    { from: 'g', to: 'i', kind: 'implements' },
+    { from: 'i', to: 'v', kind: 'depends', label: 'accept' },
+  ]}
+/>
+
+En Python, el double dispatch manual casi nunca es lo idiomático: `functools.singledispatch` despacha por el tipo del argumento, y el `match` estructural (Python 3.10+) cubre el resto. Las dos versiones resuelven lo mismo: **la operación vive junta, en un solo lugar**.
+
+<CodeTabs>
+
+```ts title="TypeScript"
+interface CartVisitor<R> {
+  visitProduct(p: Product): R
+  visitService(s: Service): R
+  visitGiftCard(g: GiftCard): R
+}
+
+interface CartItem {
+  accept<R>(v: CartVisitor<R>): R
+}
+
+class Product implements CartItem {
+  constructor(readonly sku: string, readonly price: number, readonly weightKg: number) {}
+  accept<R>(v: CartVisitor<R>) { return v.visitProduct(this) }
+}
+class Service implements CartItem {
+  constructor(readonly name: string, readonly price: number) {}
+  accept<R>(v: CartVisitor<R>) { return v.visitService(this) }
+}
+class GiftCard implements CartItem {
+  constructor(readonly amount: number) {}
+  accept<R>(v: CartVisitor<R>) { return v.visitGiftCard(this) }
+}
+
+// Una operación = una clase, con un caso por tipo.
+class TaxVisitor implements CartVisitor<number> {
+  visitProduct(p: Product) { return p.price * 0.19 }
+  visitService(_s: Service) { return 0 } // exento en este ejemplo
+  visitGiftCard(_g: GiftCard) { return 0 } // tributa al canjearse
+}
+
+const cart: CartItem[] = [new Product('BK-28', 100, 12), new GiftCard(30)]
+const tax = cart.reduce((sum, item) => sum + item.accept(new TaxVisitor()), 0)
+
+// Alternativa idiomática en TS: unión discriminada + switch exhaustivo.
+// type Item = { kind: 'product'; price: number } | { kind: 'gift'; amount: number }
+// el chequeo `const _x: never = item` hace que el compilador avise si falta un caso.
+```
+
+```python title="Python"
+from dataclasses import dataclass
+from functools import singledispatch
+
+
+@dataclass(frozen=True)
+class Product:
+    sku: str
+    price: float
+    weight_kg: float
+
+
+@dataclass(frozen=True)
+class Service:
+    name: str
+    price: float
+
+
+@dataclass(frozen=True)
+class GiftCard:
+    amount: float
+
+
+# Cada operación es una función genérica con un caso por tipo.
+@singledispatch
+def tax(item) -> float:
+    raise NotImplementedError(f"tax() no soporta {type(item).__name__}")
+
+
+@tax.register
+def _(item: Product) -> float:
+    return item.price * 0.19
+
+
+@tax.register
+def _(item: Service) -> float:
+    return 0.0
+
+
+@tax.register
+def _(item: GiftCard) -> float:
+    return 0.0
+
+
+# O con pattern matching (3.10+):
+def to_json(item) -> dict:
+    match item:
+        case Product(sku=sku, price=price):
+            return {"type": "product", "sku": sku, "price": price}
+        case GiftCard(amount=amount):
+            return {"type": "gift_card", "amount": amount}
+        case _:
+            raise TypeError(item)
+
+
+cart = [Product("BK-28", 100, 12), GiftCard(30)]
+total_tax = sum(tax(i) for i in cart)
+```
+
+</CodeTabs>
+
+### El trade-off de fondo: el *expression problem*
+
+El widget lo muestra: con Visitor, **agregar una operación es fácil** (una clase nueva) pero **agregar un tipo es caro** (tocar la interfaz y todos los visitantes). Con métodos en cada clase pasa exactamente lo contrario. Philip Wadler bautizó este dilema como el *expression problem* en 1998: cómo poder agregar tanto casos nuevos como funciones nuevas sobre un tipo de datos, sin recompilar lo existente y sin perder seguridad de tipos. No hay almuerzo gratis: Visitor apuesta a que **los tipos son estables y las operaciones crecen**.
+
+Por eso Visitor brilla en **compiladores y herramientas sobre árboles sintácticos**: el conjunto de nodos del lenguaje cambia muy poco y las operaciones (chequear tipos, optimizar, formatear, detectar errores) no paran de aparecer.
+
+### Dónde lo ves en la vida real
+
+- **Babel**: un plugin declara un objeto `visitor` con métodos por tipo de nodo (`Identifier(path)`, `BinaryExpression(path)`); el *handbook* de Babel lo presenta explícitamente como el patrón Visitor aplicado al recorrido de ASTs.
+- **ESLint**: el `create()` de cada regla devuelve un objeto cuyas claves son tipos de nodo o selectores; ESLint llama a cada función mientras recorre el árbol.
+- **Python `ast.NodeVisitor`**: `visit(node)` despacha a `visit_Call`, `visit_Name`, etc., según la clase del nodo, y usa `generic_visit` para el resto.
+- El compilador de Java (`TreeVisitor`), los procesadores de anotaciones (`ElementVisitor`) y los motores de consultas que recorren planes de ejecución.
+
+### Cuándo NO usarlo
+
+- **Si la jerarquía de elementos cambia seguido**: cada tipo nuevo es una cirugía en todos los visitantes.
+- **Si tu lenguaje tiene uniones con chequeo de exhaustividad**: uniones discriminadas en TypeScript, `sealed` + `switch` con patrones en Java 21, `enum` en Rust, `match` en Python. Logran lo mismo (la operación junta en un lugar, y el compilador te avisa si falta un caso) con mucho menos código.
+- **Si los visitantes necesitan acceder a internals** de cada elemento, terminas abriendo la encapsulación para que puedan trabajar.
+
+**Relacionados:** Composite (Visitor casi siempre recorre una estructura compuesta, como un AST o el árbol de un documento), Iterator (para el recorrido), Interpreter (abajo).
+
+<Details summary="Profundizar: Interpreter, el patrón que hoy casi no se escribe a mano">
+
+**Intención.** Dado un lenguaje, definir una representación de su gramática y un intérprete que use esa representación para evaluar oraciones del lenguaje.
+
+Cada regla de la gramática se vuelve una clase con un método `evaluate(contexto)`. Por ejemplo, reglas de descuento del tipo "total mayor a 100 **y** cliente gold":
+
+```ts title="discount-rules.ts"
+interface Rule {
+  evaluate(ctx: { total: number; tier: string }): boolean
+}
+
+const minTotal = (n: number): Rule => ({ evaluate: (c) => c.total >= n })
+const tier = (t: string): Rule => ({ evaluate: (c) => c.tier === t })
+const and = (...rules: Rule[]): Rule => ({ evaluate: (c) => rules.every((r) => r.evaluate(c)) })
+const or = (...rules: Rule[]): Rule => ({ evaluate: (c) => rules.some((r) => r.evaluate(c)) })
+
+const goldPromo = and(minTotal(100), or(tier('gold'), tier('platinum')))
+goldPromo.evaluate({ total: 150, tier: 'gold' }) // true
+```
+
+La estructura es un [Composite](/patrones/estructurales): las reglas compuestas (`and`, `or`) contienen otras reglas. Y si además de evaluar quieres imprimir la regla, validarla u optimizarla, agregas esas operaciones con un **Visitor** en vez de inflar cada clase.
+
+¿Por qué casi no se ve? Porque escribir el *parser* (convertir el texto `"total >= 100 AND tier = gold"` en ese árbol) es la parte difícil, y hoy se resuelve mejor con herramientas: generadores de parsers como **ANTLR** o **Peggy**, lenguajes de expresión embebibles como **CEL** (Common Expression Language, usado por ejemplo en las reglas de validación de Kubernetes) o reglas en JSON como **JsonLogic**. Si tus reglas viven en código, el árbol de objetos de arriba (sin parser) suele bastar. Fíjate también en el patrón [Specification](/patrones/patrones-aplicacion): es este mismo Interpreter aplicado a reglas de negocio.
+
+</Details>
+
+## Cuál usar: resumen de la familia
+
+| Patrón | Problema que resuelve | Lo usas sin saberlo en… |
+| --- | --- | --- |
+| Template Method | Varios algoritmos con la misma secuencia y pasos distintos | `unittest`, ciclos de vida de frameworks |
+| Chain of Responsibility | Una petición que pasa por filtros que pueden cortarla | Middleware de Express/Koa, guards de NestJS, event bubbling |
+| Iterator | Recorrer sin conocer la estructura interna | `for...of`, generadores, auto-paginación de SDKs |
+| Mediator | Muchos objetos que se coordinan entre todos | Formularios complejos, salas de chat, torre de control |
+| Memento | Guardar y restaurar estado sin exponerlo | Deshacer en editores, Redux DevTools |
+| Visitor | Operaciones nuevas sobre una jerarquía estable | Babel, ESLint, `ast.NodeVisitor` |
+
+<Quiz
+  question="Estás construyendo un linter para un lenguaje de configuración propio. El conjunto de tipos de nodo es pequeño y casi no cambia, pero cada sprint se agregan reglas nuevas. ¿Qué organización conviene?"
+  options={[
+    { text: 'Agregar un método por regla en cada clase de nodo (checkUnusedVar(), checkNaming()...).', why: 'Cada regla nueva obligaría a abrir todas las clases de nodo. Es el lado caro del expression problem para tu caso.' },
+    { text: 'Visitor (o funciones por tipo de nodo, como ESLint): cada regla es un visitante nuevo y las clases de nodo no se tocan.', correct: true, why: 'Tipos estables y operaciones que crecen es exactamente el escenario donde Visitor gana. Así funcionan ESLint y Babel.' },
+    { text: 'Chain of Responsibility: pasar cada nodo por una cadena de reglas hasta que una lo maneje.', why: 'En un linter todas las reglas deben revisar el nodo, no solo la primera que lo maneje. Y no resuelve cómo despachar según el tipo de nodo.' },
+  ]}
+/>
+
+<Takeaways>
+
+- **Template Method** fija la secuencia en la clase base y deja huecos para las subclases. Es útil, pero es herencia: si las variaciones se combinan, cambia a Strategy.
+- **Chain of Responsibility** desacopla al emisor de quién maneja la petición. El middleware de Express, Koa y NestJS es su forma más común. El orden de la cadena es una decisión de diseño.
+- **Iterator** ya es parte de tu lenguaje: usa generadores (`function*`, `yield`) en vez de clases iteradoras. Brilla con datos paginados, remotos o grandes.
+- **Mediator** reemplaza una malla de referencias por un centro coordinador. Vigila que no se convierta en un god object.
+- **Memento** guarda fotos opacas del estado: el caretaker guarda, solo el originator lee. Su costo es la memoria; las estructuras inmutables lo abaratan.
+- **Visitor** hace fácil agregar operaciones y caro agregar tipos (expression problem). Ideal para ASTs; en lenguajes con uniones exhaustivas o `match`, muchas veces sobra.
+
+</Takeaways>
+
+## Fuentes y lecturas
+
+- Gamma, Helm, Johnson y Vlissides, [*Design Patterns: Elements of Reusable Object-Oriented Software*](https://www.oreilly.com/library/view/design-patterns-elements/0201633612/) (Addison-Wesley, 1994). Capítulo 5.
+- Eric Freeman y Elisabeth Robson, [*Head First Design Patterns*, 2.ª edición](https://www.oreilly.com/library/view/head-first-design/9781492077992/) (O'Reilly, 2020). Template Method, Iterator y el apéndice con los patrones restantes.
+- Refactoring.Guru: [Template Method](https://refactoring.guru/design-patterns/template-method), [Chain of Responsibility](https://refactoring.guru/design-patterns/chain-of-responsibility), [Iterator](https://refactoring.guru/design-patterns/iterator), [Mediator](https://refactoring.guru/design-patterns/mediator), [Memento](https://refactoring.guru/design-patterns/memento), [Visitor](https://refactoring.guru/design-patterns/visitor), [Interpreter (en Wikipedia, ya que Refactoring.Guru no lo cubre)](https://en.wikipedia.org/wiki/Interpreter_pattern).
+- Express, [Using middleware](https://expressjs.com/en/guide/using-middleware.html), y NestJS, [Guards](https://docs.nestjs.com/guards) (orden middleware → guards → interceptors/pipes).
+- MDN, [Iteration protocols](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Iteration_protocols), y [PEP 255: Simple Generators](https://peps.python.org/pep-0255/).
+- [Babel Plugin Handbook](https://github.com/jamiebuilds/babel-handbook/blob/master/translations/en/plugin-handbook.md), ESLint, [Custom Rules](https://eslint.org/docs/latest/extend/custom-rules), y Python, [`ast.NodeVisitor`](https://docs.python.org/3/library/ast.html#ast.NodeVisitor).
+- Python, [`functools.singledispatch`](https://docs.python.org/3/library/functools.html#functools.singledispatch).
+- Philip Wadler, [The Expression Problem](https://homepages.inf.ed.ac.uk/wadler/papers/expression/expression.txt) (1998).
+- [Immer](https://immerjs.github.io/immer/) y [Redux DevTools](https://github.com/reduxjs/redux-devtools): estado inmutable y viaje en el tiempo.
+- [CEL (Common Expression Language)](https://cel.dev/) y [JsonLogic](https://jsonlogic.com/), alternativas modernas a escribir un Interpreter a mano.

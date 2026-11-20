@@ -1,0 +1,475 @@
+import { GitHistory } from '../../components/widgets/entrevistas/GitHistory'
+import { IncidentTriage } from '../../components/widgets/entrevistas/IncidentTriage'
+import { QuestionDeck } from '../../components/widgets/entrevistas/QuestionDeck'
+
+En casi todas las entrevistas hay un bloque de preguntas que no son de algoritmos ni de diseño: "¿cómo testeas?", "¿merge o rebase?", "¿qué haces si la API se pone lenta un viernes a la tarde?". Parecen preguntas fáciles, y por eso mismo se responden mal. Quien contesta con definiciones de libro ("un test unitario prueba una unidad") no dice nada. Quien contesta con criterio ("no mockeo la base en los tests del repositorio, porque ahí es donde están los bugs") se nota que ha trabajado en equipo y ha mantenido código en producción.
+
+Este tema repasa lo que se pregunta sobre testing, Git, CI/CD, revisiones de código, observabilidad e incidentes. No es un manual de cada herramienta: es lo que necesitas entender para responder con criterio, con los trade-offs que el entrevistador quiere escuchar.
+
+<Callout type="interview">
+
+Estas preguntas miden **experiencia real**. El entrevistador busca ejemplos concretos ("en mi último equipo teníamos tests e2e frágiles y los reemplazamos por…"), trade-offs ("rebase deja la historia limpia, pero…") y señales de madurez: mitigar antes de diagnosticar, no buscar culpables, no perseguir el 100 % de cobertura. Si no tienes experiencia en algo, dilo y razona en voz alta; inventar se nota enseguida.
+
+</Callout>
+
+<Sketch
+  width={640}
+  height={320}
+  caption="Pirámide contra trofeo: cambian dónde ponen el peso del medio, pero las dos dicen lo mismo arriba: pocos tests de punta a punta."
+  items={[
+    { type: 'text', x: 40, y: 34, text: 'pirámide', size: 22 },
+    { type: 'path', d: 'M40 270 L280 270 L160 60 Z', len: 700 },
+    { type: 'line', points: [[120, 130], [200, 130]] },
+    { type: 'line', points: [[80, 200], [240, 200]], with: true },
+    { type: 'text', x: 160, y: 116, text: 'e2e', size: 20, anchor: 'middle' },
+    { type: 'text', x: 160, y: 176, text: 'integración', size: 20, anchor: 'middle' },
+    { type: 'highlight', x: 106, y: 228, w: 108, h: 30 },
+    { type: 'text', x: 160, y: 250, text: 'unitarios', size: 20, anchor: 'middle', with: true },
+    { type: 'line', points: [[330, 20], [330, 270]], dashed: true, tone: 'muted' },
+    { type: 'text', x: 380, y: 34, text: 'trofeo', size: 22, tone: 'line' },
+    { type: 'box', x: 440, y: 52, w: 80, h: 34, label: 'e2e' },
+    { type: 'box', x: 380, y: 92, w: 200, h: 84, label: 'integración', fill: true, tone: 'line' },
+    { type: 'box', x: 420, y: 182, w: 120, h: 36, label: 'unitarios' },
+    { type: 'box', x: 400, y: 224, w: 160, h: 38, label: 'tipos y lint' },
+    { type: 'text', x: 24, y: 306, text: 'las dos: pocos e2e, mucho de lo rápido y confiable', size: 19, tone: 'pencil' },
+  ]}
+/>
+
+## Testing: qué, cuánto y de qué tipo
+
+### La pirámide y el trofeo
+
+La **pirámide de tests**, popularizada por Mike Cohn y difundida por Martin Fowler, dice: muchos tests unitarios en la base (rápidos, baratos, precisos), menos tests de integración en el medio, y pocos tests de punta a punta (e2e) arriba (lentos, caros, frágiles). El argumento es económico: cuanto más arriba, más lento corre el test, más cuesta mantenerlo y más difícil es saber qué se rompió cuando falla. El blog de testing de Google propuso como punto de partida una proporción de 70 % unitarios, 20 % de integración y 10 % e2e, aclarando que cada equipo debe ajustarla.
+
+El **trofeo de tests**, propuesto por Kent C. Dodds para aplicaciones web, cambia la forma: análisis estático en la base (tipos, linters), una capa fina de unitarios, la parte **más gruesa en integración** y pocos e2e. El argumento: en una aplicación típica, los bugs viven en cómo encajan las piezas (el componente con el estado, el handler con la base), y un test de integración los atrapa con una confianza mucho mayor por un costo apenas superior.
+
+No compiten tanto como parece. Las dos dicen: pocos e2e, mucho de lo rápido y confiable. Difieren en dónde poner el peso del medio, y eso depende del sistema: una librería de cálculo de impuestos es casi todo unitarios; una API CRUD sobre Postgres es casi todo integración.
+
+| Tipo | Qué prueba | Velocidad | Cuándo falla, sabes… | Riesgo típico |
+| --- | --- | --- | --- | --- |
+| Unitario | Una función o clase, sin red ni disco | Milisegundos | Exactamente qué línea | Probar detalles de implementación |
+| Integración | Varias piezas reales juntas: código + base, handler + serialización | Decenas a cientos de ms | Qué módulo o contrato | Lentitud si cada test levanta todo |
+| End-to-end | El sistema completo como lo usa alguien: navegador, API, base | Segundos o minutos | Que algo se rompió, no qué | Fragilidad, tiempos de espera, datos compartidos |
+
+### Mocks, stubs y fakes
+
+Todos son **dobles de prueba** (*test doubles*, el término de Gerard Meszaros): objetos que reemplazan una dependencia real en un test. La diferencia está en qué hacen y qué verificas con ellos:
+
+- **Stub**: devuelve respuestas preparadas. Verificas el **estado** resultante, no cómo se llamó al stub.
+- **Mock**: viene con expectativas sobre cómo debe ser llamado. Verificas el **comportamiento**: que se llamó a `cobrar` una vez con 2.000 centavos.
+- **Fake**: una implementación de verdad, pero simplificada: un repositorio en memoria, un servidor SMTP falso. Se comporta como el real en lo esencial.
+- **Spy**: registra las llamadas para inspeccionarlas después. Muchas librerías llaman "mock" a lo que en rigor es un spy.
+
+<CodeTabs>
+
+```java title="Java"
+// JUnit 5 + Mockito
+// import static org.junit.jupiter.api.Assertions.*;
+// import static org.mockito.Mockito.*;
+class CheckoutTest {
+
+    // Stub: respuesta fija; verifico el resultado
+    @Test
+    void sumaElEnvioCotizado() {
+        Tasas tasas = pedido -> 1_000; // centavos de envío
+        assertEquals(13_500, Checkout.totalConEnvio(pedido(), tasas));
+    }
+
+    // Mock: verifico la interacción con el borde del sistema
+    @Test
+    void cobraUnaVezConElIdComoClaveDeIdempotencia() {
+        Pagos pagos = mock(Pagos.class);
+        when(pagos.cobrar(anyString(), anyLong(), anyString())).thenReturn(new Cobro(true));
+
+        Checkout.confirmar(pedido(), pagos, pedido -> 1_000);
+
+        verify(pagos, times(1)).cobrar("cli-7", 13_500L, "ped-42");
+    }
+
+    // Fake: repositorio en memoria con el mismo contrato que el real
+    @Test
+    void elPedidoNuevoQuedaPendiente() {
+        var repo = new PedidosEnMemoria();
+        Pedidos.crear(repo, pedido());
+        assertEquals(Estado.PENDIENTE, repo.porId("ped-42").orElseThrow().estado());
+    }
+
+    private static Pedido pedido() {
+        return new Pedido("ped-42", "cli-7", 12_500, Estado.NUEVO);
+    }
+}
+
+class PedidosEnMemoria implements RepositorioPedidos {
+    private final Map<String, Pedido> datos = new HashMap<>();
+
+    @Override public void guardar(Pedido p) { datos.put(p.id(), p); }
+    @Override public Optional<Pedido> porId(String id) { return Optional.ofNullable(datos.get(id)); }
+}
+```
+
+```ts title="TypeScript"
+// Vitest
+// Stub: respuesta fija; verifico el resultado
+const tasas = { cotizar: () => 1000 } // centavos de envío
+expect(totalConEnvio(pedido, tasas)).toBe(13_500)
+
+// Mock/spy: verifico la interacción con el borde del sistema
+const pagos = { cobrar: vi.fn().mockResolvedValue({ ok: true }) }
+await confirmarPedido(pedido, pagos)
+expect(pagos.cobrar).toHaveBeenCalledWith(pedido.clienteId, 13_500, pedido.id) // id = clave de idempotencia
+
+// Fake: repositorio en memoria con el mismo contrato que el real
+const repo = new PedidosEnMemoria()
+await crearPedido(repo, datos)
+expect(await repo.porId(datos.id)).toMatchObject({ estado: 'pendiente' })
+```
+
+</CodeTabs>
+
+La regla práctica: **mockea los bordes que no controlas** (la pasarela de pagos, el proveedor de correo, el reloj) y **usa lo real o un fake para lo que sí controlas**. Un test que mockea tu propia base de datos verifica que llamaste a `db.query` con cierto string, no que la consulta funciona. Con contenedores (Testcontainers, que nació en Java y tiene versiones para otros lenguajes, o una base en Docker en CI) levantar un Postgres real para los tests de integración cuesta segundos.
+
+<Callout type="tip" title="En Java">
+
+Con Mockito, `mock()` crea el doble, `when(...).thenReturn(...)` lo convierte en stub y `verify(...)` revisa la interacción. Dos trampas comunes: si usas un *matcher* (`anyString()`, `eq(...)`) en un argumento, tienen que ser matchers **todos** los argumentos de esa llamada; y cuidado con los números dentro de un matcher: `eq(13_500)` registra un `Integer`, que no es `equals` al `Long` con que se llamó un parámetro `long`, y el `verify` falla con un mensaje confuso. Escribe `eq(13_500L)`. Con `@ExtendWith(MockitoExtension.class)`, Mockito además falla si dejaste stubs que nadie usó, lo que ayuda a que los tests no acumulen basura.
+
+</Callout>
+
+### Qué testear, TDD y tests frágiles
+
+**Qué testear.** El comportamiento observable a través de la interfaz pública: dada esta entrada, esta salida o este efecto. Prioriza por riesgo: el cálculo del monto, los permisos, las transiciones de estado, los casos borde (vacío, cero, límites, duplicados, concurrencia). No testees getters triviales, ni la librería de terceros, ni el framework.
+
+**TDD sin dogma.** Escribir el test primero (rojo, verde, refactor) es excelente cuando el comportamiento esperado está claro: un parser, una regla de negocio, un bug que quieres reproducir antes de arreglar. Es menos útil cuando estás explorando (un prototipo de UI, una integración con una API que no conoces). La respuesta madura en una entrevista: "lo uso donde paga, sobre todo para bugs: primero un test que falla y lo reproduce, después el arreglo".
+
+**Tests frágiles.** Un test frágil se rompe cuando cambias la implementación sin cambiar el comportamiento. Causas típicas: verificar llamadas internas en lugar de resultados, *snapshots* gigantes que nadie lee, selectores de CSS en e2e, depender del orden de ejecución o de la hora real. Y su primo, el **test intermitente** (*flaky*): pasa o falla sin cambios en el código, normalmente por tiempos de espera, datos compartidos entre tests o concurrencia. Un test intermitente es peor que no tener test: enseña al equipo a ignorar el rojo.
+
+**Cobertura.** Mide qué líneas se ejecutaron, no qué se verificó. Este test da 100 % de cobertura y no prueba nada:
+
+<CodeTabs>
+
+```java title="Java"
+@Test
+void calculaElDescuento() {
+    Descuentos.calcular(pedido); // ejecuta todas las ramas… y no verifica ningún resultado
+}
+```
+
+```ts title="TypeScript"
+it('calcula el descuento', () => {
+  calcularDescuento(pedido) // ejecuta todas las ramas… y no verifica ningún resultado
+})
+```
+
+</CodeTabs>
+
+Como dice Fowler, la cobertura es útil para **encontrar código sin probar**, no como meta: si la conviertes en objetivo (por ejemplo, bloquear el merge bajo 90 %), el equipo escribe tests como ese. Las pruebas de mutación (cambiar un `>` por `>=` y ver si algún test falla) miden mucho mejor si los tests verifican algo.
+
+<Quiz
+  question="Tu servicio de pedidos tiene un repositorio que construye consultas SQL con varios filtros opcionales. ¿Cómo lo testeas?"
+  options={[
+    { text: 'Tests unitarios mockeando el cliente de la base y verificando el string SQL generado.', why: 'Verificas que se arma un string, no que la consulta devuelve las filas correctas. Un error de sintaxis o de lógica en el SQL pasa el test. Además, se rompe con cualquier refactor del SQL.' },
+    { text: 'Tests de integración contra un Postgres real (en un contenedor), insertando datos y verificando qué filas devuelve cada combinación de filtros.', correct: true, why: 'El riesgo está en la consulta misma, y solo una base real lo detecta. Con contenedores cuesta segundos. Son tests que sobreviven a refactors porque verifican comportamiento.' },
+    { text: 'Un test e2e desde el navegador que filtra pedidos en la pantalla.', why: 'Puede ser un test de humo útil, pero para cubrir combinaciones de filtros es lento, frágil y cuando falla no sabes si fue la UI, la API o la consulta.' },
+    { text: 'No hace falta testearlo si el código tiene 100 % de cobertura por otros tests.', why: 'La cobertura dice qué se ejecutó, no qué se verificó.' },
+  ]}
+/>
+
+## Git: merge, rebase y compañía
+
+### Merge contra rebase
+
+Las dos integran el trabajo de una rama en otra. La diferencia es **qué le hacen a la historia**:
+
+- **Merge** crea un commit nuevo con dos padres. No toca los commits existentes. La historia muestra la verdad: hubo una rama, se trabajó en paralelo, se juntó aquí. Costo: un grafo con bifurcaciones y commits de merge que pueden ensuciar el `log`.
+- **Rebase** toma tus commits y los **vuelve a aplicar** encima de otra base. Cada commit reaplicado es un commit nuevo, con otro padre y por lo tanto **otro hash**. La historia queda lineal, como si hubieras empezado a trabajar después. Costo: reescribes historia.
+- **Squash** junta todos los commits de la rama en uno solo al integrarla. Un commit por PR, fácil de leer y de revertir; pierdes el detalle de los pasos intermedios.
+
+Prueba las tres sobre el mismo par de ramas y fíjate en qué hashes cambian:
+
+<GitHistory />
+
+De ahí sale **la regla de oro** que el libro *Pro Git* pone en una frase: no hagas rebase de commits que existen fuera de tu repositorio y sobre los que otras personas pueden haber construido trabajo. Si ya publicaste la rama y alguien la bajó, tus commits nuevos y los suyos viejos son historias distintas del mismo trabajo, y el `push --force` que necesitas para publicar el rebase le pisa el trabajo a quien construyó encima.
+
+La práctica habitual en equipos: **rebase en tu rama local** para ponerla al día con `main` y limpiar tus commits antes de abrir el PR, y **merge (o squash) para integrar el PR** en `main`. Si tienes que forzar el push de tu propia rama de PR, usa `git push --force-with-lease`, que se niega a sobrescribir si alguien más empujó cambios que no tienes.
+
+### Cherry-pick y bisect
+
+**`git cherry-pick <hash>`** copia un commit a la rama actual (con otro hash, como en el rebase). Su uso legítimo típico: llevar un arreglo de `main` a una rama de release ya publicada sin traer todo lo demás. Abusar de él duplica cambios en varias ramas y complica los merges futuros.
+
+**`git bisect`** encuentra el commit que introdujo un bug con búsqueda binaria sobre la historia. Le dices un commit bueno y uno malo; Git te lleva al del medio, pruebas y le dices si está bien o mal, y así hasta dar con el culpable. Con 1.000 commits entre medio, son unas 10 pruebas. Si tienes un comando que detecta el bug, Git lo hace solo:
+
+```bash
+git bisect start
+git bisect bad                 # HEAD tiene el bug
+git bisect good v2.40.0        # este release estaba bien
+git bisect run npm test -- cupones.test.ts   # código de salida 0 = bueno, distinto de 0 = malo
+# … Git imprime: "a83f5c2 is the first bad commit"
+git bisect reset
+```
+
+Mencionar `bisect` en una entrevista cuando te preguntan "¿cómo encontrarías qué cambio rompió esto?" es una señal muy buena: muestra que conoces la herramienta y que piensas en búsqueda binaria fuera de los algoritmos. Es también un argumento a favor de commits pequeños que compilan cada uno.
+
+<Sketch
+  width={640}
+  height={300}
+  caption="git bisect parte la historia a la mitad en cada prueba: entre un commit bueno y uno malo, el culpable aparece en unas log₂(n) pruebas."
+  items={[
+    { type: 'text', x: 24, y: 34, text: 'git bisect', size: 22, font: 'code' },
+    { type: 'cells', x: 96, y: 120, values: ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'], size: 56, states: ['ok', null, null, null, null, null, null, 'bad'] },
+    { type: 'text', x: 124, y: 206, text: 'bueno', size: 18, anchor: 'middle', tone: 'ok' },
+    { type: 'text', x: 516, y: 206, text: 'malo', size: 18, anchor: 'middle', tone: 'bad', with: true },
+    { type: 'arrow', from: [292, 80], to: [292, 116], tone: 'ok', label: '1: bien', labelAt: [272, 70] },
+    { type: 'arrow', from: [404, 80], to: [404, 116], tone: 'bad', label: '2: mal', labelAt: [424, 70] },
+    { type: 'arrow', from: [348, 252], to: [348, 182], tone: 'bad', label: '3: mal', labelAt: [348, 274] },
+    { type: 'circle', x: 348, y: 148, rx: 32, ry: 40, tone: 'line' },
+    { type: 'text', x: 404, y: 252, text: 'el primer commit malo', size: 19, tone: 'line' },
+    { type: 'text', x: 24, y: 274, text: ['300 commits:', 'unas 9 pruebas'], size: 19, tone: 'pencil' },
+  ]}
+/>
+
+### Flujos de trabajo
+
+**GitFlow** (Vincent Driessen, 2010) usa ramas de larga vida: `main` para lo publicado, `develop` para integración, y ramas de `feature`, `release` y `hotfix`. Encaja con software que se publica en versiones (una app de escritorio, una librería con varias versiones soportadas). El propio autor agregó en 2020 una nota recomendando un flujo más simple para equipos que hacen entrega continua.
+
+**Trunk-based development**: todos integran en `main` (el tronco) al menos una vez al día, con ramas que viven horas o pocos días. El trabajo a medio terminar se esconde detrás de *feature flags*. Es lo que hacen la mayoría de los equipos que despliegan varias veces por día, y la investigación de DORA lo asocia con mejor desempeño de entrega.
+
+<Compare>
+<Option title="GitFlow" verdict="Releases versionados">
+
+Ramas `develop`, `release` y `hotfix` de larga vida. Orden claro para publicar versiones y mantener varias a la vez. Integración tardía: los merges grandes y los conflictos se acumulan.
+
+</Option>
+<Option title="Trunk-based" verdict="Entrega continua">
+
+Ramas cortas, integración diaria a `main`, feature flags para lo incompleto. Conflictos chicos y frecuentes. Exige CI rápido y confiable, y disciplina para no romper `main`.
+
+</Option>
+</Compare>
+
+**Conflictos.** Lo que se pregunta no es el comando, sino el criterio. Un conflicto aparece cuando dos ramas cambiaron las mismas líneas; Git no sabe qué intención gana. Para resolverlo: entiende qué quería cada lado (lee los dos commits, no solo los marcadores `<<<<<<<`), combina las intenciones (a veces la respuesta correcta no es ninguno de los dos lados), corre los tests y, si no estás seguro, pregúntale a quien escribió el otro cambio. La mejor prevención es integrar seguido: ramas cortas, conflictos chicos.
+
+<Quiz
+  question="Abriste un PR hace tres días; dos compañeros hicieron checkout de tu rama para revisarla y uno agregó un commit. Ahora main avanzó. ¿Cómo actualizas tu rama?"
+  options={[
+    { text: 'git rebase main y git push --force, para que la historia quede lineal.', why: 'Reescribes commits que otros ya tienen, incluido el de tu compañero. Al forzar el push, su copia queda divergente y podrías borrar su commit si no lo bajaste antes.' },
+    { text: 'git merge main en tu rama (o el botón de actualizar del PR): no reescribe nada de lo que otros ya tienen.', correct: true, why: 'Es la opción segura con una rama compartida. Si el equipo integra con squash, el commit de merge ni siquiera llega a main.' },
+    { text: 'Borrar la rama y crear una nueva desde main copiando los archivos.', why: 'Pierdes la historia, la conversación del PR y el commit del compañero, y no resuelve nada que merge no resuelva.' },
+  ]}
+/>
+
+## CI/CD y despliegues
+
+**Integración continua (CI)**: cada push dispara un pipeline que compila, corre linters, tests y chequeos de seguridad. Su objetivo es que `main` esté siempre en un estado desplegable y que un error se detecte minutos después de escribirse, no semanas. Un CI que tarda una hora deja de ser continuo: la gente agrupa cambios para no esperar.
+
+**Entrega y despliegue continuo (CD)**: en *continuous delivery*, cada cambio que pasa el pipeline queda listo para desplegar con un botón; en *continuous deployment*, se despliega solo. Lo que importa en la entrevista es cómo **reduces el riesgo de cada despliegue**. Según el libro de SRE de Google, cerca del 70 % de las caídas se deben a cambios en un sistema en vivo, y sus tres recomendaciones son despliegues progresivos, detectar problemas rápido y poder volver atrás de forma segura.
+
+- **Blue-green**: dos entornos idénticos. Despliegas en el inactivo (green), lo verificas y cambias el tráfico de golpe. Rollback instantáneo: devuelves el tráfico a blue. Costo: el doble de infraestructura durante el cambio, y cuidado con las migraciones de base de datos, que las dos versiones tienen que tolerar.
+- **Canary**: la versión nueva recibe primero un porcentaje pequeño del tráfico (1 %, 5 %, 25 %…) mientras comparas sus métricas con la versión vieja. Si empeora, se corta. Limita el radio de impacto de un mal cambio.
+- **Feature flags**: separan **desplegar** (el código llega a producción) de **lanzar** (los usuarios ven la función). Permiten trunk-based, lanzamientos graduales y apagar una función sin redeploy. Costo: cada flag es una rama en el código; hay que borrarlas cuando cumplen su función o se convierten en deuda.
+- **Rollback**: la mitigación más rápida cuando un despliegue rompe algo. Para que sea seguro, los cambios de esquema se hacen en pasos compatibles hacia atrás (*expand and contract*): primero agregas la columna nueva, luego el código usa las dos, al final borras la vieja.
+
+## Code review: qué buscar y cómo decirlo
+
+Una revisión no es buscar errores de estilo (eso lo hace el linter). La guía de revisión de código de Google lo resume en un criterio: aprueba cuando el cambio **mejora la salud general del código**, aunque no sea perfecto. Lo que miras, en orden aproximado de importancia:
+
+1. **Diseño y corrección**: ¿resuelve el problema correcto?, ¿la lógica es correcta en los casos borde?, ¿hay condiciones de carrera?
+2. **Seguridad y datos**: entradas sin validar, inyección, secretos en el código, permisos, datos personales en logs.
+3. **Tests**: ¿prueban el comportamiento nuevo?, ¿fallarían si el código estuviera mal?
+4. **Legibilidad**: nombres, funciones demasiado largas, comentarios que explican el porqué.
+5. **Rendimiento**, cuando es relevante: consultas N+1, trabajo innecesario en un bucle caliente.
+
+Cómo dar feedback: comenta el código, no a la persona ("esta función hace tres cosas", no "hiciste un desastre"); explica el porqué; distingue lo bloqueante de lo opcional (el prefijo `nit:` para detalles menores, o etiquetas como las de Conventional Comments: `issue`, `suggestion`, `question`); y reconoce lo que está bien hecho. Del otro lado: PRs pequeños, con descripción y contexto, se revisan mejor y más rápido. En [otros formatos](/casos/otros-formatos) hay una entrevista de code review completa para practicar.
+
+## Observabilidad: logs, métricas y trazas
+
+Observabilidad es poder responder preguntas sobre el sistema en producción sin desplegar código nuevo para averiguarlo. Se apoya en tres tipos de señales, que se complementan:
+
+- **Métricas**: números agregados en el tiempo (peticiones por segundo, p99 de latencia, porcentaje de errores, CPU). Baratas de guardar y consultar; son lo que dispara las **alertas**. Las **cuatro señales doradas** del libro de SRE (latencia, tráfico, errores y saturación) son el punto de partida para cualquier servicio. Cuidado con la cardinalidad: una etiqueta `user_id` en una métrica crea una serie por usuario y puede tumbar tu sistema de métricas.
+- **Logs**: eventos discretos con detalle. Que sean **estructurados** (JSON con campos, no frases sueltas), con un identificador de petición para correlacionarlos y sin datos sensibles. Sirven para entender un caso concreto, no para ver tendencias.
+- **Trazas**: el recorrido de una petición a través de servicios, como un árbol de *spans* con su duración. Responden "¿en qué se fue el tiempo?" en un sistema distribuido. OpenTelemetry es hoy el estándar abierto para instrumentar las tres señales.
+
+El flujo típico de diagnóstico va de lo general a lo particular: **la métrica** te avisa que algo anda mal y desde cuándo, **la traza** te dice dónde se va el tiempo y **el log** te da el detalle del caso.
+
+<Sketch
+  width={640}
+  height={200}
+  caption="El orden del diagnóstico: la métrica avisa, la traza ubica y el log explica."
+  items={[
+    { type: 'text', x: 20, y: 32, text: 'de lo general a lo particular', size: 20, tone: 'pencil' },
+    { type: 'box', x: 20, y: 60, w: 170, h: 60, label: 'métrica', fill: true, tone: 'line' },
+    { type: 'text', x: 105, y: 150, text: '¿desde cuándo?', size: 19, anchor: 'middle' },
+    { type: 'arrow', from: [196, 90], to: [236, 90] },
+    { type: 'box', x: 242, y: 60, w: 170, h: 60, label: 'traza' },
+    { type: 'text', x: 327, y: 150, text: '¿dónde se va', size: 19, anchor: 'middle' },
+    { type: 'text', x: 327, y: 174, text: 'el tiempo?', size: 19, anchor: 'middle' },
+    { type: 'arrow', from: [418, 90], to: [458, 90] },
+    { type: 'box', x: 464, y: 60, w: 156, h: 60, label: 'log' },
+    { type: 'text', x: 542, y: 150, text: '¿qué pasó en', size: 19, anchor: 'middle' },
+    { type: 'text', x: 542, y: 174, text: 'este caso?', size: 19, anchor: 'middle' },
+  ]}
+/>
+
+## Depurar un incidente en producción
+
+"La API está lenta, ¿qué haces?" es una de las preguntas más reveladoras de una entrevista. No tiene una respuesta única, pero sí un orden que distingue a alguien con experiencia: **primero el impacto, después qué cambió, después mitigar, y recién después la causa raíz**. Recórrelo con un caso:
+
+<IncidentTriage />
+
+Respuesta modelo de 45 segundos:
+
+> "Primero dimensiono el impacto: qué endpoint, desde cuándo, qué porcentaje de usuarios, si hay errores además de latencia. Después busco qué cambió en ese momento: despliegues, feature flags, configuración, tráfico, una dependencia externa. Si hay un sospechoso y la mitigación es barata y reversible, como un rollback o apagar un flag, mitigo primero. Con el sistema estable, diagnostico: miro las señales doradas de cada componente para encontrar el saturado, una traza de una petición lenta para ver en qué se va el tiempo, y los logs de ese caso. Arreglo la causa, agrego un test o una alerta que lo hubiera detectado, y escribo un postmortem."
+
+Las causas que conviene tener en la cabeza para una API lenta: una consulta sin índice o un N+1 (mira [backend y bases de datos](/casos/backend-y-bases-de-datos)), un pool de conexiones agotado, una dependencia externa lenta sin timeout, pausas del recolector de basura, una caché que se vació (estampida, ver [caching](/system-design/caching)), contención de locks y simple saturación de CPU. Para recorrer recursos de forma sistemática, el método USE de Brendan Gregg: por cada recurso, **utilización, saturación y errores**.
+
+### Postmortems sin culpables
+
+Después de un incidente importante se escribe un postmortem: cronología, impacto, causa raíz, qué funcionó, qué no, y **acciones con responsable y fecha**. "Sin culpables" (*blameless*) no significa sin responsabilidad: significa asumir que todos actuaron de buena fe con la información que tenían y preguntar qué en el sistema permitió el error. Si un desarrollador pudo desplegar un N+1 a producción sin que nadie lo notara, el problema es que no había un test, una revisión o un canary que lo atrapara. Si castigas a la persona, la próxima vez nadie cuenta lo que pasó, y pierdes la información que necesitas para mejorar.
+
+<Quiz
+  question="El p99 de tu API se triplicó hace diez minutos. Hubo un despliegue hace doce. La base de datos está al 95 % de CPU. ¿Qué haces primero?"
+  options={[
+    { text: 'Buscar la consulta lenta en el código del despliegue para arreglarla con un hotfix.', why: 'Diagnosticar y arreglar lleva tiempo mientras los usuarios siguen afectados. Si el rollback es seguro, va primero.' },
+    { text: 'Hacer rollback del despliegue y verificar que las métricas vuelvan; investigar después con el sistema estable.', correct: true, why: 'Hay una correlación fuerte con un cambio y una mitigación barata y reversible. Mitigar primero reduce el impacto; la causa se busca después con las trazas del intervalo afectado.' },
+    { text: 'Escalar la base de datos a una instancia más grande.', why: 'Es caro, lento de aplicar y probablemente tapa un problema del código nuevo, que volverá a aparecer cuando crezca la carga.' },
+    { text: 'Aumentar el pool de conexiones de la aplicación.', why: 'Con la base al 95 %, más conexiones significan más consultas concurrentes sobre un recurso saturado: suele empeorar.' },
+  ]}
+/>
+
+## Práctica
+
+<QuestionDeck
+  cards={[
+    {
+      q: '¿Cuál es la diferencia entre un test unitario y uno de integración? ¿Cuál escribes más?',
+      checks: 'Que respondas con criterio y no con una definición.',
+      level: 'junior',
+      answer: <>Un unitario prueba una pieza aislada, sin red ni disco, y corre en milisegundos. Uno de integración prueba varias piezas reales juntas, por ejemplo mi repositorio contra un Postgres real. Cuántos de cada uno depende de dónde está el riesgo: la lógica de cálculo la cubro con unitarios; el acceso a datos y los endpoints, con integración, porque ahí es donde se rompen las cosas. Los e2e los reservo para los flujos críticos, como el checkout.</>,
+      strong: ['Liga la proporción al tipo de sistema', 'Menciona la pirámide o el trofeo con criterio'],
+      weak: ['Recita definiciones sin opinión', '"Siempre 100 % unitarios"'],
+      followups: ['¿Qué haces con un test e2e que falla una de cada diez veces?'],
+    },
+    {
+      q: '¿Qué diferencia hay entre un mock, un stub y un fake?',
+      checks: 'Que conozcas los dobles de prueba y cuándo usar cada uno.',
+      level: 'junior',
+      answer: <>Un stub devuelve respuestas fijas y verifico el resultado. Un mock trae expectativas de cómo lo llaman y verifico la interacción, por ejemplo que se cobró una vez con el monto correcto. Un fake es una implementación real simplificada, como un repositorio en memoria. Mockeo los bordes que no controlo (pagos, correo, reloj) y uso lo real o un fake para lo mío; mockear mi propia base solo prueba que llamé a una función.</>,
+      strong: ['Distingue verificar estado de verificar interacción', 'Da una regla de cuándo mockear'],
+      weak: ['"Son lo mismo"', 'Mockea todo por defecto'],
+      followups: ['¿Qué problema trae mockear demasiado?'],
+    },
+    {
+      q: 'Tu equipo exige 90 % de cobertura. ¿Qué opinas?',
+      checks: 'Que entiendas que la cobertura mide ejecución, no verificación.',
+      level: 'semi',
+      answer: <>La cobertura es útil para encontrar código sin probar, pero como meta se corrompe: se puede llegar al 100 % con tests sin una sola aserción. Prefiero mirarla en el diff de cada PR (que lo nuevo y riesgoso esté cubierto) y revisar la calidad de los tests en la revisión. Si quiero medir si los tests detectan errores, las pruebas de mutación lo hacen mucho mejor.</>,
+      strong: ['Sabe que se puede inflar', 'Propone una alternativa'],
+      weak: ['"Más cobertura siempre es mejor"', '"La cobertura no sirve para nada"'],
+      followups: ['¿Qué es mutation testing?'],
+    },
+    {
+      q: '¿Merge o rebase? ¿Cuándo usas cada uno?',
+      checks: 'Que conozcas la regla de no reescribir historia compartida.',
+      level: 'junior',
+      answer: <>Merge crea un commit con dos padres y no toca nada existente; rebase reaplica mis commits sobre otra base, con hashes nuevos, y deja la historia lineal. Uso rebase en mi rama local para ponerla al día y ordenar mis commits antes de abrir el PR. Nunca hago rebase de commits que otros ya bajaron, porque les rompo la historia. Para integrar el PR en main uso merge o squash, según lo que acuerde el equipo.</>,
+      strong: ['Menciona que el rebase cambia hashes', 'Enuncia la regla de historia compartida', 'Conoce --force-with-lease'],
+      weak: ['"Rebase siempre porque queda más limpio"', 'No sabe qué pasa con los hashes'],
+      followups: ['¿Qué hace git push --force-with-lease?', '¿Qué es un rebase interactivo?'],
+    },
+    {
+      q: 'Algo se rompió entre la versión 2.40 y la 2.45, hay 300 commits en el medio. ¿Cómo encuentras el culpable?',
+      checks: 'Que conozcas git bisect y pienses en búsqueda binaria.',
+      level: 'semi',
+      answer: <>Con <code>git bisect</code>: marco 2.45 como malo y 2.40 como bueno, y Git me lleva al commit del medio. Pruebo, le digo bueno o malo, y repite. Con 300 commits son unas 9 pruebas. Si tengo un test o un script que detecta el bug, uso <code>git bisect run</code> y lo hace solo. Funciona mejor cuando cada commit compila, que es otro argumento para hacer commits pequeños.</>,
+      strong: ['Calcula el número de pasos (log2)', 'Conoce bisect run'],
+      weak: ['Revisar los 300 commits uno por uno', 'Leer el diff completo buscando el bug'],
+      followups: ['¿Qué haces si un commit intermedio no compila?'],
+    },
+    {
+      q: '¿Trunk-based development o GitFlow?',
+      checks: 'Que relaciones el flujo con la forma de publicar.',
+      level: 'semi',
+      answer: <>Depende de cómo se publica. Si desplegamos un servicio varias veces por día, trunk-based: ramas cortas, integración diaria a main, feature flags para lo incompleto y un CI rápido. GitFlow tiene sentido cuando publico versiones y mantengo varias a la vez, como una librería o una app instalable. Hasta su autor recomienda algo más simple para entrega continua.</>,
+      strong: ['Liga la elección al modelo de entrega', 'Menciona feature flags'],
+      weak: ['Defiende uno como universalmente mejor'],
+      followups: ['¿Qué riesgos tienen las feature flags?'],
+    },
+    {
+      q: '¿Qué diferencia hay entre un despliegue blue-green y uno canary?',
+      checks: 'Que entiendas cómo cada estrategia limita el riesgo.',
+      level: 'semi',
+      answer: <>En blue-green tengo dos entornos y cambio todo el tráfico de golpe al nuevo; si algo falla, lo devuelvo al viejo al instante. En canary mando primero un porcentaje pequeño del tráfico a la versión nueva y comparo sus métricas con la vieja antes de ampliar. Blue-green optimiza la velocidad del rollback; canary limita a cuántos usuarios afecta un mal cambio. Se pueden combinar, y en los dos hay que cuidar que las migraciones de base sean compatibles con ambas versiones.</>,
+      strong: ['Habla de radio de impacto', 'Menciona las migraciones'],
+      weak: ['Los confunde', 'No menciona cómo se decide avanzar o volver'],
+      followups: ['¿Cómo haces una migración que permita rollback?'],
+    },
+    {
+      q: '¿Qué buscas cuando revisas un PR? ¿Cómo das feedback?',
+      checks: 'Prioridades de revisión y forma de comunicar.',
+      level: 'junior',
+      answer: <>Primero, si resuelve el problema correcto y si la lógica aguanta los casos borde. Después seguridad (entradas, permisos, secretos), que los tests prueben el comportamiento, y legibilidad. El estilo se lo dejo al linter. En los comentarios hablo del código y no de la persona, explico el porqué y marco qué es bloqueante y qué es un detalle opcional, con un prefijo como <code>nit:</code>.</>,
+      strong: ['Prioriza correctitud y seguridad sobre estilo', 'Distingue bloqueante de opcional'],
+      weak: ['Solo habla de formato y nombres', 'Comentarios sin explicación'],
+      followups: ['¿Qué haces si no estás de acuerdo con un comentario que te dejaron?'],
+    },
+    {
+      q: '¿Qué diferencia hay entre logs, métricas y trazas? ¿Cuándo usas cada una?',
+      checks: 'Que sepas para qué sirve cada señal.',
+      level: 'semi',
+      answer: <>Las métricas son números agregados, baratos, y sirven para alertar y ver tendencias: latencia, tráfico, errores, saturación. Las trazas siguen una petición por todos los servicios y me dicen en qué se fue el tiempo. Los logs son eventos con detalle y me explican un caso puntual. En un incidente voy en ese orden: la métrica me avisa, la traza me ubica y el log me da el detalle.</>,
+      strong: ['Da un flujo de uso', 'Menciona logs estructurados o cardinalidad'],
+      weak: ['"Los logs sirven para todo"'],
+      followups: ['¿Por qué no pondrías el id de usuario como etiqueta de una métrica?'],
+    },
+    {
+      q: 'La API está lenta. ¿Qué haces?',
+      checks: 'El orden: impacto, cambios, mitigación, diagnóstico.',
+      level: 'senior',
+      answer: <>Dimensiono el impacto: qué endpoints, desde cuándo, a quiénes. Busco qué cambió en ese momento: despliegues, flags, configuración, tráfico, dependencias. Si hay una mitigación barata y reversible, como un rollback, la aplico primero. Con el sistema estable, miro las señales doradas por componente para encontrar el saturado y una traza de una petición lenta. Arreglo la causa, agrego el test o la alerta que faltaba y escribo un postmortem.</>,
+      strong: ['Mitiga antes de diagnosticar', 'Busca cambios recientes', 'Usa datos (trazas, métricas) en vez de intuición'],
+      weak: ['Empieza leyendo código', 'Reinicia todo sin entender', 'Escala sin saber dónde está el cuello'],
+      followups: ['¿Y si no hubo ningún despliegue?', '¿Qué alertas tendrías?'],
+    },
+    {
+      q: '¿Qué es un postmortem sin culpables y por qué importa?',
+      checks: 'Cultura de aprendizaje después de incidentes.',
+      level: 'senior',
+      answer: <>Es el análisis de un incidente que asume que todos actuaron de buena fe con la información que tenían, y pregunta qué en el sistema permitió el error: por qué no lo atrapó un test, la revisión o un canary. Incluye cronología, impacto, causa, qué funcionó y acciones con responsable. Importa porque si castigas a las personas, dejan de contar lo que pasó y pierdes la información para mejorar.</>,
+      strong: ['Distingue culpa de responsabilidad', 'Menciona acciones con responsable'],
+      weak: ['"Para saber quién se equivocó"'],
+      followups: ['¿Qué haces si las acciones del postmortem nunca se priorizan?'],
+    },
+    {
+      q: 'Tienes un test que falla una de cada diez veces en CI. ¿Qué haces?',
+      checks: 'Que no normalices los tests intermitentes.',
+      level: 'semi',
+      answer: <>Lo trato como un bug. Primero lo pongo en cuarentena con un ticket, para que no enseñe al equipo a ignorar el rojo, pero no lo borro. Después busco la causa típica: esperas con tiempos fijos en vez de esperar una condición, datos compartidos entre tests, dependencia del orden o de la hora real, o una condición de carrera real en el código. A veces el test intermitente está detectando un bug de concurrencia de verdad.</>,
+      strong: ['Cuarentena con seguimiento', 'Conoce las causas típicas', 'Considera que el bug sea real'],
+      weak: ['"Le agrego reintentos"', '"Lo borro"'],
+      followups: ['¿Cómo evitas que vuelva a pasar?'],
+    },
+  ]}
+/>
+
+<Takeaways>
+
+- Pirámide o trofeo, el mensaje es el mismo: pocos e2e, mucho de lo rápido y confiable. Dónde poner el peso del medio depende de dónde está el riesgo de tu sistema.
+- Mockea los bordes que no controlas; para lo tuyo, usa lo real o un fake. La cobertura encuentra código sin probar, pero como meta se corrompe.
+- Rebase reescribe hashes; merge no. Rebase en lo local, merge o squash para integrar, y nunca reescribas historia que otros ya bajaron. `git bisect` encuentra el commit culpable con búsqueda binaria.
+- El flujo de Git sigue al modelo de entrega: trunk-based con feature flags para desplegar seguido, GitFlow para versiones mantenidas en paralelo.
+- Despliega con red: canary o blue-green, feature flags y rollback con migraciones compatibles hacia atrás.
+- En un incidente: impacto, qué cambió, mitigar, y recién después diagnosticar con métricas, trazas y logs. Cierra con un postmortem sin culpables y acciones con responsable.
+
+</Takeaways>
+
+## Fuentes y lecturas
+
+- Martin Fowler, [Test Pyramid](https://martinfowler.com/bliki/TestPyramid.html) y Ham Vocke, [The Practical Test Pyramid](https://martinfowler.com/articles/practical-test-pyramid.html).
+- Kent C. Dodds, [The Testing Trophy and Testing Classifications](https://kentcdodds.com/blog/the-testing-trophy-and-testing-classifications).
+- Google Testing Blog, [Just Say No to More End-to-End Tests](https://testing.googleblog.com/2015/04/just-say-no-to-more-end-to-end-tests.html) (la proporción 70/20/10 como punto de partida).
+- Martin Fowler, [Mocks Aren't Stubs](https://martinfowler.com/articles/mocksArentStubs.html) y [Test Coverage](https://martinfowler.com/bliki/TestCoverage.html).
+- Scott Chacon y Ben Straub, *Pro Git*: [Rebasing](https://git-scm.com/book/en/v2/Git-Branching-Rebasing) ("The Perils of Rebasing") y la documentación de [git bisect](https://git-scm.com/docs/git-bisect).
+- Vincent Driessen, [A successful Git branching model](https://nvie.com/posts/a-successful-git-branching-model/) (con su nota de 2020) y [trunkbaseddevelopment.com](https://trunkbaseddevelopment.com/).
+- Martin Fowler, [BlueGreenDeployment](https://martinfowler.com/bliki/BlueGreenDeployment.html), Danilo Sato, [CanaryRelease](https://martinfowler.com/bliki/CanaryRelease.html) y Pete Hodgson, [Feature Toggles](https://martinfowler.com/articles/feature-toggles.html).
+- Google, [Code Review Developer Guide](https://google.github.io/eng-practices/review/) y [Conventional Comments](https://conventionalcomments.org/).
+- *Site Reliability Engineering* (Google): [Introduction](https://sre.google/sre-book/introduction/) (cambios y caídas), [Monitoring Distributed Systems](https://sre.google/sre-book/monitoring-distributed-systems/) (las cuatro señales doradas) y [Postmortem Culture](https://sre.google/sre-book/postmortem-culture/).
+- Brendan Gregg, [The USE Method](https://www.brendangregg.com/usemethod.html) y OpenTelemetry, [Observability primer](https://opentelemetry.io/docs/concepts/observability-primer/).
+- [DORA](https://dora.dev/): investigación sobre desempeño de entrega de software.

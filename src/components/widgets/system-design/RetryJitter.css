@@ -1,0 +1,79 @@
+.rj-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.rj-outage {
+  fill: var(--paper-3);
+}
+.rj-bar {
+  fill: var(--rule-strong);
+}
+.rj-bar--ok {
+  fill: var(--line);
+}
+.rj-cap {
+  stroke: var(--ink);
+  stroke-width: 2;
+  stroke-dasharray: 6 5;
+}
+.rj-axis {
+  stroke: var(--rule-strong);
+  stroke-width: 3;
+}
+.rj-label {
+  font-size: 14px;
+  fill: var(--ink-3);
+}
+.rj-label--cap {
+  fill: var(--ink);
+  font-weight: 700;
+}
+.rj-legend {
+  display: flex;
+  gap: var(--s-4);
+  font-size: 0.8rem;
+  color: var(--ink-3);
+}
+.rj-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.rj-key {
+  display: inline-block;
+  width: 14px;
+  height: 10px;
+  background: var(--rule-strong);
+}
+.rj-key--ok {
+  background: var(--line);
+}
+.rj-readout {
+  display: grid;
+  gap: var(--s-3);
+}
+.rj-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-3) var(--s-5);
+}
+.rj-cmp {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-1) var(--s-4);
+  font-size: 0.85rem;
+}
+.rj-cmp .is-on {
+  color: var(--ink);
+  text-decoration: underline;
+  text-decoration-color: var(--line);
+  text-decoration-thickness: 3px;
+  text-underline-offset: 4px;
+}
+.rj-formula {
+  font-size: 0.85rem;
+}
+.rj-formula code {
+  font-family: var(--font-code);
+}

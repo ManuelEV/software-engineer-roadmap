@@ -1,0 +1,129 @@
+.dr-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-2);
+  width: 100%;
+}
+.dr-hint {
+  margin-left: auto;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--ink-3);
+}
+.dr-diff {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: var(--code-bg);
+  font-family: var(--font-code);
+  font-size: 0.76rem;
+  line-height: 1.5;
+}
+.dr-line--file {
+  padding: 6px 10px;
+  background: var(--paper-3);
+  font-weight: 700;
+  color: var(--ink);
+  border-top: 1px solid var(--rule);
+}
+.dr-line--file:first-child {
+  border-top: 0;
+}
+.dr-line--hunk {
+  padding: 2px 10px;
+  color: var(--ink-3);
+  background: color-mix(in oklab, var(--l4) 7%, var(--code-bg));
+}
+.dr-btn {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+  min-height: 32px;
+  padding: 3px 10px;
+  border: 0;
+  border-left: 3px solid transparent;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  color: var(--code-ink);
+  cursor: pointer;
+}
+.dr-btn:disabled {
+  cursor: default;
+}
+.dr-btn:hover:not(:disabled) {
+  background: color-mix(in oklab, var(--ink) 5%, transparent);
+}
+.dr-btn:focus-visible {
+  outline: 2px solid var(--line-ink);
+  outline-offset: -2px;
+}
+.dr-line--add .dr-btn {
+  background: color-mix(in oklab, var(--ok) 10%, transparent);
+}
+.dr-line--del .dr-btn {
+  background: color-mix(in oklab, var(--bad) 9%, transparent);
+}
+.dr-sign {
+  flex: none;
+  width: 1ch;
+  color: var(--ink-3);
+}
+.dr-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.dr-line.is-flagged .dr-btn {
+  outline: 2px solid var(--warn);
+  outline-offset: -2px;
+}
+.dr-line.is-hit .dr-btn {
+  outline: 2px solid var(--ok);
+  outline-offset: -2px;
+}
+.dr-line.is-miss .dr-btn {
+  outline: 2px dashed var(--bad);
+  outline-offset: -2px;
+}
+.dr-line.is-fp .dr-btn {
+  outline: 2px dashed var(--warn);
+  outline-offset: -2px;
+}
+.dr-note {
+  margin: 0;
+  padding: 6px 12px 8px 30px;
+  font-family: var(--font-read);
+  font-size: 0.9rem;
+  line-height: 1.45;
+  color: var(--ink-2);
+  background: var(--card);
+}
+.dr-line.is-hit .dr-note::before {
+  content: 'Bien visto. ';
+  font-weight: 700;
+  color: var(--ok);
+}
+.dr-line.is-miss .dr-note::before {
+  content: 'Se te pasó. ';
+  font-weight: 700;
+  color: var(--bad);
+}
+.dr-line.is-fp .dr-note::before {
+  content: 'No es un problema. ';
+  font-weight: 700;
+  color: var(--warn);
+}
+.dr-readout {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-3) var(--s-5);
+  align-items: flex-start;
+}
+.dr-readout p {
+  flex: 1 1 18rem;
+  font-family: var(--font-read);
+}

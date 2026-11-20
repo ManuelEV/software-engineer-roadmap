@@ -1,0 +1,160 @@
+.cm-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.cm-chip {
+  min-height: 40px;
+  padding: 0 14px;
+  border-radius: 999px;
+  border: 1.5px solid var(--rule-strong);
+  background: var(--card);
+  color: var(--ink-2);
+  font-family: var(--font-sign);
+  font-weight: 600;
+  font-size: var(--step--1);
+  transition:
+    background-color 160ms var(--ease-out),
+    border-color 160ms var(--ease-out);
+}
+.cm-chip:hover {
+  border-color: var(--ink-2);
+}
+.cm-chip.is-on {
+  background: var(--line);
+  border-color: var(--line);
+  color: var(--line-on);
+}
+.cm-chip:focus-visible {
+  outline: 2px solid var(--line-ink);
+  outline-offset: 2px;
+}
+.cm-svg {
+  width: 100%;
+  height: auto;
+  display: block;
+  max-width: 760px;
+  margin: 0 auto;
+}
+.cm-line {
+  stroke: var(--rule-strong);
+  stroke-width: 4;
+  stroke-linecap: round;
+  transition: stroke 200ms var(--ease-out);
+}
+.cm-rel.is-sw .cm-line {
+  stroke-dasharray: 2 9;
+}
+.cm-rel.is-on .cm-line {
+  stroke: var(--line);
+  stroke-width: 5;
+}
+.cm-ud {
+  font-size: 13px;
+  font-weight: 700;
+  fill: var(--ink-3);
+}
+.cm-rel.is-on .cm-ud {
+  fill: var(--line-ink);
+}
+.cm-pill {
+  cursor: pointer;
+  outline: none;
+}
+.cm-pill__hit {
+  fill: transparent;
+}
+.cm-pill__bg {
+  fill: var(--paper);
+  stroke: var(--rule-strong);
+  stroke-width: 2;
+  transition:
+    fill 200ms var(--ease-out),
+    stroke 200ms var(--ease-out);
+}
+.cm-pill__text {
+  font-size: 13px;
+  font-weight: 700;
+  fill: var(--ink-2);
+}
+.cm-pill:hover .cm-pill__bg {
+  stroke: var(--ink-2);
+}
+.cm-pill:focus-visible .cm-pill__bg {
+  stroke: var(--line-ink);
+  stroke-width: 3;
+}
+.cm-rel.is-on .cm-pill__bg {
+  fill: var(--line);
+  stroke: var(--line);
+}
+.cm-rel.is-on .cm-pill__text {
+  fill: var(--line-on);
+}
+.cm-ctx rect {
+  fill: var(--card);
+  stroke: var(--ink-3);
+  stroke-width: 2;
+  transition: stroke 200ms var(--ease-out);
+}
+.cm-ctx--core rect {
+  stroke: var(--ink);
+  stroke-width: 3;
+}
+.cm-ctx--generic rect,
+.cm-ctx--external rect {
+  stroke-dasharray: 6 4;
+}
+.cm-ctx--legacy rect {
+  fill: var(--paper-3);
+}
+.cm-ctx.is-on rect {
+  stroke: var(--line);
+  stroke-width: 3;
+  fill: var(--line-tint);
+}
+.cm-ctx__label {
+  font-size: 15px;
+  font-weight: 700;
+  fill: var(--ink);
+}
+.cm-ctx__kind {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  fill: var(--ink-3);
+}
+.cm-detail__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 var(--s-2);
+  color: var(--ink);
+}
+.cm-team {
+  font-size: 0.85rem;
+  color: var(--ink-3);
+}
+.cm-dl {
+  display: grid;
+  grid-template-columns: 7.5rem 1fr;
+  gap: 4px var(--s-3);
+  margin: 0;
+}
+.cm-dl dt {
+  font-weight: 700;
+  color: var(--ink);
+}
+.cm-dl dd {
+  margin: 0;
+}
+@media (max-width: 480px) {
+  .cm-dl {
+    grid-template-columns: 1fr;
+  }
+  .cm-dl dd {
+    margin-bottom: 6px;
+  }
+}

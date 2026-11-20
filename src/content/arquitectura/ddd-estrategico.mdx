@@ -1,0 +1,250 @@
+import { ContextMap } from '../../components/widgets/arquitectura/ContextMap'
+import { EventStormingBoard } from '../../components/widgets/arquitectura/EventStormingBoard'
+
+En 2003, Eric Evans publicó *Domain-Driven Design: Tackling Complexity in the Heart of Software*. El libro tiene dos mitades. La primera, la **táctica**, habla de entidades, value objects, agregados y repositorios, y es la que la mayoría de los equipos adoptó primero. La segunda, la **estratégica**, habla de cómo partir un sistema grande en modelos coherentes, cómo se relacionan esos modelos y dónde invertir el esfuerzo. Con los años, la comunidad llegó a una conclusión bastante unánime: la parte estratégica es la que más valor da, y la que más se ignora.
+
+Este tema es esa parte estratégica. Vas a ver por qué el lenguaje importa tanto, cómo clasificar subdominios para decidir qué construir y qué comprar, qué es (y qué no es) un *bounded context*, los patrones para relacionarlos, y Event Storming, la técnica de taller que hoy es la forma más común de descubrir todo lo anterior. Si vas a diseñar microservicios o un monolito modular, aquí es donde se deciden las fronteras.
+
+## Lenguaje ubicuo
+
+El primer concepto de DDD no es técnico. El **lenguaje ubicuo** (*ubiquitous language*) es un vocabulario compartido entre expertos del negocio y desarrolladores, que se usa igual en las conversaciones, en los documentos, en los tests y en el código.
+
+Parece obvio hasta que lo ves fallar. El equipo de ventas dice "pedido realizado", logística dice "orden liberada", el código tiene `Order.status = 2` y la base de datos tiene `tbl_ord_hdr.st_cd = 'P'`. Cada traducción es una oportunidad de malentendido, y los malentendidos en el modelo se convierten en bugs que ningún test detecta porque los tests codifican el mismo malentendido.
+
+```ts title="Sin lenguaje ubicuo vs con lenguaje ubicuo"
+// Antes: el código habla de base de datos
+order.setStatus(2)
+order.setFlag3(true)
+orderDao.update(order)
+
+// Después: el código habla como el negocio
+order.place()           // "el cliente realiza el pedido"
+order.holdForFraudReview(reason)
+orders.save(order)
+```
+
+Tres reglas prácticas:
+
+- **Si el experto no entiende el nombre, el nombre está mal.** "¿Qué significa que un pedido esté *held*?" es una pregunta que debería tener respuesta del negocio, no de un desarrollador.
+- **Cuando el lenguaje cambia, el código cambia.** Si el negocio empieza a distinguir "reserva" de "pedido", el modelo necesita dos conceptos, no un `type` con un `if`.
+- **El lenguaje es ubicuo dentro de un contexto, no en toda la empresa.** Esto es lo que lleva directamente a los bounded contexts.
+
+## Subdominios: dónde poner el esfuerzo
+
+Un **dominio** es el área de negocio que el software atiende: comercio electrónico, seguros, logística. Ningún dominio grande es homogéneo; se divide en **subdominios**, y DDD propone clasificarlos en tres tipos según cuánto diferencian al negocio.
+
+| Tipo | Qué es | Ejemplo en una tienda online | Estrategia |
+| --- | --- | --- | --- |
+| **Core** (núcleo) | Lo que te diferencia de la competencia. Si lo haces igual que todos, no tienes negocio. | Motor de precios y promociones dinámicas; recomendaciones | Constrúyelo en casa, con tus mejores personas, DDD táctico completo |
+| **De soporte** (*supporting*) | Necesario y específico de tu negocio, pero no te diferencia. | Catálogo, gestión de devoluciones, panel de bodega | Constrúyelo simple, o terceriza su desarrollo; no hace falta un modelo sofisticado |
+| **Genérico** (*generic*) | Problema resuelto, igual en todas las empresas. | Autenticación, pagos con tarjeta, envío de correos, facturación electrónica | Cómpralo o usa un servicio (Auth0, Stripe, SES). Construirlo es desperdicio |
+
+La clasificación no es eterna ni universal. Para una tienda, el procesamiento de pagos es genérico; para Stripe, es su core. Para una empresa de logística propia, el ruteo de entregas puede ser core aunque para la tienda promedio sea de soporte.
+
+<Callout type="idea" title="La pregunta estratégica">
+
+Antes de discutir cómo diseñar algo, pregunta: ¿esto nos diferencia? Si no, la mejor arquitectura suele ser no construirlo. El repositorio ddd-crew propone el *Core Domain Chart*, un gráfico con dos ejes (diferenciación de negocio y complejidad del modelo) para tener esta conversación con datos en lugar de opiniones.
+
+</Callout>
+
+<Quiz
+  question="Una startup de delivery de comida quiere construir su propio sistema de autenticación con login social, 2FA y recuperación de contraseña 'para tener control total'. ¿Qué dice el análisis de subdominios?"
+  options={[
+    { text: 'Es core, porque todos los usuarios pasan por ahí.', why: 'Que todos lo usen no lo hace diferenciador. Ningún cliente elige una app de delivery por su pantalla de login.' },
+    { text: 'Es genérico: un problema resuelto que conviene comprar o usar como servicio, y concentrar el equipo en lo que diferencia (asignación de repartidores, tiempos de entrega).', correct: true, why: 'Exacto. Construir autenticación es caro, riesgoso en seguridad y no diferencia. El esfuerzo de las mejores personas debería ir al core.' },
+    { text: 'Es de soporte, así que hay que construirlo pero sin DDD.', why: 'De soporte implica algo específico del negocio. La autenticación no es específica de una app de delivery.' },
+    { text: 'Depende del lenguaje de programación del equipo.', why: 'La clasificación de subdominios es una decisión de negocio, no tecnológica.' },
+  ]}
+/>
+
+## Bounded contexts
+
+Este es el concepto más importante de DDD estratégico, y el más malinterpretado. Un **bounded context** es una frontera explícita dentro de la cual un modelo y su lenguaje son consistentes. Adentro, cada término significa exactamente una cosa. Afuera, el mismo término puede significar otra.
+
+El ejemplo clásico es una palabra como "producto". Mira lo que significa para tres equipos distintos de la misma tienda:
+
+```ts title="Tres modelos de 'producto', cada uno correcto en su contexto"
+// Contexto Catálogo: lo que el cliente ve y busca
+interface Product {
+  sku: string
+  title: string
+  description: string
+  images: string[]
+  attributes: Record<string, string> // talla, color, material
+  categoryPath: string[]
+}
+
+// Contexto Inventario: lo que hay en la bodega
+interface StockItem {
+  sku: string
+  warehouseId: string
+  onHand: number
+  reserved: number
+  reorderPoint: number
+}
+
+// Contexto Envíos: lo que hay que mover
+interface Parcel {
+  sku: string
+  weightGrams: number
+  dimensionsCm: { l: number; w: number; h: number }
+  hazardous: boolean
+}
+```
+
+El error más común es intentar unificarlos en una sola clase `Product` con cuarenta campos que sirve a todos y no le pertenece a nadie. Cada cambio del equipo de catálogo arriesga romper a inventario. DDD dice lo contrario: **acepta que hay varios modelos**, dale a cada uno su frontera y haz explícitas las traducciones entre ellos. Lo único que comparten es un identificador (el SKU) que permite correlacionar.
+
+### Subdominio vs bounded context
+
+Son cosas distintas y conviene no mezclarlas en una entrevista:
+
+- El **subdominio** está en el **espacio del problema**: es una parte del negocio que existe aunque no haya software.
+- El **bounded context** está en el **espacio de la solución**: es una decisión de diseño sobre dónde trazar la frontera de un modelo.
+
+Lo ideal es que se alineen uno a uno, pero no siempre pasa. Un sistema legado puede tener un solo contexto que cubre tres subdominios (y por eso duele), y un subdominio core complejo puede dividirse en varios contextos.
+
+### Bounded context y microservicio
+
+Un bounded context **no es** un microservicio, aunque se relacionan. Un contexto es una frontera de **modelo y lenguaje**; un servicio es una unidad de **despliegue**. Un bounded context puede implementarse como un módulo dentro de un monolito, como un servicio o como varios servicios. Lo que casi nunca funciona es lo contrario: **un servicio que mezcla dos contextos**, porque hereda la confusión de modelos dentro de una frontera de despliegue.
+
+La heurística práctica: un bounded context es el **límite superior** razonable de un microservicio. Dividir un contexto en varios servicios puede tener sentido por razones técnicas (escalado, aislamiento); mezclar contextos en un servicio casi nunca.
+
+<Callout type="tip" title="Cómo encontrar las fronteras">
+
+Busca los lugares donde **cambia el lenguaje** ("pedido" en ventas vs "envío" en logística), donde **cambia el responsable** (otro equipo, otro experto de negocio), donde **cambia el ritmo** (el catálogo cambia a diario, la facturación una vez al año por regulación) y donde una misma palabra tiene **definiciones que se contradicen**. Esas costuras son candidatas a frontera.
+
+</Callout>
+
+## Context mapping: cómo se relacionan los contextos
+
+Los contextos no viven aislados: intercambian datos y dependen unos de otros. Un **context map** documenta esas relaciones, y DDD tiene un catálogo de patrones para describirlas. Lo interesante es que los patrones describen tanto la **integración técnica** como la **relación entre equipos**, porque son inseparables.
+
+Primero, la dirección. En una relación **upstream / downstream**, el upstream influye en el downstream pero no al revés: si el upstream cambia su modelo, el downstream se ve afectado. El repositorio ddd-crew agrega dos tipos de relación de equipo más: **mutuamente dependientes** (tienen que entregar juntos) y **libres** (los cambios de uno no afectan al otro).
+
+Explora el mapa de una tienda online. Cada relación usa un patrón distinto:
+
+<ContextMap />
+
+Un resumen para memorizar:
+
+| Patrón | Relación | En una frase |
+| --- | --- | --- |
+| Partnership | Mutuamente dependientes | Dos equipos que planifican e integran juntos porque fallan juntos |
+| Shared Kernel | Mutuamente dependientes | Un pedazo pequeño de modelo compartido y co-gestionado |
+| Customer / Supplier | Upstream / downstream | El upstream prioriza las necesidades del downstream |
+| Conformist | Upstream / downstream | El downstream adopta el modelo del upstream tal cual |
+| Anticorruption Layer | Upstream / downstream | El downstream traduce el modelo ajeno para proteger el suyo |
+| Open Host Service | Upstream / downstream | El upstream ofrece un protocolo abierto para todos |
+| Published Language | (acompaña a OHS) | Un formato documentado y versionado de intercambio |
+| Separate Ways | Libres | No integrar: cada uno resuelve por su cuenta |
+
+### El ACL en código
+
+El *anticorruption layer* es el patrón que más vas a implementar, sobre todo al integrar sistemas legados. Es un adaptador con una responsabilidad muy específica: que ningún concepto del modelo ajeno cruce hacia el tuyo.
+
+```ts title="src/orders/adapters/erp/erp-invoicing-acl.ts"
+import type { InvoicingPort, Invoice } from '../../application/ports'
+
+// Lo que devuelve el ERP legado: 200 campos, códigos numéricos, fechas como texto.
+interface ErpDocumentDto {
+  DOC_NRO: string
+  DOC_TIPO: '01' | '03' | '07' // 01 = factura, 03 = boleta, 07 = nota de crédito
+  FEC_EMI: string // 'DDMMYYYY'
+  IMP_TOT: string // '000001234,50'
+  EST_SUNAT: 'A' | 'R' | 'P'
+  // ...otros 195 campos que a Pedidos no le importan
+}
+
+const KIND = { '01': 'INVOICE', '03': 'RECEIPT', '07': 'CREDIT_NOTE' } as const
+const STATUS = { A: 'ACCEPTED', R: 'REJECTED', P: 'PENDING' } as const
+
+export class ErpInvoicingAcl implements InvoicingPort {
+  constructor(private readonly erp: { getDocument(nro: string): Promise<ErpDocumentDto> }) {}
+
+  async invoiceFor(documentNumber: string): Promise<Invoice> {
+    const d = await this.erp.getDocument(documentNumber)
+    return {
+      number: d.DOC_NRO.trim(),
+      kind: KIND[d.DOC_TIPO],
+      issuedOn: new Date(`${d.FEC_EMI.slice(4)}-${d.FEC_EMI.slice(2, 4)}-${d.FEC_EMI.slice(0, 2)}`),
+      totalCents: Math.round(Number(d.IMP_TOT.replace(',', '.')) * 100),
+      status: STATUS[d.EST_SUNAT],
+    }
+  }
+}
+```
+
+Si mañana el ERP se reemplaza, se reescribe este archivo y nada más. Fíjate que es exactamente un adaptador conducido de la arquitectura hexagonal; el ACL es el nombre estratégico de esa misma técnica.
+
+<Quiz
+  question="Tu contexto de Envíos se integra con la API de un transportista grande. No puedes influir en su diseño, y su modelo de estados (en tránsito, en reparto, entregado, excepción) es claro y estable. ¿Qué patrón eliges?"
+  options={[
+    { text: 'Anticorruption Layer, siempre que integres algo externo.', why: 'Un ACL cuesta código y mantenimiento. Si el modelo upstream ya te sirve, traducirlo no compra nada.' },
+    { text: 'Conformist: adoptar su modelo tal cual, porque es bueno y no puedes cambiarlo.', correct: true, why: 'Exacto. Conformist es una elección legítima cuando el modelo upstream es suficientemente bueno. Si en el futuro su modelo empeora o cambia seguido, puedes introducir un ACL.' },
+    { text: 'Partnership, para coordinar releases con el transportista.', why: 'Partnership requiere que ambos equipos tengan éxito o fracasen juntos y planifiquen en conjunto. Un transportista grande no va a coordinar su roadmap con tu tienda.' },
+    { text: 'Shared Kernel con el transportista.', why: 'Compartir código y modelo con una empresa externa no tiene sentido: no hay co-propiedad posible.' },
+  ]}
+/>
+
+## Event Storming
+
+Todo lo anterior suena bien en teoría, pero ¿cómo descubres los contextos, el lenguaje y los subdominios de un negocio real? La técnica más usada hoy es **Event Storming**, creada por Alberto Brandolini. Es un taller: expertos del negocio y desarrolladores frente a una pared larga con papel, modelando el negocio con notas adhesivas de colores.
+
+La idea central es empezar por los **eventos de dominio**: cosas que pasaron y que al negocio le importan, escritas en pasado ("Pedido realizado", "Pago autorizado"). Los eventos son fáciles de entender para cualquiera, se ordenan en el tiempo de forma natural y obligan a hablar del proceso real en lugar del sistema imaginado.
+
+Recorre las fases de un taller sobre el flujo de un pedido:
+
+<EventStormingBoard />
+
+### Tres niveles
+
+Brandolini describe formatos distintos según el objetivo:
+
+- **Big Picture**: el negocio completo, con 10 a 30 personas o más, para tener una visión compartida, descubrir dolores y encontrar fronteras candidatas de contextos. Se usan sobre todo eventos, hotspots, actores y sistemas.
+- **Process Modelling**: un proceso concreto, con la gramática completa: actor → comando → sistema o agregado → evento → política → comando… Sirve para encontrar cuellos de botella y diseñar flujos.
+- **Software Design**: dentro de un bounded context, para diseñar agregados y el código. Es el puente con el DDD táctico.
+
+### Consejos de facilitación
+
+- **Espacio ilimitado.** Una pared de varios metros o un tablero digital sin bordes. Las sillas son opcionales; estar de pie mantiene la energía.
+- **Las personas correctas.** Sin expertos del negocio, es un taller de desarrolladores adivinando. Sin desarrolladores, nadie conecta el modelo con el código.
+- **No resuelvas, marca.** Un desacuerdo se convierte en un hotspot y se sigue. Los hotspots son el entregable más valioso: son los riesgos y las preguntas abiertas.
+- **Sigue el lenguaje.** Cuando dos grupos usan palabras distintas para lo mismo (o la misma palabra para cosas distintas), encontraste una frontera de contexto.
+
+<Callout type="example" title="Del taller al diseño">
+
+Las salidas típicas de un Event Storming son: un glosario inicial del lenguaje ubicuo, una lista de hotspots priorizados, eventos pivote que separan fases del negocio y un primer borrador de bounded contexts. Para documentar cada contexto, ddd-crew propone el *Bounded Context Canvas*: nombre, propósito, clasificación estratégica, lenguaje, decisiones de negocio, comunicación entrante y saliente.
+
+</Callout>
+
+<Quiz
+  question="En un Event Storming, el equipo de ventas escribe 'Pedido confirmado' y el de bodega escribe 'Pedido confirmado' para un momento distinto (cuando el picking terminó). ¿Qué haces?"
+  options={[
+    { text: 'Elegir la definición de ventas porque ocurrió antes en la línea de tiempo.', why: 'Imponer una definición oculta el problema: bodega seguirá usando la palabra con su significado y el malentendido llegará al código.' },
+    { text: 'Marcarlo como hotspot: es una señal de que hay dos contextos con lenguajes distintos, y cada uno necesita un término preciso.', correct: true, why: 'Exacto. La misma palabra con significados distintos es la pista clásica de una frontera de bounded context. Probablemente terminas con "Pedido realizado" en Ventas y "Picking completado" en Bodega.' },
+    { text: 'Ignorarlo; es un detalle de redacción.', why: 'Los detalles de lenguaje son el núcleo de DDD. Este tipo de ambigüedad produce bugs de integración reales.' },
+    { text: 'Crear un evento genérico "Pedido actualizado" que sirva para ambos.', why: 'Un evento genérico pierde la información de negocio. Los eventos deben expresar algo específico que pasó.' },
+  ]}
+/>
+
+<Takeaways>
+
+- DDD estratégico decide fronteras y prioridades; da más valor que el táctico y se ignora más.
+- El lenguaje ubicuo se usa igual en conversaciones, tests y código, y es válido dentro de un contexto, no en toda la empresa.
+- Clasifica subdominios en core, de soporte y genéricos: construye el core con lo mejor que tengas, simplifica el de soporte y compra lo genérico.
+- Un bounded context es una frontera de modelo y lenguaje; varios modelos de "producto" en distintos contextos es lo correcto, no un problema.
+- Un bounded context es el límite superior razonable de un microservicio; mezclar contextos en un servicio casi siempre sale mal.
+- Los patrones de context mapping describen integración y relación entre equipos a la vez; el ACL protege tu modelo de uno ajeno, y conformist es válido cuando el ajeno es bueno.
+- Event Storming descubre eventos, lenguaje, hotspots y fronteras con el negocio en la sala.
+
+</Takeaways>
+
+## Fuentes y lecturas
+
+- Eric Evans, *Domain-Driven Design: Tackling Complexity in the Heart of Software* (Addison-Wesley, 2003) y la [DDD Reference](https://www.domainlanguage.com/ddd/reference/) gratuita.
+- Vaughn Vernon, *Implementing Domain-Driven Design* (2013) y *Domain-Driven Design Distilled* (2016).
+- Vlad Khononov, *Learning Domain-Driven Design* (O'Reilly, 2021) y su post [*Revisiting the Basics of Domain-Driven Design*](https://vladikk.com/2018/01/26/revisiting-the-basics-of-ddd/).
+- Martin Fowler, [*Bounded Context*](https://martinfowler.com/bliki/BoundedContext.html) y [*Ubiquitous Language*](https://martinfowler.com/bliki/UbiquitousLanguage.html).
+- ddd-crew: [Context Mapping](https://github.com/ddd-crew/context-mapping), [Bounded Context Canvas](https://github.com/ddd-crew/bounded-context-canvas), [Core Domain Charts](https://github.com/ddd-crew/core-domain-charts) y [DDD Starter Modelling Process](https://github.com/ddd-crew/ddd-starter-modelling-process).
+- Alberto Brandolini, [EventStorming](https://www.eventstorming.com/) y el libro *Introducing EventStorming* (Leanpub); [EventStorming Glossary & Cheat Sheet](https://github.com/ddd-crew/eventstorming-glossary-cheat-sheet).
+- Microsoft Azure Architecture Center, [Anti-corruption Layer pattern](https://learn.microsoft.com/en-us/azure/architecture/patterns/anti-corruption-layer).

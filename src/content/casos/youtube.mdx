@@ -1,0 +1,415 @@
+import { AdaptiveBitrate } from '../../components/widgets/casos-a/AdaptiveBitrate'
+
+"Diseña YouTube." Hay dos sistemas escondidos en esta pregunta. El primero es una **fábrica**: recibe archivos de video de cualquier formato, tamaño y calidad, y los convierte en decenas de versiones listas para cualquier pantalla y conexión. El segundo es una **red de distribución**: entrega esas versiones a millones de personas a la vez, cambiando de calidad cada pocos segundos según cómo va su conexión, sin que el video se congele.
+
+YouTube ha declarado que se suben más de **500 horas de video por minuto**, y en 2017 anunció que la gente miraba más de **mil millones de horas al día**. Con esas cifras, lo difícil no es "guardar videos": es que la transcodificación cuesta una fortuna en cómputo, que el ancho de banda de salida cuesta otra fortuna, y que un contador de vistas ingenuo se convierte en la fila más disputada de tu base de datos el día que un video se vuelve viral.
+
+<Sketch
+  width={640}
+  height={300}
+  caption="Dos sistemas: una fábrica que convierte un archivo en muchas versiones, y una red que las entrega desde el borde. Cada hora subida se mira más de mil veces."
+  items={[
+    { type: 'text', x: 24, y: 32, text: 'la fábrica', size: 22, tone: 'line' },
+    { type: 'box', x: 24, y: 56, w: 112, h: 56, label: 'original', size: 20 },
+    { type: 'arrow', from: [138, 84], to: [176, 84] },
+    { type: 'cells', x: 180, y: 64, values: [1, 2, 3, 4], size: 40 },
+    { type: 'text', x: 182, y: 134, text: 'fragmentos en paralelo', size: 18, tone: 'pencil' },
+    { type: 'arrow', from: [342, 84], to: [386, 84] },
+    { type: 'text', x: 394, y: 76, text: ['240p · 480p', '720p · 1080p'], size: 20, font: 'code' },
+    { type: 'line', points: [[24, 162], [616, 162]], dashed: true, tone: 'muted' },
+    { type: 'text', x: 24, y: 198, text: 'la red de entrega', size: 22, tone: 'line' },
+    { type: 'box', x: 24, y: 216, w: 112, h: 56, label: 'CDN', size: 22, tone: 'line', fill: true },
+    { type: 'arrow', from: [138, 230], to: [236, 214] },
+    { type: 'arrow', from: [138, 244], to: [236, 244], with: true },
+    { type: 'arrow', from: [138, 258], to: [236, 274], with: true },
+    { type: 'text', x: 254, y: 238, text: 'millones de espectadores', size: 20 },
+    { type: 'text', x: 254, y: 266, text: '~1.400 h vistas por hora subida', size: 18, tone: 'pencil' },
+  ]}
+/>
+
+## Requisitos
+
+**Funcionales**
+
+1. Subir un video (YouTube admite archivos de hasta 256 GB o 12 horas), con subida reanudable.
+2. Reproducir con calidad adaptativa y saltar a cualquier punto.
+3. Ver el estado del procesamiento ("procesando", "listo en HD").
+4. Mostrar vistas y likes.
+
+**No funcionales**
+
+- **Arranque rápido**: la reproducción empieza en menos de 2 segundos (supuesto) y casi nunca se congela.
+- **Disponibilidad de la reproducción** por encima de la subida: si la subida falla un rato, molesta; si la reproducción falla, es una caída.
+- **Durabilidad absoluta de los originales**: un video subido no se puede perder.
+- **Publicación en minutos** para calidades estándar; las calidades altas pueden tardar más.
+- **Eficiencia de costos**: cómputo y ancho de banda son las dos partidas que más pesan.
+
+**Fuera de alcance**: recomendaciones (las ves en el caso de [TikTok](/casos/tiktok)), búsqueda, comentarios, transmisiones en vivo y monetización.
+
+## Estimaciones
+
+Usemos las cifras públicas como anclas y agreguemos supuestos explícitos.
+
+| Magnitud | Cálculo | Resultado |
+|---|---|---|
+| Video subido | 500 h/min × 1.440 min | ~720.000 horas por día |
+| Originales | supongamos ~5 Mbps → ~2,25 GB por hora | ~1,6 PB por día |
+| Versiones transcodificadas | supongamos +100 % del original | otros ~1,6 PB por día |
+| Cómputo de transcodificación | supongamos 20 h de CPU por hora de video (toda la escalera) | ~14 M horas de CPU por día, ~600.000 núcleos ocupados todo el tiempo |
+| Espectadores simultáneos | 1.000 M h/día ÷ 24 h | ~42 millones en promedio |
+| Ancho de banda de salida | 42 M × ~2,5 Mbps | **~100 Tbps** promedio |
+| Relación vista/subida | 1.000 M h ÷ 720.000 h | ~1.400 horas vistas por hora subida |
+
+El supuesto de cómputo es el más incierto (depende muchísimo del codec: AV1 cuesta varias veces más que H.264, y Google llegó a diseñar chips propios para transcodificar). Pero el orden de magnitud deja claro el mensaje: **la fábrica es carísima**, así que vale la pena ser selectivo con qué se codifica y cuándo. Y la última fila justifica el resto del diseño: cada hora subida se mira, en promedio, más de mil veces. Optimizar la entrega rinde más que optimizar la subida.
+
+## Entidades y API
+
+Entidades: **Video** (metadatos y estado), **Rendition** (una combinación de resolución, bitrate y codec), **Segment** (unos segundos de una rendition), **Manifest** (el índice que el reproductor lee) y **ViewEvent**.
+
+**Subida reanudable.** Un archivo de varios GB por una conexión doméstica va a fallar a mitad de camino. El protocolo de subida reanudable de Google, el que usa la API de YouTube, funciona así:
+
+```http
+POST /upload/videos?uploadType=resumable
+Content-Type: application/json
+X-Upload-Content-Length: 2147483648
+{ "title": "Clase 12: árboles B", "visibility": "public" }
+
+200 OK
+Location: https://upload.ejemplo.com/upload/videos?upload_id=xa298sd_f
+```
+
+```http
+PUT https://upload.ejemplo.com/upload/videos?upload_id=xa298sd_f
+Content-Range: bytes 0-8388607/2147483648
+
+308 Resume Incomplete
+Range: bytes=0-8388607
+```
+
+Si la conexión se corta, el cliente pregunta cuánto llegó (un `PUT` vacío con `Content-Range: bytes */2147483648`) y continúa desde ahí. Al completar, recibe `201` con el `video_id` y el estado `processing`.
+
+```http
+GET /v1/videos/v_9fK2
+
+200 OK
+{ "id": "v_9fK2", "status": "ready", "duration_s": 3725,
+  "available": ["240p", "360p", "480p", "720p", "1080p"],
+  "manifests": { "hls": "https://cdn.ejemplo/v_9fK2/master.m3u8",
+                 "dash": "https://cdn.ejemplo/v_9fK2/manifest.mpd" } }
+```
+
+```http
+POST /v1/videos/v_9fK2/watch-events
+{ "session_id": "s_1a2b", "position_s": 30, "event": "progress" }
+
+204 No Content
+```
+
+## Modelo de datos
+
+```sql
+CREATE TABLE videos (
+  video_id     CHAR(11)    PRIMARY KEY,
+  channel_id   BIGINT      NOT NULL,
+  title        TEXT        NOT NULL,
+  status       TEXT        NOT NULL,   -- uploading | processing | ready | failed | blocked
+  duration_s   INT,
+  visibility   TEXT        NOT NULL,
+  created_at   TIMESTAMPTZ NOT NULL
+);
+CREATE TABLE renditions (
+  video_id     CHAR(11),
+  codec        TEXT,                   -- h264 | vp9 | av1
+  height       INT,                    -- 240 … 2160
+  bitrate_kbps INT,
+  storage_path TEXT,
+  PRIMARY KEY (video_id, codec, height)
+);
+```
+
+- **Metadatos en una base relacional particionada.** Son pocos bytes por video, se leen muchísimo y se escriben poco. YouTube vivió exactamente este problema: en 2010 creó **Vitess** para particionar MySQL cuando las réplicas ya no alcanzaban, moviendo la lógica de "en qué shard está esto" de la aplicación a un proxy. Delante, un caché agresivo.
+- **Bytes en almacenamiento de objetos.** Los originales, **para siempre**, en una capa fría y muy durable: cuando aparece un codec mejor, re-codificas desde el original, no desde una copia ya comprimida. Las versiones, en segmentos, en una capa más caliente detrás del CDN.
+- **Vistas fuera de la tabla de videos.** Los contadores tienen su propio camino (lo vemos en la profundización 4).
+
+## Diseño de alto nivel
+
+<FlowDiagram
+  caption="La fábrica (subida y transcodificación) y la red de entrega (reproducción). Recorre los pasos."
+  nodes={[
+    { id: 'cr', label: 'Creador', kind: 'user', x: 0, y: 0.5 },
+    { id: 'up', label: 'Upload service', kind: 'service', x: 1, y: 0.5, sub: 'reanudable' },
+    { id: 'raw', label: 'Originales', kind: 'archive', x: 2, y: 0, sub: 'durables, fríos' },
+    { id: 'dag', label: 'Orquestador', kind: 'workflow', x: 2, y: 1, sub: 'DAG por video' },
+    { id: 'enc', label: 'Encoders', kind: 'worker', x: 3, y: 0.5, sub: 'chunks en paralelo' },
+    { id: 'seg', label: 'Segmentos', kind: 'storage', x: 4, y: 0.5, sub: 'HLS / DASH' },
+    { id: 'cdn', label: 'CDN', kind: 'cdn', x: 4, y: 1.9, sub: 'PoPs + cachés en ISP' },
+    { id: 'v', label: 'Espectador', kind: 'client', x: 0, y: 2.6 },
+    { id: 'api', label: 'Video API', kind: 'service', x: 1, y: 2.6 },
+    { id: 'meta', label: 'Metadatos', kind: 'db', x: 2, y: 2.6, sub: 'MySQL + Vitess' },
+    { id: 'views', label: 'Conteo de vistas', kind: 'stream', x: 2, y: 3.6, sub: 'Kafka + agregación' },
+  ]}
+  edges={[
+    { from: 'cr', to: 'up' },
+    { from: 'up', to: 'raw' },
+    { from: 'up', to: 'dag' },
+    { from: 'dag', to: 'enc' },
+    { from: 'raw', to: 'enc' },
+    { from: 'enc', to: 'seg' },
+    { from: 'dag', to: 'meta', dashed: true },
+    { from: 'cdn', to: 'seg', dashed: true, label: 'miss' },
+    { from: 'v', to: 'api' },
+    { from: 'api', to: 'meta' },
+    { from: 'v', to: 'cdn' },
+    { from: 'api', to: 'views', dashed: true },
+  ]}
+  steps={[
+    {
+      title: 'Subida reanudable',
+      body: <>El creador sube el archivo en partes de 8 MB. El Upload service las escribe en el almacenamiento de originales y, si la conexión se corta, el cliente retoma desde el último byte confirmado.</>,
+      active: ['cr', 'up', 'raw'],
+      flow: ['cr-up', 'up-raw'],
+    },
+    {
+      title: 'Arranca el DAG',
+      body: <>Al completarse la subida, el orquestador crea el grafo de tareas del video: inspeccionar, dividir en fragmentos, codificar, empaquetar, miniaturas, subtítulos automáticos, verificación de derechos. El estado pasa a <code>processing</code>.</>,
+      active: ['up', 'dag'],
+      flow: ['up-dag'],
+    },
+    {
+      title: 'Codificar en paralelo',
+      body: <>El video se divide en fragmentos de unos segundos alineados a fotogramas clave, y cientos de workers codifican fragmentos × calidades a la vez. Una película de dos horas se procesa en minutos, no en horas.</>,
+      active: ['dag', 'enc', 'raw'],
+      flow: ['dag-enc', 'raw-enc'],
+    },
+    {
+      title: 'Empaquetar y publicar',
+      body: <>Los fragmentos se empaquetan en segmentos y se generan los manifiestos HLS y DASH. Primero las calidades bajas: el video pasa a <code>ready</code> en 360p y 720p mientras 4K sigue en cola.</>,
+      active: ['enc', 'seg', 'dag'],
+      flow: ['enc-seg', 'dag-meta'],
+    },
+    {
+      title: 'Abrir el video',
+      body: <>El espectador pide los metadatos a la Video API (desde caché casi siempre) y recibe la URL del manifiesto, firmada si el video es privado.</>,
+      active: ['v', 'api', 'meta'],
+      flow: ['v-api', 'api-meta'],
+    },
+    {
+      title: 'Streaming adaptativo desde el borde',
+      body: <>El reproductor lee el manifiesto y pide segmentos al CDN, eligiendo la calidad de cada uno según su ancho de banda y su buffer. Los videos populares están en el PoP o en un caché dentro del proveedor de internet; los de la cola larga se traen del origen.</>,
+      active: ['v', 'cdn', 'seg'],
+      flow: ['v-cdn', 'cdn-seg'],
+    },
+    {
+      title: 'Contar la vista',
+      body: <>El reproductor envía eventos de progreso. Un pipeline de streaming los valida (tiempo mínimo visto, deduplicación, bots), agrega por video y minuto, y actualiza el contador en lote.</>,
+      active: ['api', 'views'],
+      flow: ['api-views'],
+    },
+  ]}
+/>
+
+## Profundizaciones
+
+### 1. La transcodificación como DAG
+
+Codificar un video de dos horas de corrido en una sola máquina tardaría horas por cada calidad. La clave es que el trabajo es **paralelizable**: un video se puede cortar en fragmentos independientes, siempre que cada fragmento empiece en un **fotograma clave** (los demás fotogramas se codifican como diferencias respecto a los anteriores, así que un corte arbitrario rompería la decodificación).
+
+El pipeline es un **grafo dirigido acíclico** de tareas:
+
+<Steps>
+<Step title="Inspeccionar y validar">
+
+Formato, codec de entrada, duración, resolución, pistas de audio. Rechaza archivos corruptos antes de gastar cómputo.
+
+</Step>
+<Step title="Dividir">
+
+Cortar en fragmentos de unos segundos alineados a fotogramas clave. Separar audio y video.
+
+</Step>
+<Step title="Codificar (fan-out)">
+
+Cada fragmento × cada rendition × cada codec es una tarea independiente. Cientos de tareas en paralelo. El audio se codifica aparte, una sola vez por formato.
+
+</Step>
+<Step title="Tareas laterales">
+
+Miniaturas, subtítulos automáticos, huella de contenido para derechos de autor, moderación. Corren en paralelo con la codificación.
+
+</Step>
+<Step title="Unir, empaquetar y publicar (fan-in)">
+
+Empaquetar en segmentos (CMAF / MP4 fragmentado), generar manifiestos, actualizar el estado y avisar al creador.
+
+</Step>
+</Steps>
+
+Propiedades que el orquestador necesita, y que suman puntos si las mencionas: **tareas idempotentes** (si un worker muere, la tarea se reintenta sin efectos duplicados), **estado por tarea** persistido (para reanudar un DAG a medias), **prioridades** (las calidades bajas primero, para publicar rápido; los creadores grandes o los videos con tracción, antes) y **cómputo barato e interrumpible** (las tareas cortas e idempotentes toleran máquinas *spot* o preemptibles).
+
+**No todo merece todo.** La mayoría de los videos recibe pocas vistas. Codificar cada subida en H.264, VP9 y AV1 en todas las resoluciones desperdicia cómputo en videos que casi nadie verá. Una estrategia razonable: H.264 en la escalera básica para todos (compatibilidad universal), y codecs más eficientes (que ahorran ancho de banda pero cuestan mucho más al codificar) solo cuando el video gana tracción. El ahorro de bits se paga solo cuando hay muchas vistas.
+
+**La escalera tampoco tiene que ser fija.** Netflix publicó en 2015 su *per-title encoding*: en vez de una escalera de bitrates igual para todo, elige los puntos óptimos según la complejidad de cada título. Un dibujo animado simple se ve perfecto a una fracción del bitrate que necesita un partido de fútbol con césped y movimiento.
+
+<Quiz
+  question="¿Por qué se divide el video en fragmentos alineados a fotogramas clave antes de codificar?"
+  options={[
+    { text: 'Para que cada fragmento ocupe menos espacio en disco.', why: 'El tamaño total es casi el mismo; el objetivo es otro.' },
+    { text: 'Para codificar los fragmentos en paralelo en muchas máquinas y para que cada uno sea decodificable por sí solo.', correct: true, why: 'El paralelismo convierte horas en minutos, y como cada fragmento empieza en un fotograma clave, no depende de fotogramas de otro fragmento. También permite reintentar solo el fragmento que falló.' },
+    { text: 'Porque los CDN no aceptan archivos de más de unos segundos.', why: 'Los CDN sirven archivos grandes sin problema; los segmentos cortos existen por el streaming adaptativo, que es un tema distinto al de la codificación.' },
+  ]}
+/>
+
+### 2. Streaming adaptativo: HLS y DASH
+
+El reproductor no descarga "el video". Descarga un **manifiesto** que lista las calidades disponibles y, para cada una, la secuencia de **segmentos** de unos pocos segundos. Antes de pedir cada segmento, decide en qué calidad pedirlo.
+
+```text title="master.m3u8 (HLS)"
+#EXTM3U
+#EXT-X-STREAM-INF:BANDWIDTH=400000,RESOLUTION=426x240,CODECS="avc1.4d401e,mp4a.40.2"
+240p/index.m3u8
+#EXT-X-STREAM-INF:BANDWIDTH=1400000,RESOLUTION=854x480,CODECS="avc1.4d401f,mp4a.40.2"
+480p/index.m3u8
+#EXT-X-STREAM-INF:BANDWIDTH=2800000,RESOLUTION=1280x720,CODECS="avc1.4d401f,mp4a.40.2"
+720p/index.m3u8
+#EXT-X-STREAM-INF:BANDWIDTH=5000000,RESOLUTION=1920x1080,CODECS="avc1.640028,mp4a.40.2"
+1080p/index.m3u8
+```
+
+```text title="720p/index.m3u8"
+#EXTM3U
+#EXT-X-TARGETDURATION:4
+#EXTINF:4.0,
+seg_00001.m4s
+#EXTINF:4.0,
+seg_00002.m4s
+…
+```
+
+HLS (de Apple) y DASH (estándar MPEG) hacen lo mismo con formatos de manifiesto distintos; con CMAF, ambos pueden compartir los mismos segmentos, así que no duplicas el almacenamiento.
+
+**¿Cómo decide la calidad?** Hay dos familias de algoritmos (*ABR*, *adaptive bitrate*), y el simulador te deja compararlas:
+
+- **Por throughput**: estima el ancho de banda con los últimos segmentos descargados y elige la calidad más alta que cabe con margen. Reacciona rápido, pero las estimaciones son ruidosas: una caída súbita lo agarra con un segmento grande a medio descargar.
+- **Por buffer**: elige la calidad según cuántos segundos de video tiene ya descargados. Con el buffer casi vacío, la más baja; con el buffer lleno, la más alta. Netflix publicó en SIGCOMM 2014 un estudio en producción de este enfoque (BBA), que redujo los congelamientos frente a su algoritmo anterior basado en throughput. Los reproductores modernos combinan ambas señales.
+
+<AdaptiveBitrate />
+
+Prueba la red **Túnel** con cada algoritmo. "Siempre 1080p" se congela en cuanto la red baja; "Por throughput" reacciona tarde a la caída; "Por buffer" usa el colchón acumulado para atravesar el túnel sin congelarse. Ahora prueba **Wi-Fi inestable**: el algoritmo por buffer cambia mucho de calidad. Las oscilaciones también molestan al usuario, y por eso los algoritmos reales agregan histéresis.
+
+**El largo del segmento es un trade-off.** Apple recomienda en su especificación para HLS segmentos de 6 segundos. Segmentos más cortos arrancan antes y se adaptan más rápido, pero generan más peticiones, más entradas de manifiesto y comprimen algo peor (cada segmento empieza con un fotograma clave, que es caro). Para video bajo demanda, entre 2 y 6 segundos es lo habitual.
+
+<Quiz
+  question="El reproductor arranca un video nuevo. ¿Por qué suele pedir los primeros segmentos en una calidad baja aunque la conexión sea buena?"
+  options={[
+    { text: 'Porque el CDN todavía no tiene las calidades altas en caché.', why: 'Puede ser cierto para un video poco visto, pero no es la razón general.' },
+    { text: 'Porque todavía no sabe cuál es el ancho de banda real ni tiene buffer, y lo prioritario es arrancar rápido y no congelarse.', correct: true, why: 'Un segmento pequeño llega antes, la reproducción empieza antes, y mientras tanto el reproductor mide la red y llena el buffer para subir de calidad con seguridad.' },
+    { text: 'Porque los manifiestos HLS obligan a empezar por la primera calidad de la lista.', why: 'El manifiesto solo lista opciones; la elección es del algoritmo del reproductor.' },
+  ]}
+/>
+
+### 3. El CDN y la cola larga
+
+Con unos 100 Tbps de salida, el origen no puede servir video: lo sirve el CDN. Pero el catálogo de YouTube tiene una **cola larguísima**: pocos videos concentran la mayoría de las vistas, y una cantidad enorme de videos se ve muy de vez en cuando.
+
+- **La cabeza** (videos populares) vive en los PoPs y, todavía más cerca, en **cachés dentro de los proveedores de internet**. Un video viral se sirve casi entero desde ahí.
+- **La cola** no cabe en el borde. Se sirve desde cachés regionales (una capa intermedia que protege al origen) o desde el origen.
+
+Netflix es el contraejemplo útil. Con su red **Open Connect**, instala servidores dentro de los proveedores y, como su catálogo es acotado y predecible, los **llena por adelantado** en horas de poco tráfico. YouTube no puede predecir qué se va a ver entre cientos de millones de videos, así que su caché funciona sobre todo **por demanda** (se llena cuando alguien pide el segmento). Si te preguntan "¿por qué no precargar todo en el borde?", esa es la respuesta: el catálogo no cabe, y la mayoría no se va a pedir nunca en ese PoP.
+
+Otros detalles de la entrega:
+
+- **URLs firmadas con expiración** para videos privados o no listados: el CDN valida la firma sin consultar al origen.
+- **Enrutamiento** al caché más cercano y sano por DNS o anycast.
+- **Previsualizaciones al arrastrar la barra**: una imagen con una grilla de miniaturas (sprite) por cada tramo del video, descargada aparte.
+
+### 4. Contar vistas sin una fila caliente
+
+La versión ingenua (`UPDATE videos SET views = views + 1`) funciona hasta que un video recibe miles de vistas por segundo. Entonces todas las escrituras compiten por la misma fila, con bloqueos y replicación, y el contador se vuelve el cuello de botella de la base de metadatos.
+
+El diseño correcto separa **registrar** de **contar**:
+
+1. El reproductor emite eventos de progreso a un endpoint barato que los publica en Kafka.
+2. Un job de streaming **valida**: ¿se vio el tiempo mínimo para contar como vista?, ¿es el mismo usuario o sesión recontando?, ¿parece un bot? Una vista es una regla de negocio, no una petición HTTP.
+3. **Agrega** por video y ventana de tiempo (por ejemplo, un minuto) y escribe **un incremento por video por minuto**, no uno por vista.
+4. El número que se muestra viene de un caché con TTL: es **eventualmente consistente**, y a nadie le importa si dice 1.204.331 o 1.204.390.
+
+Los pasos 2 y 3 caben en pocas líneas. Así se vería el corazón del consumidor (en producción lo haría un job de Flink o Kafka Streams, con el estado en su almacén y ventanas de tiempo):
+
+```java title="Java"
+record WatchEvent(String videoId, String sessionId, int watchedSeconds, long tsMillis) {}
+record Bucket(String videoId, long minute) {}
+
+/** Valida y agrega vistas; escribe un incremento por video y minuto, no uno por vista. */
+class ViewAggregator {
+    private static final int MIN_SECONDS = 30;                   // supuesto: regla de negocio
+    private final Set<String> counted = new HashSet<>();          // video|sesión ya contados (con TTL en producción)
+    private final Map<Bucket, Long> pending = new HashMap<>();
+
+    void onEvent(WatchEvent e) {
+        if (e.watchedSeconds() < MIN_SECONDS) return;              // todavía no es una vista
+        if (!counted.add(e.videoId() + "|" + e.sessionId())) return; // misma sesión: no recontar
+        pending.merge(new Bucket(e.videoId(), e.tsMillis() / 60_000), 1L, Long::sum);
+    }
+
+    /** Cada minuto: un UPDATE por video, sin pelear por la misma fila miles de veces. */
+    void flush(CounterStore store) {
+        pending.forEach((b, n) -> store.increment(b.videoId(), b.minute(), n));
+        pending.clear();
+    }
+}
+```
+
+Un `record` como clave del `HashMap` funciona porque genera `equals` y `hashCode` a partir de sus campos; con una clase común sin esos métodos, cada `Bucket` sería una clave distinta y el conteo nunca se agruparía.
+
+Si necesitas contadores de alta escritura sin pipeline, la alternativa es el **contador particionado**: N sub-contadores por video (`views:v_9fK2:0..15`), cada vista incrementa uno al azar y la lectura los suma.
+
+<Sidenote>Durante años, YouTube mostraba el famoso "301 vistas" congelado en videos nuevos que crecían rápido: el contador público se detenía mientras se verificaba que las vistas fueran legítimas. Es un buen ejemplo de un número "en vivo" aproximado separado de un número "contable" verificado.</Sidenote>
+
+Para métricas que afectan dinero (pago a creadores, anunciantes), se suele combinar un conteo en streaming, rápido y aproximado, con una **reconciliación por lotes** sobre el log completo, lenta y exacta.
+
+## Cuellos de botella y trade-offs
+
+| Tensión | Opciones |
+|---|---|
+| Costo de cómputo vs ancho de banda | Codecs eficientes ahorran salida pero cuestan más al codificar: aplícalos según popularidad |
+| Rapidez de publicación vs calidad completa | Publica en calidades bajas primero; 4K y AV1 después |
+| Almacenamiento vs re-cómputo | Guarda siempre el original; las versiones de videos que nadie mira podrían moverse a capas frías o regenerarse bajo demanda |
+| Segmentos cortos vs eficiencia | 2 s adaptan rápido; 6 s comprimen mejor y hacen menos peticiones |
+| Exactitud vs escala en vistas | Streaming aproximado para mostrar, lotes exactos para pagar |
+| Picos de subidas | Colas con prioridad y cómputo interrumpible; el DAG absorbe atrasos sin perder trabajo |
+
+## Qué espera el entrevistador
+
+<Callout type="interview" title="Por nivel">
+
+**Mid-level.** Subida a almacenamiento de objetos, cola de transcodificación asíncrona, varias resoluciones, CDN para servir, base de metadatos. Saber qué es HLS a grandes rasgos.
+
+**Senior.** Subida reanudable, DAG de transcodificación con fragmentos en paralelo e idempotencia, streaming adaptativo con manifiestos y segmentos, cómo decide el reproductor, el trade-off del largo del segmento, conteo de vistas por agregación, estimaciones que muestren que la salida domina.
+
+**Staff.** Economía del sistema (codificación vs salida, codecs según popularidad, per-title encoding), cachés en proveedores y la cola larga, durabilidad de originales y estrategia de re-codificación, priorización y cómputo interrumpible, separación entre métricas aproximadas y contables, derechos de autor y moderación en el pipeline.
+
+</Callout>
+
+<Takeaways>
+
+- YouTube son dos sistemas: una **fábrica** de transcodificación y una **red de entrega**. Cada hora subida se mira más de mil veces: optimiza la entrega.
+- La transcodificación es un **DAG**: dividir en fragmentos alineados a fotogramas clave, codificar en paralelo, empaquetar. Tareas idempotentes y con prioridad.
+- **Sé selectivo**: H.264 para todos, codecs caros solo para lo popular; escalera por título, no fija.
+- **HLS/DASH**: manifiesto + segmentos; el reproductor elige la calidad de cada segmento con throughput y buffer. Arrancar bajo, subir con seguridad.
+- La salida se sirve desde el **CDN y cachés en los proveedores**; la cola larga se trae bajo demanda.
+- Las vistas se **registran** como eventos y se **cuentan** por agregación: nunca un `UPDATE` por vista.
+
+</Takeaways>
+
+## Fuentes y lecturas
+
+- Alex Xu, *System Design Interview*, vol. 1, cap. 14: [Design YouTube](https://bytebytego.com/courses/system-design-interview/design-youtube).
+- Hello Interview, [Design YouTube](https://www.hellointerview.com/learn/system-design/problem-breakdowns/youtube) y [YouTube Top K](https://www.hellointerview.com/learn/system-design/problem-breakdowns/top-k).
+- Apple, [HLS Authoring Specification for Apple Devices](https://developer.apple.com/documentation/http-live-streaming/hls-authoring-specification-for-apple-devices) y [RFC 8216 – HTTP Live Streaming](https://datatracker.ietf.org/doc/html/rfc8216).
+- Te-Yuan Huang y otros, [A Buffer-Based Approach to Rate Adaptation: Evidence from a Large Video Streaming Service](https://yuba.stanford.edu/~nickm/papers/sigcomm2014-video.pdf), SIGCOMM 2014.
+- Netflix Technology Blog, [Per-Title Encode Optimization](https://netflixtechblog.com/per-title-encode-optimization-7e99442b62a2) (2015).
+- Google, [Warehouse-Scale Video Acceleration: Co-design and Deployment in the Wild](https://research.google/pubs/warehouse-scale-video-acceleration-co-design-and-deployment-in-the-wild/), ASPLOS 2021.
+- Vitess, [History](https://vitess.io/docs/overview/history/).
+- Netflix, [Open Connect](https://openconnect.netflix.com/en/).
+- Google Developers, [YouTube Data API: Resumable uploads](https://developers.google.com/youtube/v3/guides/using_resumable_upload_protocol).
+- YouTube Official Blog, [You know what's cool? A billion hours](https://blog.youtube/news-and-events/you-know-whats-cool-billion-hours/) (2017).

@@ -1,0 +1,920 @@
+import { UmlDiagram } from '../../components/widgets/patrones/UmlDiagram'
+import { DiContainer } from '../../components/widgets/patrones/DiContainer'
+import { ResultRailway } from '../../components/widgets/patrones/ResultRailway'
+
+Los 23 patrones del GoF describen cómo colaboran unos pocos objetos. Pero cuando abres el código de una aplicación de negocio real (un checkout, un backoffice, una API de envíos) los patrones que más vas a ver son otros: quién crea los servicios y les pasa sus dependencias, dónde vive el SQL, cómo se guarda todo junto o nada, cómo se expresan las reglas de negocio y cómo viajan los errores esperados.
+
+Estos son los **patrones de aplicación**. Muchos vienen de *Patterns of Enterprise Application Architecture* (Fowler, 2002) y de *Domain-Driven Design* (Evans, 2003); otros, como `Result`, llegan de la programación funcional. Todos atacan el mismo enemigo: lógica de negocio enredada con infraestructura, imposible de probar sin levantar una base de datos.
+
+Este tema es la vista de código. El marco arquitectónico (puertos, adaptadores, agregados) está en [Hexagonal](/arquitectura/hexagonal) y [DDD táctico](/arquitectura/ddd-tactico); aquí verás cómo se escriben las piezas por dentro y cuándo sobran.
+
+## Inyección de dependencias
+
+**Intención:** que un objeto reciba desde afuera las piezas que necesita, en lugar de crearlas o buscarlas él mismo.
+
+### El problema
+
+Mira este servicio de checkout. Funciona, pero tiene un secreto: para usarlo necesitas Stripe de verdad, una base de datos de verdad y las variables de entorno correctas.
+
+```ts title="checkout.ts (antes)" {3-4}
+class CheckoutService {
+  async checkout(cart: Cart, cardToken: string) {
+    const stripe = new Stripe(process.env.STRIPE_KEY!) // dependencia escondida
+    const db = new Pool({ connectionString: process.env.DATABASE_URL })
+    const order = Order.fromCart(cart)
+    await stripe.charges.create({ amount: order.total.cents, source: cardToken })
+    await db.query('INSERT INTO orders ...', [order.id, order.total.cents])
+    return order
+  }
+}
+```
+
+Tres olores: la firma miente (no dice de qué depende), no puedes probarlo sin red, y cambiar de Stripe a otro proveedor obliga a tocar la lógica de negocio.
+
+### La solución
+
+Declara las dependencias como **interfaces** en el constructor y deja que otro las arme. A eso se le llama *constructor injection*, y es la forma por defecto.
+
+<CodeTabs>
+
+```ts title="TypeScript"
+interface PaymentGateway {
+  charge(amount: Money, cardToken: string): Promise<ChargeId>
+}
+interface OrderRepository {
+  add(order: Order): Promise<void>
+}
+
+class CheckoutService {
+  constructor(
+    private readonly payments: PaymentGateway,
+    private readonly orders: OrderRepository,
+  ) {}
+
+  async checkout(cart: Cart, cardToken: string): Promise<Order> {
+    const order = Order.fromCart(cart)
+    await this.payments.charge(order.total, cardToken)
+    await this.orders.add(order)
+    return order
+  }
+}
+
+// Composition root: el ÚNICO lugar que conoce las clases concretas.
+const checkout = new CheckoutService(
+  new StripeGateway(new Stripe(env.STRIPE_KEY)),
+  new PostgresOrderRepository(pool),
+)
+
+// En un test, armas el mismo servicio con dobles:
+const underTest = new CheckoutService(new FakeGateway(), new InMemoryOrderRepository())
+```
+
+```python title="Python"
+from typing import Protocol
+
+class PaymentGateway(Protocol):
+    def charge(self, amount: Money, card_token: str) -> ChargeId: ...
+
+class OrderRepository(Protocol):
+    def add(self, order: Order) -> None: ...
+
+class CheckoutService:
+    def __init__(self, payments: PaymentGateway, orders: OrderRepository) -> None:
+        self._payments = payments
+        self._orders = orders
+
+    def checkout(self, cart: Cart, card_token: str) -> Order:
+        order = Order.from_cart(cart)
+        self._payments.charge(order.total, card_token)
+        self._orders.add(order)
+        return order
+
+# main.py: el composition root
+checkout = CheckoutService(StripeGateway(stripe_client), SqlOrderRepository(session))
+
+# test: Protocol es tipado estructural, cualquier objeto con charge() sirve
+service = CheckoutService(FakeGateway(), InMemoryOrderRepository())
+```
+
+```java title="Java (Spring)"
+public interface PaymentGateway { ChargeId charge(Money amount, String cardToken); }
+
+@Service
+public class CheckoutService {
+    private final PaymentGateway payments;
+    private final OrderRepository orders;
+
+    // Spring ve un único constructor y lo usa para inyectar: no hace falta @Autowired
+    public CheckoutService(PaymentGateway payments, OrderRepository orders) {
+        this.payments = payments;
+        this.orders = orders;
+    }
+
+    public Order checkout(Cart cart, String cardToken) {
+        Order order = Order.fromCart(cart);
+        payments.charge(order.total(), cardToken);
+        orders.add(order);
+        return order;
+    }
+}
+```
+
+</CodeTabs>
+
+<UmlDiagram
+  caption="Inyección de dependencias: el servicio solo conoce interfaces; el composition root elige las implementaciones."
+  classes={[
+    { id: 'root', name: 'CompositionRoot', kind: 'note', methods: ['main()'], x: 2, y: 0, desc: 'El punto de arranque (main, el módulo de NestJS, Program.cs). Es el único lugar que hace new de clases concretas o configura el contenedor.' },
+    { id: 'svc', name: 'CheckoutService', fields: ['- payments', '- orders'], methods: ['checkout(cart, token)'], x: 1, y: 0, desc: 'Lógica de negocio pura. Recibe sus dependencias por constructor y no sabe si habla con Stripe o con un fake.' },
+    { id: 'pg', name: 'PaymentGateway', kind: 'interface', methods: ['charge(amount, token)'], x: 0.5, y: 1.3, desc: 'El puerto que define el servicio. Es una abstracción del dominio, no del proveedor.' },
+    { id: 'repo', name: 'OrderRepository', kind: 'interface', methods: ['add(order)'], x: 1.5, y: 1.3, desc: 'Otro puerto: guardar pedidos sin decir cómo.' },
+    { id: 'stripe', name: 'StripeGateway', methods: ['charge(amount, token)'], x: 0, y: 2.5, desc: 'Adaptador de producción: traduce charge() a la API de Stripe.' },
+    { id: 'fake', name: 'FakeGateway', methods: ['charge(amount, token)'], x: 1, y: 2.5, tone: 'muted', desc: 'Doble para pruebas: guarda los cobros en una lista para poder verificarlos.' },
+    { id: 'pgrepo', name: 'PostgresOrderRepo', methods: ['add(order)'], x: 2, y: 2.5, desc: 'Adaptador de producción para el repositorio.' },
+  ]}
+  relations={[
+    { from: 'svc', to: 'pg', kind: 'depends' },
+    { from: 'svc', to: 'repo', kind: 'depends' },
+    { from: 'stripe', to: 'pg', kind: 'implements' },
+    { from: 'fake', to: 'pg', kind: 'implements' },
+    { from: 'pgrepo', to: 'repo', kind: 'implements' },
+    { from: 'root', to: 'svc', kind: 'uses', label: 'crea' },
+  ]}
+/>
+
+Fíjate en la dirección de las flechas: `CheckoutService` depende de abstracciones, y los adaptadores concretos también dependen de esas abstracciones. Eso es la D de SOLID (inversión de dependencias, ver [Introducción](/patrones/introduccion)); la inyección es la técnica mecánica que la hace posible.
+
+### Contenedores IoC
+
+En una app pequeña puedes armar el grafo a mano en `main`. Mark Seemann llama a esto *Pure DI* y lo recomienda más de lo que imaginas: es explícito, el compilador lo verifica y no hay magia. Cuando el grafo crece a cientos de clases, un **contenedor IoC** (*Inversion of Control*) registra "para esta interfaz, usa esta clase" y resuelve el árbol por ti.
+
+<CodeTabs>
+
+```ts title="NestJS"
+// Un token porque las interfaces de TypeScript no existen en runtime
+export const PAYMENT_GATEWAY = Symbol('PaymentGateway')
+
+@Module({
+  providers: [
+    CheckoutService,
+    { provide: PAYMENT_GATEWAY, useClass: process.env.NODE_ENV === 'test' ? FakeGateway : StripeGateway },
+    { provide: ORDER_REPOSITORY, useClass: PostgresOrderRepository, scope: Scope.REQUEST },
+  ],
+})
+export class CheckoutModule {}
+
+@Injectable()
+export class CheckoutService {
+  constructor(
+    @Inject(PAYMENT_GATEWAY) private readonly payments: PaymentGateway,
+    @Inject(ORDER_REPOSITORY) private readonly orders: OrderRepository,
+  ) {}
+}
+```
+
+```csharp title="ASP.NET Core"
+var builder = WebApplication.CreateBuilder(args);
+
+builder.Services.AddSingleton<IPaymentGateway, StripeGateway>();   // una para toda la app
+builder.Services.AddScoped<IOrderRepository, EfOrderRepository>(); // una por petición HTTP
+builder.Services.AddDbContext<ShopDbContext>();                    // EF Core lo registra como scoped
+builder.Services.AddTransient<CheckoutService>();                  // una nueva cada vez
+
+var app = builder.Build();
+```
+
+</CodeTabs>
+
+Spring (`@Service`, `@Bean`), InversifyJS en Node, `dependency-injector` o el `Depends` de FastAPI en Python resuelven lo mismo. El contenedor es una herramienta del composition root; tu código de negocio no debería saber que existe.
+
+### Ciclos de vida y la dependencia cautiva
+
+Cada registro tiene un ciclo de vida (*lifetime*): **singleton** (una instancia para todo el proceso), **scoped** (una por petición o unidad de trabajo) y **transient** (una nueva cada vez que alguien la pide). Elegir mal produce uno de los bugs más traicioneros: la **dependencia cautiva**, un singleton que guarda una referencia a algo scoped y lo mantiene vivo para siempre, con la conexión y el estado de la primera petición.
+
+<DiContainer />
+
+La documentación de .NET lo dice sin rodeos: no resuelvas un servicio scoped desde un singleton, porque se comporta como singleton y arrastra estado incorrecto a las peticiones siguientes. Por eso ASP.NET Core valida los ámbitos en desarrollo y lanza una excepción.<Sidenote>Si un singleton de verdad necesita algo scoped (un job en segundo plano que usa el `DbContext`), la salida correcta es crear un ámbito explícito con `IServiceScopeFactory` en cada ejecución.</Sidenote>
+
+### Service Locator: el primo tóxico
+
+```ts title="checkout.ts (service locator)"
+class CheckoutService {
+  async checkout(cart: Cart, token: string) {
+    const payments = Container.get<PaymentGateway>('PaymentGateway') // ¿de qué depende esta clase?
+    const orders = Container.get<OrderRepository>('OrderRepository') // hay que leer todo el cuerpo
+    // ...
+  }
+}
+```
+
+Parece inyección, pero es lo contrario: la clase sigue *buscando* sus dependencias, solo que en un registro global. Seemann lo llamó antipatrón en 2010 porque esconde las dependencias: si falta un registro, te enteras en runtime y no al compilar, y no puedes saber qué rompe un cambio sin leer cada método.
+
+**Dónde lo ves:** Spring, NestJS, Angular, ASP.NET Core, Laravel; el `Context` de React es un mecanismo de inyección para el árbol de componentes. **Cuándo no:** scripts y funciones pequeñas donde pasar parámetros basta; no envuelvas en interfaces cosas que nunca vas a sustituir (un `Clock` sí merece interfaz porque los tests necesitan controlar el tiempo; un formateador de fechas puro, no). **Relacionados:** Factory (para crear objetos con datos de runtime), Strategy (las implementaciones intercambiables suelen ser estrategias), Singleton (el contenedor reemplaza al patrón Singleton, ver [Creacionales](/patrones/creacionales)).
+
+<Quiz
+  question="Registras CheckoutService como singleton. Depende de OrderRepository, registrado como scoped, que usa la conexión de base de datos de cada petición. ¿Qué pasa en producción?"
+  options={[
+    { text: 'Nada grave: el contenedor crea un OrderRepository nuevo en cada petición igual.', why: 'El contenedor solo resuelve dependencias al construir el objeto. El singleton se construye una vez, así que su repositorio se resuelve una vez.' },
+    { text: 'El singleton se queda con el repositorio (y su conexión) de la primera petición y lo reutiliza en todas las demás.', correct: true, why: 'Es una dependencia cautiva: el objeto de vida corta queda atrapado dentro del de vida larga. Verás conexiones cerradas, datos de otra petición o problemas de concurrencia.' },
+    { text: 'El contenedor convierte automáticamente el repositorio en transient.', why: 'Ningún contenedor común hace eso. Como mucho, en desarrollo te avisa con una excepción (ASP.NET Core) para que corrijas el registro.' },
+    { text: 'Falla al compilar porque los lifetimes son incompatibles.', why: 'Los lifetimes son configuración de runtime; el compilador no los ve. Por eso el bug es traicionero.' },
+  ]}
+/>
+
+## Repository
+
+**Intención:** dar al dominio una interfaz parecida a una colección en memoria para obtener y guardar agregados, escondiendo cómo se persisten.
+
+### El problema
+
+El SQL aparece en el controlador, en el servicio, en el job nocturno. La misma consulta "pedidos pendientes de más de 3 días" está escrita tres veces, con diferencias sutiles. Y para probar la regla que cancela pedidos viejos necesitas una base de datos poblada.
+
+### La solución
+
+Fowler lo describe en PoEAA como un mediador entre el dominio y el mapeo de datos que actúa como una colección de objetos en memoria. Evans lo ata a los agregados: un repositorio por raíz de agregado, con métodos que hablan el idioma del negocio.
+
+<CodeTabs>
+
+```ts title="TypeScript"
+export interface OrderRepository {
+  byId(id: OrderId): Promise<Order | null>
+  add(order: Order): Promise<void>
+  pendingOlderThan(cutoff: Date): Promise<Order[]>
+}
+
+export class PostgresOrderRepository implements OrderRepository {
+  constructor(private readonly db: Pool) {}
+
+  async byId(id: OrderId) {
+    const { rows } = await this.db.query('SELECT * FROM orders WHERE id = $1', [id])
+    return rows[0] ? toDomain(rows[0]) : null
+  }
+
+  async add(order: Order) {
+    await this.db.query(
+      'INSERT INTO orders (id, status, total_cents, created_at) VALUES ($1, $2, $3, $4)',
+      [order.id, order.status, order.total.cents, order.createdAt],
+    )
+  }
+
+  async pendingOlderThan(cutoff: Date) {
+    const { rows } = await this.db.query(
+      "SELECT * FROM orders WHERE status = 'pending' AND created_at < $1",
+      [cutoff],
+    )
+    return rows.map(toDomain)
+  }
+}
+
+// Para pruebas: misma interfaz, cero infraestructura
+export class InMemoryOrderRepository implements OrderRepository {
+  private readonly orders = new Map<OrderId, Order>()
+  async byId(id: OrderId) { return this.orders.get(id) ?? null }
+  async add(order: Order) { this.orders.set(order.id, order) }
+  async pendingOlderThan(cutoff: Date) {
+    return [...this.orders.values()].filter((o) => o.status === 'pending' && o.createdAt < cutoff)
+  }
+}
+```
+
+```python title="Python"
+import abc
+
+class OrderRepository(abc.ABC):
+    @abc.abstractmethod
+    def get(self, order_id: str) -> Order | None: ...
+
+    @abc.abstractmethod
+    def add(self, order: Order) -> None: ...
+
+    @abc.abstractmethod
+    def pending_older_than(self, cutoff: datetime) -> list[Order]: ...
+
+
+class SqlAlchemyOrderRepository(OrderRepository):
+    def __init__(self, session: Session) -> None:
+        self.session = session
+
+    def get(self, order_id: str) -> Order | None:
+        return self.session.get(Order, order_id)
+
+    def add(self, order: Order) -> None:
+        self.session.add(order)
+
+    def pending_older_than(self, cutoff: datetime) -> list[Order]:
+        stmt = select(Order).where(Order.status == "pending", Order.created_at < cutoff)
+        return list(self.session.scalars(stmt))
+
+
+class FakeOrderRepository(OrderRepository):
+    def __init__(self, orders: list[Order] | None = None) -> None:
+        self._orders = {o.id: o for o in orders or []}
+
+    def get(self, order_id: str) -> Order | None:
+        return self._orders.get(order_id)
+
+    def add(self, order: Order) -> None:
+        self._orders[order.id] = order
+
+    def pending_older_than(self, cutoff: datetime) -> list[Order]:
+        return [o for o in self._orders.values() if o.status == "pending" and o.created_at < cutoff]
+```
+
+</CodeTabs>
+
+<UmlDiagram
+  caption="Repository: el dominio depende de la interfaz; las implementaciones viven en infraestructura."
+  classes={[
+    { id: 'uc', name: 'CancelStaleOrders', methods: ['run(now)'], x: 0.5, y: 0, desc: 'Caso de uso: cancela pedidos pendientes viejos. Solo conoce la interfaz OrderRepository.' },
+    { id: 'repo', name: 'OrderRepository', kind: 'interface', methods: ['byId(id)', 'add(order)', 'pendingOlderThan(d)'], x: 0.5, y: 1.2, desc: 'Interfaz con forma de colección y nombres del dominio. No expone SQL ni el ORM.' },
+    { id: 'pg', name: 'PostgresOrderRepo', methods: ['…'], x: 0, y: 2.3, desc: 'Traduce entre filas y objetos del dominio.' },
+    { id: 'mem', name: 'InMemoryOrderRepo', methods: ['…'], x: 1, y: 2.3, tone: 'muted', desc: 'Un Map en memoria. Los tests del caso de uso corren en milisegundos.' },
+  ]}
+  relations={[
+    { from: 'uc', to: 'repo', kind: 'depends' },
+    { from: 'pg', to: 'repo', kind: 'implements' },
+    { from: 'mem', to: 'repo', kind: 'implements' },
+  ]}
+/>
+
+### Repository no es DAO (y no debe filtrar el ORM)
+
+Un **DAO** (*Data Access Object*) suele ser una fachada por tabla: `insert`, `update`, `findByColumn`. Un repositorio trabaja con **agregados del dominio** y expone intenciones (`pendingOlderThan`), no columnas. En la práctica la frontera es borrosa; lo importante es la pregunta: ¿esta interfaz habla el idioma del negocio o el de la base de datos?
+
+El error más común es la abstracción falsa: un repositorio que devuelve un `IQueryable` de pedidos (.NET) o acepta un `Prisma.OrderWhereInput`. Parece flexible, pero cada llamador termina armando consultas con la API del ORM, ya no puedes sustituirlo por uno en memoria y la consulta se ejecuta lejos de donde se definió. Si tu "repositorio" filtra el ORM, no estás abstrayendo nada: solo agregaste una capa.
+
+**Dónde lo ves:** Spring Data (`JpaRepository`), los repositorios de Doctrine y TypeORM, el capítulo 2 de *Cosmic Python*. **Cuándo no:** apps CRUD donde el modelo es la tabla; ahí un repositorio por entidad que reenvía a un ORM ya capaz es ceremonia. Desconfía también del "repositorio genérico" (una clase `Repository` parametrizada por entidad) con `getAll()`: rara vez coincide con lo que el dominio necesita. **Relacionados:** Unit of Work, Specification, Data Mapper.
+
+## Unit of Work
+
+**Intención:** agrupar los cambios de una operación de negocio y confirmarlos (o descartarlos) juntos, como una sola transacción.
+
+### El problema
+
+Un pedido reserva stock y crea la orden. Si guardas el stock, y justo después falla la inserción de la orden, te queda inventario reservado para un pedido que no existe. Además, si cada repositorio abre su propia conexión, ni siquiera comparten transacción.
+
+### La solución
+
+Fowler lo define en PoEAA como un objeto que mantiene la lista de objetos afectados por una transacción de negocio y coordina la escritura de los cambios. La noticia práctica: **tu ORM probablemente ya lo implementa**. La `Session` de SQLAlchemy y de Hibernate, y el `DbContext` de Entity Framework, rastrean objetos nuevos, modificados y eliminados, y los escriben en un solo `commit()` / `SaveChanges()`.
+
+Lo que tú agregas es una frontera explícita en el caso de uso:
+
+<CodeTabs>
+
+```python title="Python"
+class SqlAlchemyUnitOfWork:
+    def __init__(self, session_factory=DEFAULT_SESSION_FACTORY):
+        self.session_factory = session_factory
+
+    def __enter__(self):
+        self.session = self.session_factory()
+        self.orders = SqlAlchemyOrderRepository(self.session)
+        self.stock = SqlAlchemyStockRepository(self.session)
+        return self
+
+    def __exit__(self, *exc):
+        self.rollback()          # si nadie llamó commit(), no se guarda nada
+        self.session.close()
+
+    def commit(self):
+        self.session.commit()
+
+    def rollback(self):
+        self.session.rollback()
+
+
+def place_order(cmd: PlaceOrder, uow: SqlAlchemyUnitOfWork) -> str:
+    with uow:
+        stock = uow.stock.get(cmd.sku)
+        stock.reserve(cmd.qty)                 # regla de negocio en el dominio
+        order = Order.create(cmd.customer_id, cmd.sku, cmd.qty)
+        uow.orders.add(order)
+        uow.commit()                           # todo o nada
+        return order.id
+```
+
+```ts title="TypeScript"
+export interface UnitOfWork {
+  orders: OrderRepository
+  stock: StockRepository
+}
+
+export async function withUnitOfWork<T>(pool: Pool, work: (uow: UnitOfWork) => Promise<T>): Promise<T> {
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    const result = await work({
+      orders: new PgOrderRepository(client), // los dos repos comparten conexión y transacción
+      stock: new PgStockRepository(client),
+    })
+    await client.query('COMMIT')
+    return result
+  } catch (err) {
+    await client.query('ROLLBACK')
+    throw err
+  } finally {
+    client.release()
+  }
+}
+
+// En el caso de uso
+const orderId = await withUnitOfWork(pool, async (uow) => {
+  const stock = await uow.stock.bySku(cmd.sku)
+  stock.reserve(cmd.qty)
+  await uow.stock.save(stock)
+  const order = Order.create(cmd)
+  await uow.orders.add(order)
+  return order.id
+})
+```
+
+</CodeTabs>
+
+La versión de TypeScript es la variante mínima: una transacción compartida, sin rastreo de cambios. La de Python sigue el capítulo 6 de *Cosmic Python*, donde el `with` deja clarísimo dónde empieza y termina la operación atómica.
+
+**Cuándo no:** si tu framework ya abre una transacción por petición (el `DbContext` scoped de ASP.NET Core, `@Transactional` en Spring), no envuelvas otra encima sin necesidad. Y una Unit of Work **no cruza servicios**: si la operación toca dos bases de datos o una base y un broker, necesitas otra herramienta ([Sagas y outbox](/arquitectura/sagas-y-outbox)). **Relacionados:** Repository, Identity Map, Transaction Script.
+
+## Specification
+
+**Intención:** encapsular una regla de negocio como un objeto que responde "¿este candidato la cumple?" y que se puede combinar con otras reglas.
+
+### El problema
+
+El repositorio crece con métodos como `findVipCustomersWithRecentOrdersNotBlocked()`. La misma regla ("cliente elegible para envío gratis") está escrita en un `if` del checkout y, de nuevo, en un `WHERE` del reporte de marketing. Cuando cambia, alguien olvida una de las dos.
+
+### La solución
+
+Evans y Fowler describen la especificación en su artículo *Specifications*: un predicado con nombre, combinable con `and`, `or`, `not`. El mismo objeto puede validar un objeto en memoria y, si lo diseñas para eso, traducirse a una consulta.
+
+<CodeTabs>
+
+```ts title="TypeScript"
+type Sql = { where: string; params: unknown[] }
+
+abstract class Spec<T> {
+  abstract isSatisfiedBy(candidate: T): boolean
+  abstract toSql(): Sql
+
+  and(other: Spec<T>): Spec<T> { return new And(this, other) }
+  not(): Spec<T> { return new Not(this) }
+}
+
+class And<T> extends Spec<T> {
+  constructor(private readonly a: Spec<T>, private readonly b: Spec<T>) { super() }
+  isSatisfiedBy(c: T) { return this.a.isSatisfiedBy(c) && this.b.isSatisfiedBy(c) }
+  toSql() {
+    const x = this.a.toSql()
+    const y = this.b.toSql()
+    return { where: `(${x.where}) AND (${y.where})`, params: [...x.params, ...y.params] }
+  }
+}
+
+class Not<T> extends Spec<T> {
+  constructor(private readonly inner: Spec<T>) { super() }
+  isSatisfiedBy(c: T) { return !this.inner.isSatisfiedBy(c) }
+  toSql() {
+    const x = this.inner.toSql()
+    return { where: `NOT (${x.where})`, params: x.params }
+  }
+}
+
+class IsVip extends Spec<Customer> {
+  isSatisfiedBy(c: Customer) { return c.tier === 'vip' }
+  toSql() { return { where: 'tier = ?', params: ['vip'] } }
+}
+
+class OrderedWithin extends Spec<Customer> {
+  constructor(private readonly days: number, private readonly now = new Date()) { super() }
+  private cutoff() { return new Date(this.now.getTime() - this.days * 86_400_000) }
+  isSatisfiedBy(c: Customer) { return c.lastOrderAt !== null && c.lastOrderAt >= this.cutoff() }
+  toSql() { return { where: 'last_order_at >= ?', params: [this.cutoff()] } }
+}
+
+class IsBlocked extends Spec<Customer> {
+  isSatisfiedBy(c: Customer) { return c.blockedAt !== null }
+  toSql() { return { where: 'blocked_at IS NOT NULL', params: [] } }
+}
+
+// La regla tiene nombre y vive en un solo lugar
+export const freeShippingEligible = new IsVip().and(new OrderedWithin(90)).and(new IsBlocked().not())
+
+freeShippingEligible.isSatisfiedBy(customer)            // en el checkout
+customers.matching(freeShippingEligible)                // en el reporte, vía toSql()
+```
+
+```python title="Python"
+from dataclasses import dataclass
+from typing import Callable
+
+@dataclass(frozen=True)
+class Spec[T]:
+    test: Callable[[T], bool]
+    name: str
+
+    def __call__(self, candidate: T) -> bool:
+        return self.test(candidate)
+
+    def __and__(self, other: "Spec[T]") -> "Spec[T]":
+        return Spec(lambda c: self(c) and other(c), f"({self.name} y {other.name})")
+
+    def __or__(self, other: "Spec[T]") -> "Spec[T]":
+        return Spec(lambda c: self(c) or other(c), f"({self.name} o {other.name})")
+
+    def __invert__(self) -> "Spec[T]":
+        return Spec(lambda c: not self(c), f"no {self.name}")
+
+
+is_vip = Spec(lambda c: c.tier == "vip", "vip")
+is_blocked = Spec(lambda c: c.blocked_at is not None, "bloqueado")
+
+def ordered_within(days: int, now: datetime) -> Spec[Customer]:
+    cutoff = now - timedelta(days=days)
+    return Spec(lambda c: c.last_order_at is not None and c.last_order_at >= cutoff, f"compró en {days} días")
+
+free_shipping = is_vip & ordered_within(90, now) & ~is_blocked
+free_shipping(customer)        # True / False
+print(free_shipping.name)      # "((vip y compró en 90 días) y no bloqueado)"
+```
+
+</CodeTabs>
+
+En Python, los operadores `&`, `|` y `~` hacen que la composición se lea casi como la regla escrita por el negocio. Esta versión solo evalúa en memoria; para traducirla a SQL tendrías que guardar una expresión (por ejemplo, una condición de SQLAlchemy) además de la lambda.
+
+**Dónde lo ves:** `Specification` de Spring Data JPA, la librería Ardalis.Specification en .NET, los *query objects* en general. **Cuándo no:** si una regla aparece en un solo lugar, un método bien nombrado en la entidad (`customer.isEligibleForFreeShipping()`) es más simple. El costo real está en la traducción a consultas: mantener un mini lenguaje de consultas propio es trabajo de verdad. **Relacionados:** Composite (`And`/`Or` son composites), Interpreter, Repository.
+
+## Result en lugar de excepciones
+
+**Intención:** que una función que puede fallar de formas esperadas lo diga en su tipo de retorno, devolviendo `Ok(valor)` o `Err(error)`, en lugar de lanzar.
+
+### El problema
+
+```ts title="checkout.ts (antes)"
+async function placeOrder(input: unknown): Promise<Order> {
+  const order = validateOrder(input)   // lanza ValidationError
+  await reserveStock(order)            // lanza OutOfStockError
+  await chargeCard(order)              // lanza PaymentDeclinedError
+  return order
+}
+```
+
+La firma promete un `Order` y miente: hay tres maneras normales de que esto no devuelva un pedido, y ninguna aparece en el tipo. Quien llama tiene que leer la implementación (y la de cada función interna) para saber qué atrapar. Una tarjeta rechazada no es una catástrofe; es un resultado de negocio tan legítimo como el éxito.
+
+### La solución
+
+Scott Wlaschin popularizó la imagen de *Railway Oriented Programming*: cada paso es un cambio de vía. Mientras todo va bien, el valor viaja por la vía de éxito; al primer error, cambia a la vía de error y los pasos restantes se saltan solos.
+
+<ResultRailway />
+
+<CodeTabs>
+
+```ts title="TypeScript"
+type Result<T, E> = { ok: true; value: T } | { ok: false; error: E }
+const Ok = <T>(value: T): Result<T, never> => ({ ok: true, value })
+const Err = <E>(error: E): Result<never, E> => ({ ok: false, error })
+
+type CheckoutError =
+  | { type: 'Validation'; field: string }
+  | { type: 'OutOfStock'; sku: string }
+  | { type: 'PaymentDeclined'; code: string }
+
+async function placeOrder(input: unknown): Promise<Result<Order, CheckoutError>> {
+  const order = validateOrder(input)
+  if (!order.ok) return order
+  const reserved = await reserveStock(order.value)
+  if (!reserved.ok) return reserved
+  const charged = await chargeCard(order.value)
+  if (!charged.ok) return charged
+  return Ok(order.value)
+}
+
+// El llamador está obligado a mirar los casos; el switch es exhaustivo
+const result = await placeOrder(req.body)
+if (!result.ok) {
+  switch (result.error.type) {
+    case 'Validation':      return res.status(422).json(result.error)
+    case 'OutOfStock':      return res.status(409).json(result.error)
+    case 'PaymentDeclined': return res.status(402).json(result.error)
+  }
+}
+return res.status(201).json(result.value)
+```
+
+```python title="Python"
+from dataclasses import dataclass
+
+@dataclass(frozen=True)
+class Ok[T]:
+    value: T
+
+@dataclass(frozen=True)
+class Err[E]:
+    error: E
+
+type Result[T, E] = Ok[T] | Err[E]
+
+@dataclass(frozen=True)
+class OutOfStock:
+    sku: str
+
+@dataclass(frozen=True)
+class PaymentDeclined:
+    code: str
+
+def place_order(data: dict) -> Result[Order, ValidationError | OutOfStock | PaymentDeclined]:
+    validated = validate_order(data)
+    if isinstance(validated, Err):
+        return validated            # cambio a la vía de error
+    order = validated.value
+    if isinstance(r := reserve_stock(order), Err):
+        return r
+    if isinstance(r := charge_card(order), Err):
+        return r
+    return Ok(order)
+
+match place_order(payload):
+    case Ok(order):
+        return JSONResponse({"id": order.id}, status_code=201)
+    case Err(OutOfStock(sku)):
+        return JSONResponse({"error": f"sin stock: {sku}"}, status_code=409)
+    case Err(PaymentDeclined(code)):
+        return JSONResponse({"error": code}, status_code=402)
+    case Err(err):
+        return JSONResponse({"error": str(err)}, status_code=422)
+```
+
+```rust title="Rust"
+// En Rust, Result<T, E> es parte del lenguaje y `?` hace el cambio de vía
+fn place_order(input: OrderInput) -> Result<Order, CheckoutError> {
+    let order = validate(input)?;   // si es Err, retorna ese Err aquí mismo
+    reserve_stock(&order)?;
+    charge_card(&order)?;
+    Ok(order)
+}
+```
+
+</CodeTabs>
+
+Escribir `if (!x.ok) return x` en cada paso se vuelve tedioso; librerías como **neverthrow** en TypeScript dan `Result`, `ResultAsync` y métodos como `andThen`, `map`, `mapErr` y `match` para encadenar como en el widget. En Rust, Go (con su `value, err`), Kotlin y Swift, la idea ya es nativa.
+
+### Cuándo siguen siendo mejores las excepciones
+
+El propio Wlaschin escribió *Against Railway-Oriented Programming* para frenar el entusiasmo. Su criterio, resumido:
+
+- Si necesitas **stack trace** o saber dónde ocurrió, una excepción da más información.
+- Si el error es **inesperado** y el flujo no puede continuar (un bug, la base caída, memoria agotada), falla rápido con una excepción en lugar de pasear un `Result` por diez capas.
+- Si a nadie le importa **por qué** falló, un tipo opcional basta.
+- Si tu API la consumen otros equipos o lenguajes que no usan `Result`, respeta el idioma del ecosistema.
+
+La regla práctica: `Result` para **errores de dominio esperados** (validación, stock, pago rechazado); excepciones para lo **excepcional** y para la infraestructura que no puedes manejar en el lugar.
+
+<Quiz
+  question="¿Cuál de estos casos conviene modelar con Result en lugar de lanzar una excepción?"
+  options={[
+    { text: 'La pasarela de pago rechaza la tarjeta por fondos insuficientes.', correct: true, why: 'Es un resultado de negocio esperado y frecuente, y el llamador debe reaccionar (mostrar un mensaje, ofrecer otro medio). Tenerlo en el tipo obliga a manejarlo.' },
+    { text: 'Un índice fuera de rango por un bug en el cálculo de cuotas.', why: 'Es un bug: nadie puede recuperarse de forma razonable. Una excepción con stack trace te lleva directo al error.' },
+    { text: 'La base de datos no responde durante el arranque de la aplicación.', why: 'Es una falla de infraestructura inesperada: lo sano es fallar rápido y que el orquestador reinicie o alerte.' },
+    { text: 'Se agota la memoria del proceso.', why: 'Nada en tu lógica puede manejar esto; envolverlo en Result solo agrega ruido.' },
+  ]}
+/>
+
+## Middleware y pipeline
+
+**Intención:** construir el procesamiento de una petición como una cadena de pasos independientes, donde cada uno hace su parte y decide si pasa el control al siguiente.
+
+### El problema
+
+Cada handler empieza igual: medir el tiempo, verificar el token, aplicar rate limit, registrar el log, atrapar errores. Copias esas diez líneas en cuarenta endpoints y, cuando cambia la regla de autenticación, te falta uno.
+
+### La solución
+
+Cada preocupación transversal se convierte en una función `(ctx, next)`. El framework las compone: la petición entra por la primera capa, llega al handler en el centro y la respuesta vuelve atravesando las capas en orden inverso. Por eso se habla de la **cebolla**. Django lo describe con esa misma imagen en su documentación.
+
+<FlowDiagram
+  caption="La cebolla de middleware: cada capa ve la petición al entrar y la respuesta al salir. Cualquiera puede cortar la cadena."
+  nodes={[
+    { id: 'c', label: 'Cliente', kind: 'client', x: 0, y: 1, mx: 0, my: 0 },
+    { id: 'log', label: 'timing + log', kind: 'monitor', x: 1, y: 1, mx: 1, my: 0 },
+    { id: 'auth', label: 'auth', kind: 'auth', x: 2, y: 1, mx: 1, my: 1 },
+    { id: 'rl', label: 'rate limit', kind: 'limiter', x: 3, y: 1, mx: 1, my: 2 },
+    { id: 'h', label: 'handler', kind: 'service', x: 4, y: 1, mx: 0, my: 2, sub: 'POST /orders' },
+  ]}
+  edges={[
+    { from: 'c', to: 'log', bidir: true },
+    { from: 'log', to: 'auth', bidir: true },
+    { from: 'auth', to: 'rl', bidir: true },
+    { from: 'rl', to: 'h', bidir: true },
+  ]}
+  steps={[
+    { title: 'Entra la petición', body: 'timing anota la hora de inicio y llama a next(). Todavía no sabe cómo terminará.', active: ['c', 'log'], flow: ['c-log'] },
+    { title: 'Autenticación', body: 'auth valida el token. Si es inválido, responde 401 y NO llama a next(): las capas internas nunca se enteran.', active: ['auth'], flow: ['log-auth'] },
+    { title: 'Rate limit', body: 'Si el cliente excedió su cuota, responde 429. Si no, sigue.', active: ['rl'], flow: ['auth-rl'] },
+    { title: 'El handler', body: 'Solo lógica del endpoint: ya sabe quién es el usuario y que tiene cuota.', active: ['h'], flow: ['rl-h'] },
+    { title: 'La respuesta vuelve', body: <>Al regresar del <code>await next()</code>, timing calcula la duración y escribe el log. El orden de salida es el inverso al de entrada.</>, active: ['log', 'c'], flow: ['rl-h', 'auth-rl', 'log-auth', 'c-log'] },
+  ]}
+/>
+
+<CodeTabs>
+
+```ts title="TypeScript"
+type Ctx = { req: Request; res?: Response; user?: User }
+type Next = () => Promise<void>
+type Middleware = (ctx: Ctx, next: Next) => Promise<void>
+
+// El corazón de Koa en pocas líneas
+export function compose(middlewares: Middleware[]) {
+  return (ctx: Ctx): Promise<void> => {
+    const dispatch = (i: number): Promise<void> => {
+      const mw = middlewares[i]
+      return mw ? mw(ctx, () => dispatch(i + 1)) : Promise.resolve()
+    }
+    return dispatch(0)
+  }
+}
+
+const timing: Middleware = async (ctx, next) => {
+  const start = performance.now()
+  await next()                                              // baja por la cebolla…
+  console.log(ctx.req.url, `${(performance.now() - start).toFixed(1)} ms`) // …y vuelve
+}
+
+const auth: Middleware = async (ctx, next) => {
+  const user = await verifyToken(ctx.req.headers.get('authorization'))
+  if (!user) {
+    ctx.res = new Response('No autorizado', { status: 401 })
+    return                                                  // corta la cadena
+  }
+  ctx.user = user
+  await next()
+}
+
+const handle = compose([timing, auth, rateLimit, createOrderHandler])
+```
+
+```python title="Python (Django)"
+import time
+
+class TimingMiddleware:
+    def __init__(self, get_response):
+        self.get_response = get_response      # la siguiente capa de la cebolla
+
+    def __call__(self, request):
+        start = time.perf_counter()
+        response = self.get_response(request)  # baja hasta la vista…
+        elapsed_ms = (time.perf_counter() - start) * 1000
+        response["Server-Timing"] = f"app;dur={elapsed_ms:.1f}"   # …y vuelve
+        return response
+
+
+class ApiKeyMiddleware:
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        if request.path.startswith("/api/") and not is_valid(request.headers.get("X-Api-Key")):
+            return JsonResponse({"error": "api key inválida"}, status=401)  # no llama a get_response
+        return self.get_response(request)
+
+# settings.py: el orden de la lista ES el orden de la cebolla
+MIDDLEWARE = ["app.middleware.TimingMiddleware", "app.middleware.ApiKeyMiddleware", ...]
+```
+
+</CodeTabs>
+
+Mecánicamente, un middleware que puede cortar es una [Chain of Responsibility](/patrones/comportamiento-2), y uno que siempre llama a `next()` y agrega comportamiento antes y después es un [Decorator](/patrones/estructurales) del handler. El término *pipeline* se usa también para *pipes and filters* en procesamiento de datos (streams de Node, `|` en la terminal).
+
+**Dónde lo ves:** Express, Koa, Fastify (hooks), ASP.NET Core (`app.Use...`), Django, Rack en Ruby, los interceptores de NestJS y Axios. **Cuándo no:** para lógica que solo aplica a un endpoint (mételo en el handler) o cuando el orden se vuelve tan delicado que nadie sabe qué corre primero; documenta el orden y mantén la lista corta. **Relacionados:** Chain of Responsibility, Decorator, Pipes and Filters.
+
+## Null Object
+
+**Intención:** reemplazar la ausencia de un colaborador (`null`) por un objeto que cumple la misma interfaz y no hace nada (o hace lo neutral).
+
+### El problema
+
+```ts title="pricing.ts (antes)"
+let total = cart.subtotal()
+if (customer.discount != null) total = customer.discount.apply(total)
+if (logger) logger.info('total calculado', { total })
+// …y el mismo if en el checkout, en el carrito, en el email de confirmación
+```
+
+### La solución
+
+<CodeTabs>
+
+```ts title="TypeScript"
+interface DiscountPolicy {
+  apply(total: Money): Money
+}
+
+class PercentageDiscount implements DiscountPolicy {
+  constructor(private readonly pct: number) {}
+  apply(total: Money) { return total.multiply(1 - this.pct / 100) }
+}
+
+class NoDiscount implements DiscountPolicy {
+  apply(total: Money) { return total }        // el elemento neutro
+}
+
+// El cliente siempre tiene una política; nunca null
+const policy: DiscountPolicy = customer.coupon ? new PercentageDiscount(customer.coupon.pct) : new NoDiscount()
+const total = policy.apply(cart.subtotal())
+```
+
+```python title="Python"
+import logging
+
+class Notifier(Protocol):
+    def send(self, user_id: str, message: str) -> None: ...
+
+class NullNotifier:
+    """Para clientes que desactivaron notificaciones."""
+    def send(self, user_id: str, message: str) -> None:
+        pass
+
+# La librería estándar trae su propio Null Object:
+# las librerías agregan un NullHandler para no imprimir nada si la app no configuró logging.
+logging.getLogger("mi_libreria").addHandler(logging.NullHandler())
+```
+
+</CodeTabs>
+
+**Dónde lo ves:** `logging.NullHandler` en Python, `io.Discard` en Go, `Collections.emptyList()` en Java, `/dev/null`. **Cuándo no:** cuando la ausencia **importa** y alguien debería reaccionar. Un `NullPaymentGateway` que "cobra" sin hacer nada en producción es un desastre silencioso. Si la ausencia es un caso de negocio, modélala con un opcional o con `Result`. **Relacionados:** Strategy (el Null Object suele ser la estrategia "no hacer nada"), Special Case de Fowler.
+
+## Todo junto: un caso de uso
+
+Estos patrones rara vez viven solos. Así se ve un caso de uso de checkout que los combina, al estilo de la [arquitectura hexagonal](/arquitectura/hexagonal):
+
+```ts title="application/place-order.ts"
+export class PlaceOrder {
+  constructor(                                   // inyección de dependencias
+    private readonly uow: UnitOfWorkFactory,     // unit of work
+    private readonly payments: PaymentGateway,   // puerto hacia afuera
+  ) {}
+
+  async execute(cmd: PlaceOrderCommand): Promise<Result<OrderId, CheckoutError>> {
+    const input = validateOrder(cmd)             // Result: errores esperados en el tipo
+    if (!input.ok) return input
+
+    return this.uow.run(async ({ stock, orders }) => {   // repositorios dentro de la UoW
+      const item = await stock.bySku(input.value.sku)
+      if (!inStock(input.value.qty).isSatisfiedBy(item)) {   // specification
+        return Err({ type: 'OutOfStock', sku: input.value.sku })
+      }
+      const charge = await this.payments.charge(input.value.total, cmd.cardToken)
+      if (!charge.ok) return charge              // todavía no se reservó nada
+      item.reserve(input.value.qty)
+      const order = Order.create(input.value, charge.value)
+      await orders.add(order)
+      return Ok(order.id)                        // la UoW confirma todo junto
+    })
+  }
+}
+```
+
+Un detalle honesto: cobrar dentro de la transacción mezcla una llamada externa con una transacción local. Si el `COMMIT` falla después del cobro, tienes dinero cobrado sin pedido. En producción eso se resuelve con idempotencia y compensaciones ([Sagas y outbox](/arquitectura/sagas-y-outbox)); la Unit of Work solo protege lo que vive en tu base de datos.
+
+El controlador HTTP, envuelto en su middleware de autenticación y logging, solo traduce la petición a `PlaceOrderCommand` y el `Result` a un código de estado. El composition root decide si `payments` es Stripe o un fake. Y el test del caso de uso corre en memoria, sin red ni base de datos.
+
+<Callout type="warn" title="No los apiles por reflejo">
+
+Cada patrón de esta página es una indirección más. En un CRUD interno con tres tablas, un controlador que llama al ORM directamente es una decisión razonable. Introdúcelos cuando sientas el dolor que resuelven: tests lentos, SQL duplicado, estados a medio guardar, errores invisibles. Para más sobre ese equilibrio, mira [Antipatrones](/patrones/antipatrones).
+
+</Callout>
+
+<Quiz
+  question="Tu OrderRepository expone un método find(where: Prisma.OrderWhereInput). ¿Cuál es el problema principal?"
+  options={[
+    { text: 'Ninguno: es flexible y evita escribir un método por consulta.', why: 'La flexibilidad se paga: cada llamador arma consultas con la API del ORM y la abstracción deja de abstraer.' },
+    { text: 'Filtra el ORM: el dominio queda acoplado a Prisma, no puedes sustituirlo por un repositorio en memoria y las consultas se dispersan por el código.', correct: true, why: 'Un repositorio debe hablar el idioma del dominio (pendingOlderThan, byCustomer). Si expone los tipos del ORM, es una capa extra sin beneficio.' },
+    { text: 'Es lento porque Prisma no soporta filtros dinámicos.', why: 'El rendimiento no es el problema; el acoplamiento sí.' },
+    { text: 'Rompe el patrón Unit of Work.', why: 'No tiene relación directa con la Unit of Work; el problema está en la interfaz del repositorio.' },
+  ]}
+/>
+
+<Takeaways>
+
+- **Inyección de dependencias**: recibe interfaces por constructor y arma el grafo en un solo composition root. El contenedor es opcional; Service Locator es la versión que esconde dependencias.
+- Elige bien los **ciclos de vida**: un singleton que depende de algo scoped crea una dependencia cautiva.
+- **Repository** habla el idioma del dominio y esconde la persistencia; si filtra el ORM, no abstrae nada.
+- **Unit of Work** hace que una operación de negocio se guarde completa o no se guarde; tu ORM probablemente ya la implementa, tú defines la frontera.
+- **Specification** da nombre a una regla y la hace combinable; vale la pena cuando la regla se repite o se traduce a consultas.
+- **Result** pone los errores esperados en el tipo; las excepciones siguen siendo para bugs e infraestructura.
+- **Middleware** saca lo transversal de los handlers; **Null Object** elimina los `if null` cuando la ausencia no importa.
+
+</Takeaways>
+
+## Fuentes y lecturas
+
+- Martin Fowler, [Inversion of Control Containers and the Dependency Injection pattern](https://martinfowler.com/articles/injection.html) (2004).
+- Mark Seemann, [Service Locator is an Anti-Pattern](https://blog.ploeh.dk/2010/02/03/ServiceLocatorisanAnti-Pattern/) (2010).
+- Steven van Deursen y Mark Seemann, [Dependency Injection Principles, Practices, and Patterns](https://www.manning.com/books/dependency-injection-principles-practices-patterns) (Manning, 2019).
+- Microsoft Learn, [Service lifetimes (dependency injection)](https://learn.microsoft.com/en-us/dotnet/core/extensions/dependency-injection/service-lifetimes).
+- NestJS, [Custom providers](https://docs.nestjs.com/fundamentals/custom-providers).
+- Martin Fowler, catálogo de PoEAA: [Repository](https://martinfowler.com/eaaCatalog/repository.html) y [Unit of Work](https://martinfowler.com/eaaCatalog/unitOfWork.html).
+- Harry Percival y Bob Gregory, *Architecture Patterns with Python* (Cosmic Python): [cap. 2, Repository](https://www.cosmicpython.com/book/chapter_02_repository.html) y [cap. 6, Unit of Work](https://www.cosmicpython.com/book/chapter_06_uow.html).
+- Eric Evans y Martin Fowler, [Specifications](https://martinfowler.com/apsupp/spec.pdf) (PDF).
+- Scott Wlaschin, [Railway Oriented Programming](https://fsharpforfunandprofit.com/rop/) y [Against Railway-Oriented Programming](https://fsharpforfunandprofit.com/posts/against-railway-oriented-programming/).
+- [neverthrow](https://github.com/supermacro/neverthrow): Result tipado para TypeScript.
+- The Rust Book, [Error Handling](https://doc.rust-lang.org/book/ch09-00-error-handling.html).
+- Django, [Middleware](https://docs.djangoproject.com/en/stable/topics/http/middleware/); Express, [Using middleware](https://expressjs.com/en/guide/using-middleware.html); [Koa](https://koajs.com/).
+- Python, [logging.NullHandler](https://docs.python.org/3/library/logging.handlers.html#nullhandler).

@@ -1,0 +1,255 @@
+.home {
+  max-width: 1320px;
+  margin: 0 auto;
+  padding: 0 16px;
+}
+
+/* ───────────── Hero: the notebook's cover page, on squared paper ───────────── */
+.home__hero {
+  --pt: clamp(2.5rem, 8vw, 6rem);
+  --pb: clamp(2rem, 5vw, 3.5rem);
+  --gutter: clamp(22px, 5vw, 72px);
+  padding: var(--pt) 0 var(--pb);
+}
+/* squared paper runs edge to edge of the window */
+.home__hero::before {
+  left: calc(50% - 50vw);
+  right: calc(50% - 50vw);
+}
+.home__hero-inner {
+  position: relative;
+  max-width: 62rem;
+  padding-left: var(--gutter);
+}
+/* the red margin rule of a notebook page */
+.home__hero-inner::before {
+  content: '';
+  position: absolute;
+  left: calc(var(--gutter) / 2 - 1px);
+  top: calc(-1 * var(--pt));
+  bottom: calc(-1 * var(--pb));
+  width: 2px;
+  background: linear-gradient(to bottom, var(--margin-rule) 60%, transparent);
+}
+.home__title {
+  font-size: var(--step-5);
+  font-weight: 660;
+  line-height: 1.02;
+  letter-spacing: -0.025em;
+  max-width: 14ch;
+}
+
+/* The one authored motion on this page: the highlighter sweeps under the words */
+.home__mark {
+  background-image: linear-gradient(var(--hl), var(--hl));
+  background-repeat: no-repeat;
+  background-position: 0 88%;
+  background-size: 100% 0.42em;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+  padding: 0 0.06em;
+  margin: 0 -0.06em;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .home__mark {
+    animation: marker-sweep 900ms var(--sweep-delay, 250ms) var(--ease-out) both;
+  }
+}
+@keyframes marker-sweep {
+  from {
+    background-size: 0% 0.42em;
+  }
+}
+
+.home__lead {
+  margin: var(--s-5) 0 0;
+  font-size: clamp(1.1rem, 1rem + 0.5vw, 1.35rem);
+  line-height: 1.5;
+  color: var(--ink-2);
+  max-width: 54ch;
+}
+.home__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-3);
+  margin-top: var(--s-6);
+}
+.home__cta {
+  min-height: 46px;
+  padding: 0 var(--s-5);
+  font-size: var(--step-0);
+  max-width: 100%;
+}
+.home__actions .btn:not(.home__cta) {
+  min-height: 46px;
+  font-size: var(--step-0);
+}
+.home__note {
+  font-size: 1.2rem;
+  margin-left: var(--s-2);
+  transform: rotate(-3deg);
+}
+@media (max-width: 640px) {
+  .home__note {
+    display: none;
+  }
+}
+.home__facts {
+  margin: var(--s-5) 0 0;
+  font-family: var(--font-sign);
+  font-size: var(--step--1);
+  font-weight: 600;
+  color: var(--ink-3);
+}
+
+/* ───────────── Sections ───────────── */
+.home__h2 {
+  font-size: var(--step-3);
+  margin-bottom: var(--s-4);
+}
+.home__index {
+  margin-top: var(--s-5);
+}
+
+/* How to study: three columns, like a page ruled into three */
+.home__how {
+  margin-top: var(--s-8);
+}
+.how {
+  display: grid;
+  gap: var(--s-5);
+  border-top: 2px solid var(--ink);
+  padding-top: var(--s-5);
+}
+.how h3 {
+  font-size: var(--step-1);
+}
+.how p {
+  margin: var(--s-2) 0 0;
+  color: var(--ink-2);
+  font-size: 0.98rem;
+  max-width: 48ch;
+}
+@media (min-width: 880px) {
+  .how {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0;
+  }
+  .how > div {
+    padding: 0 var(--s-6);
+  }
+  .how > div:first-child {
+    padding-left: 0;
+  }
+  .how > div + div {
+    border-left: 1px solid var(--rule);
+  }
+}
+
+/* ───────────── Study plans ───────────── */
+.home__plans {
+  margin-top: var(--s-8);
+  scroll-margin-top: calc(var(--topbar-h) + 1rem);
+}
+.home__plans-lead {
+  margin: calc(-1 * var(--s-2)) 0 0;
+  color: var(--ink-2);
+}
+.plans {
+  margin-top: var(--s-5);
+  border-top: 2px solid var(--ink);
+}
+.plan {
+  border-bottom: 1px solid var(--rule);
+}
+.plan summary {
+  list-style: none;
+  cursor: pointer;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px var(--s-4);
+  padding: var(--s-4) 0;
+}
+.plan summary::-webkit-details-marker {
+  display: none;
+}
+.plan__title {
+  font-family: var(--font-display);
+  font-weight: 640;
+  font-size: var(--step-1);
+  line-height: 1.25;
+}
+.plan summary:hover .plan__title {
+  text-decoration-line: underline;
+  text-decoration-color: var(--rule-strong);
+  text-underline-offset: 4px;
+}
+.plan__meta {
+  font-family: var(--font-sign);
+  font-size: var(--step--1);
+  font-weight: 600;
+  color: var(--ink-3);
+  text-align: right;
+  white-space: nowrap;
+}
+.plan__desc {
+  grid-column: 1 / -1;
+  font-size: 0.96rem;
+  color: var(--ink-2);
+  max-width: 70ch;
+}
+/* one square of squared paper per topic, in its unit's colour */
+.plan__cells {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  margin-top: 8px;
+}
+.plan__cells span {
+  width: 14px;
+  height: 14px;
+  border-radius: 2px;
+  border: 1.5px solid var(--line);
+  background: var(--line-tint);
+}
+@media (max-width: 560px) {
+  .plan summary {
+    grid-template-columns: 1fr;
+  }
+  .plan__meta {
+    text-align: left;
+  }
+}
+.plan__topics {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 var(--s-5);
+  columns: 2 18rem;
+  column-gap: var(--s-6);
+}
+.plan__topics li {
+  break-inside: avoid;
+}
+.plan__topics a {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 6px 0;
+  text-decoration: none;
+  font-family: var(--font-sign);
+  font-size: 1rem;
+  color: var(--ink-2);
+}
+.plan__num {
+  flex: none;
+  width: 2.3rem;
+  font-weight: 700;
+  font-size: 0.88rem;
+  color: var(--line-ink);
+  font-variant-numeric: tabular-nums;
+}
+.plan__topics a:hover {
+  color: var(--ink);
+}

@@ -1,0 +1,100 @@
+.cu-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-2);
+}
+.cu-sep {
+  width: 1px;
+  height: 28px;
+  background: var(--rule);
+  margin: 0 var(--s-1);
+}
+.cu-doc {
+  min-height: 3.2rem;
+  padding: var(--s-3) var(--s-4);
+  border: 1.5px solid var(--rule-strong);
+  border-radius: var(--radius-lg);
+  background: var(--card);
+  font-family: var(--font-read);
+  font-size: var(--step-1);
+  color: var(--ink);
+  word-break: break-word;
+}
+.cu-doc__ph {
+  color: var(--ink-3);
+  font-style: italic;
+  font-size: var(--step-0);
+}
+.cu-caret {
+  display: inline-block;
+  width: 2px;
+  height: 1.1em;
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  background: var(--line);
+}
+.cu-stacks {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--s-3);
+  margin-top: var(--s-4);
+}
+.cu-stack {
+  display: grid;
+  gap: var(--s-2);
+  align-content: start;
+}
+.cu-stack__title {
+  font-weight: 700;
+  font-size: 0.78rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.cu-stack__n {
+  display: inline-grid;
+  place-items: center;
+  min-width: 1.6em;
+  height: 1.4em;
+  padding: 0 0.3em;
+  border-radius: 999px;
+  background: var(--paper-3);
+  color: var(--ink-2);
+  letter-spacing: 0;
+}
+.cu-stack__list {
+  list-style: none;
+  margin: 0;
+  padding: var(--s-2);
+  min-height: 8rem;
+  display: grid;
+  gap: 4px;
+  align-content: start;
+  border: 1.5px solid var(--rule);
+  background: var(--paper);
+  border-radius: var(--radius);
+}
+.cu-stack--undo .cu-stack__list {
+  border-color: var(--line);
+}
+.cu-chip {
+  padding: 4px 8px;
+  border: 1.5px solid var(--rule-strong);
+  border-radius: var(--radius);
+  background: var(--card);
+  font-family: var(--font-code);
+  font-size: 0.74rem;
+  color: var(--ink-2);
+  word-break: break-all;
+}
+.cu-chip.is-top {
+  border-color: var(--line);
+  color: var(--ink);
+  font-weight: 600;
+}
+.cu-empty {
+  font-size: 0.8rem;
+  font-style: italic;
+  color: var(--ink-3);
+}

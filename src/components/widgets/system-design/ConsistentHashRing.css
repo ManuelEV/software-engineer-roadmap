@@ -1,0 +1,126 @@
+.chr-svg {
+  display: block;
+  width: 100%;
+  max-width: 420px;
+  height: auto;
+  margin: 0 auto;
+}
+.chr-base {
+  fill: none;
+  stroke: var(--rule);
+  stroke-width: 5;
+}
+.chr-arc {
+  fill: none;
+  stroke-width: 5;
+  stroke-linecap: butt;
+}
+.chr-token {
+  fill: var(--paper);
+  stroke-width: 3;
+}
+.chr-label {
+  font-size: 14px;
+  font-weight: 700;
+  fill: var(--ink);
+}
+.chr-key {
+  stroke: var(--paper);
+  stroke-width: 1.5;
+  transition: fill 300ms var(--ease-out);
+}
+@media (prefers-reduced-motion: reduce) {
+  .chr-key {
+    transition: none;
+  }
+}
+.chr-key.is-moved {
+  stroke: var(--ink);
+  stroke-width: 2;
+}
+.chr-center {
+  font-size: 16px;
+  font-weight: 700;
+  fill: var(--ink);
+}
+.chr-center-sub {
+  font-size: 13px;
+  fill: var(--ink-3);
+}
+.chr-servers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  align-items: center;
+}
+.chr-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 40px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1.5px solid var(--rule-strong);
+  background: var(--card);
+  font-family: var(--font-sign);
+  font-weight: 700;
+  font-size: var(--step--1);
+  color: var(--ink);
+  cursor: pointer;
+}
+.chr-chip:hover:not(:disabled) {
+  border-color: var(--bad);
+}
+.chr-chip:disabled {
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+.chr-chip:focus-visible {
+  outline: 2px solid var(--line-ink);
+  outline-offset: 2px;
+}
+.chr-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--chip);
+}
+.chr-readout {
+  display: grid;
+  gap: var(--s-3);
+}
+.chr-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-4) var(--s-5);
+}
+.chr-bars {
+  display: grid;
+  gap: 4px;
+}
+.chr-bar {
+  display: grid;
+  grid-template-columns: 2.4rem 1fr 3rem;
+  align-items: center;
+  gap: var(--s-2);
+  font-size: 0.85rem;
+}
+.chr-bar__label {
+  font-weight: 700;
+  color: var(--ink);
+}
+.chr-bar__track {
+  height: 10px;
+  border-radius: 5px;
+  background: var(--paper-3);
+  overflow: hidden;
+}
+.chr-bar__fill {
+  display: block;
+  height: 100%;
+  border-radius: 5px;
+}
+.chr-bar__n {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}

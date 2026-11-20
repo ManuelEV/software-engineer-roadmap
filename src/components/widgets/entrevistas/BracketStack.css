@@ -1,0 +1,132 @@
+.bks-field {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+.bks-field--grow {
+  flex: 1 1 12rem;
+}
+.bks-field select,
+.bks-field input {
+  width: 100%;
+  min-height: 40px;
+  padding: 0 10px;
+  border: 1.5px solid var(--rule-strong);
+  border-radius: 8px;
+  background: var(--card);
+  color: var(--ink);
+  font-family: var(--font-code);
+  font-size: 0.9rem;
+}
+.bks-field input[aria-invalid='true'] {
+  border-color: var(--bad);
+}
+.bks-field select:focus-visible,
+.bks-field input:focus-visible {
+  outline: 2px solid var(--line-ink);
+  outline-offset: 1px;
+}
+
+.bks-stage {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 5rem;
+  gap: var(--s-4);
+  align-items: start;
+}
+.bks-left {
+  display: grid;
+  gap: var(--s-3);
+  min-width: 0;
+}
+.bks-empty {
+  margin: 0;
+  font-family: var(--font-code);
+  color: var(--ink-3);
+}
+.bks-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--ink-3);
+}
+.bks-dot {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  border: 1.5px solid var(--rule-strong);
+}
+.bks-dot--wait {
+  background: var(--line-tint);
+  border-color: color-mix(in oklab, var(--line) 60%, var(--rule-strong));
+}
+.bks-dot--done {
+  background: var(--paper-3);
+}
+.bks-col {
+  display: grid;
+  gap: 2px;
+  font-family: var(--font-code);
+}
+.bks-col__cap {
+  font-size: 0.8rem;
+  color: var(--ink-3);
+}
+.bks-col__top {
+  font-family: var(--font-hand);
+  font-size: 0.9rem;
+  color: var(--ink-3);
+  text-align: center;
+}
+.bks-col__well {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 4px;
+  min-height: 8.5rem;
+  padding: 5px;
+  border: 2px solid var(--ink-3);
+  border-top: 0;
+  border-radius: 0 0 8px 8px;
+  overflow: hidden;
+}
+.bks-col__empty {
+  margin: auto 0 4px;
+  text-align: center;
+  font-size: 0.78rem;
+  font-style: italic;
+  color: var(--ink-3);
+}
+.bks-box {
+  display: grid;
+  justify-items: center;
+  padding: 2px;
+  border: 1.5px solid color-mix(in oklab, var(--line) 60%, var(--rule-strong));
+  border-radius: 5px;
+  background: var(--line-tint);
+  line-height: 1.15;
+  transition:
+    background-color 220ms var(--ease-out),
+    border-color 220ms var(--ease-out);
+}
+.bks-box__c {
+  font-weight: 700;
+  font-size: 1rem;
+  color: var(--ink);
+}
+.bks-box__i {
+  font-family: var(--font-sign);
+  font-size: 0.7rem;
+  color: var(--ink-2);
+}
+.bks-box.is-ok {
+  border-color: var(--ok);
+  background: color-mix(in oklab, var(--ok) 24%, var(--card));
+}
+.bks-box.is-bad {
+  border-color: var(--bad);
+  background: color-mix(in oklab, var(--bad) 18%, var(--card));
+}

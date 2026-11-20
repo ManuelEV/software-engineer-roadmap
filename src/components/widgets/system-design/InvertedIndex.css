@@ -1,0 +1,133 @@
+.ii-q {
+  display: grid;
+  gap: 4px;
+  flex: 1 1 14rem;
+}
+.ii-q span {
+  font-weight: 700;
+  font-size: 0.74rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.ii-q input {
+  min-height: 40px;
+  padding: 0 var(--s-3);
+  border-radius: var(--radius);
+  border: 1.5px solid var(--rule-strong);
+  background: var(--card);
+  color: var(--ink);
+  font-family: var(--font-sign);
+  font-size: 1rem;
+}
+.ii-q input:focus-visible {
+  outline: 2px solid var(--line-ink);
+  outline-offset: 1px;
+}
+.ii-layout {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: var(--s-4);
+}
+.ii-h {
+  margin: 0 0 var(--s-2);
+  font-family: var(--font-sign);
+  font-size: 0.8rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.ii-docs,
+.ii-results {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+  font-size: 0.92rem;
+}
+.ii-docs li {
+  padding: 4px 6px;
+  border-radius: var(--radius);
+  border: 1.5px solid transparent;
+  color: var(--ink-2);
+  transition: background-color 180ms var(--ease-out), border-color 180ms var(--ease-out);
+}
+.ii-docs li.is-hit {
+  background: var(--line-tint);
+  border-color: var(--line);
+  color: var(--ink);
+}
+.ii-doc {
+  display: inline-block;
+  min-width: 1.9rem;
+  font-family: var(--font-code);
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--ink-3);
+}
+.ii-index {
+  margin: 0;
+  display: grid;
+  gap: 2px;
+  font-size: 0.85rem;
+}
+.ii-row {
+  display: grid;
+  grid-template-columns: 7.5rem 1fr;
+  gap: var(--s-2);
+  padding: 2px 4px;
+  border-radius: var(--radius);
+}
+.ii-row dt {
+  font-family: var(--font-code);
+  color: var(--ink-2);
+}
+.ii-row dd {
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+}
+.ii-row.is-q {
+  background: var(--line-tint-2);
+}
+.ii-row.is-q dt {
+  color: var(--ink);
+  font-weight: 700;
+}
+.ii-post {
+  padding: 0 5px;
+  border-radius: 999px;
+  border: 1.5px solid var(--rule-strong);
+  font-family: var(--font-code);
+  font-size: 0.75rem;
+  color: var(--ink-3);
+}
+.ii-post.is-hit {
+  border-color: var(--line);
+  background: var(--line);
+  color: var(--line-on);
+}
+.ii-readout {
+  display: grid;
+  gap: var(--s-2);
+}
+.ii-term {
+  display: inline-block;
+  margin-right: 4px;
+  padding: 0 6px;
+  border-radius: var(--radius);
+  background: var(--paper-3);
+  font-family: var(--font-code);
+  font-size: 0.85rem;
+}
+.ii-score {
+  font-family: var(--font-code);
+  font-size: 0.75rem;
+  color: var(--ink-3);
+}
+.ii-none {
+  color: var(--ink-3);
+  font-style: italic;
+}

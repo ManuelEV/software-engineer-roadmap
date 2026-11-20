@@ -1,0 +1,536 @@
+import { HexagonalPlayground } from '../../components/widgets/arquitectura/HexagonalPlayground'
+
+En 2005, Alistair Cockburn publicó un artículo con un objetivo que suena modesto: que una aplicación pueda ser usada igual por personas, por otros programas, por tests automáticos o por scripts batch, y que se pueda desarrollar y probar **sin su interfaz de usuario y sin su base de datos**. Lo llamó *Hexagonal Architecture*, y más tarde, con un nombre más descriptivo, **Ports and Adapters**.
+
+El problema que atacaba sigue igual de vivo: la lógica de negocio que se filtra hacia los controladores y hacia las consultas SQL, hasta que nadie puede probar una regla sin levantar un servidor HTTP y una base de datos. Este tema construye una aplicación hexagonal completa en TypeScript (dominio, puertos, adaptadores de entrada y salida, cableado y tests) y termina con lo más importante: cuándo vale la pena y cuándo es ceremonia.
+
+## El problema: la lógica atrapada
+
+Mira el controlador típico de un proyecto que creció sin fronteras:
+
+```ts title="src/routes/orders.ts (antes)"
+router.post('/orders', async (req, res) => {
+  const { customerId, items } = req.body
+  const rows = await db.query('SELECT id, price_cents, stock FROM products WHERE id = ANY($1)', [items.map((i: any) => i.sku)])
+  let total = 0
+  for (const item of items) {
+    const p = rows.rows.find((r: any) => r.id === item.sku)
+    if (!p || p.stock < item.qty) return res.status(409).json({ error: 'Sin stock' })
+    total += p.price_cents * item.qty
+  }
+  if (total < 1000) return res.status(422).json({ error: 'Pedido mínimo $10' })
+  const charge = await stripe.paymentIntents.create({ amount: total, currency: 'usd', customer: customerId })
+  const { rows: [order] } = await db.query('INSERT INTO orders ... RETURNING id', [/* ... */])
+  res.status(201).json({ orderId: order.id, paymentId: charge.id })
+})
+```
+
+¿Dónde está la regla "el pedido mínimo es $10"? Mezclada entre `req.body`, SQL y la API de Stripe. Para probarla necesitas Express, Postgres y una cuenta de Stripe (o un *mock* gigante). Si mañana quieres crear pedidos desde un job nocturno o desde una cola, copias el código. Si cambias de proveedor de pagos, tocas cada ruta que cobra.
+
+La idea de Cockburn es separar el sistema en **adentro** y **afuera**. Adentro está la aplicación: el dominio y los casos de uso. Afuera está todo lo demás: HTTP, la consola, la base de datos, Stripe, el reloj, el correo. Y la frontera entre ambos se cruza solo a través de **puertos**.
+
+## Puertos y adaptadores
+
+Un **puerto** es una interfaz definida por la aplicación, en el lenguaje de la aplicación, que describe una conversación con el exterior. Cockburn insiste en que un puerto se define por su **propósito**, no por la tecnología: "para colocar pedidos", "para guardar pedidos", "para cobrar". Un **adaptador** es el código que conecta una tecnología concreta con un puerto, traduciendo en ambos sentidos.
+
+Hay dos lados, y la diferencia importa:
+
+- **Lado conductor** (*driving*, primario): actores que **inician** la conversación con la aplicación. Un controlador HTTP, un comando de consola, un consumidor de cola, un test. El puerto es una interfaz que la aplicación **implementa** (un caso de uso) y el adaptador **llama**.
+- **Lado conducido** (*driven*, secundario): actores a los que la aplicación **recurre**. La base de datos, un proveedor de pagos, un servicio de correo. El puerto es una interfaz que la aplicación **define y usa**, y el adaptador **implementa**.
+
+En ambos lados, la dependencia de código apunta **hacia adentro**. El controlador HTTP importa el caso de uso. El repositorio de Postgres importa la interfaz `OrderRepository` del núcleo para implementarla. El núcleo no importa nada de afuera. Eso es inversión de dependencias aplicada a toda la aplicación.
+
+<Callout type="note" title="¿Por qué un hexágono?">
+
+El número seis no significa nada. Cockburn eligió el hexágono para escapar del dibujo de capas apiladas, que sugiere una sola dirección (arriba y abajo), y para tener espacio donde dibujar varios puertos a cada lado. Lo esencial es la frontera adentro/afuera, no la forma.
+
+</Callout>
+
+Prueba cambiar adaptadores y seguir una petición. Fíjate en dos cosas: el hexágono nunca cambia, y el único archivo que se modifica al cambiar de Postgres a memoria o de REST a CLI es la raíz de composición.
+
+<HexagonalPlayground />
+
+## El núcleo: dominio y puertos en código
+
+Vamos a construir el mismo caso de uso del controlador de arriba. Empezamos por adentro: el dominio no sabe que existe HTTP ni SQL.
+
+```ts title="src/orders/domain/order.ts"
+export class DomainError extends Error {}
+
+export type OrderId = string & { readonly __brand: 'OrderId' }
+
+export interface OrderLine {
+  readonly sku: string
+  readonly quantity: number
+  readonly unitPriceCents: number
+}
+
+const MIN_TOTAL_CENTS = 1_000
+
+export class Order {
+  private constructor(
+    readonly id: OrderId,
+    readonly customerId: string,
+    private readonly lines: readonly OrderLine[],
+    private status: 'PENDING_PAYMENT' | 'PAID',
+    private paymentId?: string,
+  ) {}
+
+  static place(id: OrderId, customerId: string, lines: OrderLine[]): Order {
+    if (lines.length === 0) throw new DomainError('Un pedido necesita al menos una línea')
+    if (lines.some((l) => l.quantity <= 0)) throw new DomainError('Cantidad inválida')
+    const order = new Order(id, customerId, lines, 'PENDING_PAYMENT')
+    if (order.totalCents() < MIN_TOTAL_CENTS) throw new DomainError('El pedido mínimo es $10')
+    return order
+  }
+
+  totalCents(): number {
+    return this.lines.reduce((sum, l) => sum + l.unitPriceCents * l.quantity, 0)
+  }
+
+  markPaid(paymentId: string): void {
+    if (this.status === 'PAID') throw new DomainError('El pedido ya está pagado')
+    this.status = 'PAID'
+    this.paymentId = paymentId
+  }
+
+  snapshot() {
+    return { id: this.id, customerId: this.customerId, lines: [...this.lines], status: this.status, paymentId: this.paymentId }
+  }
+
+  static restore(s: ReturnType<Order['snapshot']>): Order {
+    return new Order(s.id, s.customerId, s.lines, s.status, s.paymentId)
+  }
+}
+```
+
+Ahora los puertos. El de entrada describe el caso de uso; los de salida describen lo que el núcleo **necesita** del mundo, con tipos del dominio, no de la librería.
+
+```ts title="src/orders/application/ports.ts"
+import type { Order, OrderId } from '../domain/order'
+
+// ── Puerto conductor (entrada): lo que la aplicación ofrece ──
+export interface PlaceOrderCommand {
+  customerId: string
+  items: { sku: string; quantity: number }[]
+}
+export interface PlaceOrderResult {
+  orderId: OrderId
+  totalCents: number
+}
+export interface PlaceOrder {
+  execute(cmd: PlaceOrderCommand): Promise<PlaceOrderResult>
+}
+
+// ── Puertos conducidos (salida): lo que la aplicación necesita ──
+export interface OrderRepository {
+  nextId(): OrderId
+  save(order: Order): Promise<void>
+  findById(id: OrderId): Promise<Order | null>
+}
+
+export interface Catalog {
+  priceOf(skus: string[]): Promise<Map<string, number>> // sku → precio en centavos
+}
+
+export type ChargeOutcome = { ok: true; paymentId: string } | { ok: false; reason: string }
+
+export interface PaymentGateway {
+  charge(customerId: string, amountCents: number, idempotencyKey: string): Promise<ChargeOutcome>
+}
+```
+
+Detalles que separan un buen puerto de uno malo:
+
+- `PaymentGateway.charge` devuelve `ChargeOutcome`, un tipo propio. Si devolviera `Stripe.PaymentIntent`, el núcleo dependería de Stripe aunque la interfaz viva adentro.
+- La interfaz pide una `idempotencyKey`: es una necesidad del **negocio** (no cobrar dos veces), no de Stripe. Cualquier proveedor serio la soporta.
+- `OrderRepository` tiene los métodos que el caso de uso necesita, no un repositorio genérico de CRUD con veinte métodos.
+
+El servicio de aplicación implementa el puerto de entrada y orquesta: carga, aplica el dominio, persiste.
+
+```ts title="src/orders/application/place-order.service.ts"
+import { DomainError, Order } from '../domain/order'
+import type { Catalog, OrderRepository, PaymentGateway, PlaceOrder, PlaceOrderCommand, PlaceOrderResult } from './ports'
+
+export class PlaceOrderService implements PlaceOrder {
+  constructor(
+    private readonly orders: OrderRepository,
+    private readonly catalog: Catalog,
+    private readonly payments: PaymentGateway,
+  ) {}
+
+  async execute(cmd: PlaceOrderCommand): Promise<PlaceOrderResult> {
+    const prices = await this.catalog.priceOf(cmd.items.map((i) => i.sku))
+    const lines = cmd.items.map((i) => {
+      const unitPriceCents = prices.get(i.sku)
+      if (unitPriceCents === undefined) throw new DomainError(`Producto inexistente: ${i.sku}`)
+      return { sku: i.sku, quantity: i.quantity, unitPriceCents }
+    })
+
+    const order = Order.place(this.orders.nextId(), cmd.customerId, lines)
+    await this.orders.save(order)
+
+    const outcome = await this.payments.charge(cmd.customerId, order.totalCents(), `order-${order.id}`)
+    if (!outcome.ok) throw new DomainError(`Pago rechazado: ${outcome.reason}`)
+
+    order.markPaid(outcome.paymentId)
+    await this.orders.save(order)
+    return { orderId: order.id, totalCents: order.totalCents() }
+  }
+}
+```
+
+<Callout type="warn" title="Simplificación consciente">
+
+Este caso de uso guarda el pedido, cobra y vuelve a guardar. Si el proceso muere entre el cobro y el segundo `save`, tienes un cobro sin pedido pagado. La clave de idempotencia evita cobrar dos veces al reintentar, pero la solución completa (outbox, sagas) está en el tema de transacciones distribuidas. Hexagonal organiza dependencias; no resuelve la consistencia por ti.
+
+</Callout>
+
+<Quiz
+  question="Estás definiendo el puerto PaymentGateway. ¿Cuál firma respeta mejor la arquitectura hexagonal?"
+  options={[
+    { text: 'charge(params: Stripe.PaymentIntentCreateParams), que devuelve un Stripe.PaymentIntent', why: 'La interfaz vive en el núcleo, pero sus tipos son de Stripe: el núcleo depende de la librería y cambiar de proveedor obliga a cambiar el dominio.' },
+    { text: 'charge(customerId: string, amountCents: number, idempotencyKey: string), que devuelve un ChargeOutcome propio', correct: true, why: 'Exacto. Tipos propios, expresados en el lenguaje del negocio. El adaptador de Stripe traduce hacia y desde la API de Stripe; un adaptador de otro proveedor haría lo mismo.' },
+    { text: 'post(url: string, body: unknown), que devuelve la respuesta HTTP cruda', why: 'Es un puerto definido por la tecnología (HTTP), no por el propósito. El núcleo tendría que saber construir requests de Stripe.' },
+    { text: 'No hace falta un puerto: el servicio puede importar el SDK de Stripe directamente.', why: 'Entonces el núcleo depende de Stripe, no puedes probarlo sin red y cambiar de proveedor toca la lógica de negocio.' },
+  ]}
+/>
+
+## Los adaptadores
+
+Afuera, cada adaptador traduce entre una tecnología y un puerto. Empecemos por el lado conductor.
+
+```ts title="src/orders/adapters/http/order-controller.ts"
+import type { Request, Response } from 'express'
+import { DomainError } from '../../domain/order'
+import type { PlaceOrder } from '../../application/ports'
+
+// Adaptador conductor: HTTP → puerto PlaceOrder
+export const httpOrderController = (placeOrder: PlaceOrder) => async (req: Request, res: Response) => {
+  const body = req.body as { customerId?: string; items?: { sku: string; qty: number }[] }
+  if (!body.customerId || !Array.isArray(body.items)) return res.status(400).json({ error: 'Formato inválido' })
+
+  try {
+    const result = await placeOrder.execute({
+      customerId: body.customerId,
+      items: body.items.map((i) => ({ sku: i.sku, quantity: i.qty })),
+    })
+    res.status(201).json(result)
+  } catch (e) {
+    if (e instanceof DomainError) return res.status(422).json({ error: e.message })
+    throw e
+  }
+}
+```
+
+El controlador solo hace tres cosas: valida el **formato** (no las reglas de negocio), traduce a un comando y traduce el resultado (o el error) a HTTP. Un comando de consola o un consumidor de cola serían otro adaptador de unas veinte líneas que llama exactamente al mismo `placeOrder.execute()`.
+
+Del lado conducido, un adaptador implementa un puerto con una tecnología concreta:
+
+```ts title="src/orders/adapters/postgres/postgres-order-repository.ts"
+import type { Pool } from 'pg'
+import { randomUUID } from 'node:crypto'
+import { Order, type OrderId } from '../../domain/order'
+import type { OrderRepository } from '../../application/ports'
+
+export class PostgresOrderRepository implements OrderRepository {
+  constructor(private readonly pool: Pool) {}
+
+  nextId(): OrderId {
+    return randomUUID() as OrderId
+  }
+
+  async save(order: Order): Promise<void> {
+    const s = order.snapshot()
+    await this.pool.query(
+      `INSERT INTO orders (id, customer_id, lines, status, payment_id)
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (id) DO UPDATE SET status = EXCLUDED.status, payment_id = EXCLUDED.payment_id`,
+      [s.id, s.customerId, JSON.stringify(s.lines), s.status, s.paymentId ?? null],
+    )
+  }
+
+  async findById(id: OrderId): Promise<Order | null> {
+    const { rows } = await this.pool.query('SELECT * FROM orders WHERE id = $1', [id])
+    if (!rows[0]) return null
+    const r = rows[0]
+    return Order.restore({ id: r.id, customerId: r.customer_id, lines: r.lines, status: r.status, paymentId: r.payment_id ?? undefined })
+  }
+}
+```
+
+```ts title="src/orders/adapters/stripe/stripe-payment-gateway.ts"
+import Stripe from 'stripe'
+import type { ChargeOutcome, PaymentGateway } from '../../application/ports'
+
+export class StripePaymentGateway implements PaymentGateway {
+  constructor(private readonly stripe: Stripe) {}
+
+  async charge(customerId: string, amountCents: number, idempotencyKey: string): Promise<ChargeOutcome> {
+    try {
+      const intent = await this.stripe.paymentIntents.create(
+        // payment_method y off_session omitidos por brevedad
+        { amount: amountCents, currency: 'usd', customer: customerId, confirm: true },
+        { idempotencyKey },
+      )
+      return intent.status === 'succeeded' ? { ok: true, paymentId: intent.id } : { ok: false, reason: intent.status }
+    } catch (e) {
+      if (e instanceof Stripe.errors.StripeCardError) return { ok: false, reason: e.code ?? 'card_error' }
+      throw e // errores de red o de configuración: no son decisiones de negocio
+    }
+  }
+}
+```
+
+Fíjate en la última línea del adaptador de Stripe. Una tarjeta rechazada es un resultado de negocio y se traduce a `{ ok: false }`. Una caída de red es un fallo técnico y se propaga. Decidir qué errores cruzan la frontera como resultados y cuáles como excepciones es parte del diseño del puerto.
+
+Y la versión en memoria, que vas a usar en tests y en desarrollo local:
+
+```ts title="src/orders/adapters/memory/in-memory-order-repository.ts"
+import { Order, type OrderId } from '../../domain/order'
+import type { OrderRepository } from '../../application/ports'
+
+export class InMemoryOrderRepository implements OrderRepository {
+  private readonly rows = new Map<OrderId, ReturnType<Order['snapshot']>>()
+  private seq = 0
+
+  nextId(): OrderId {
+    return `o-${++this.seq}` as OrderId
+  }
+  async save(order: Order): Promise<void> {
+    this.rows.set(order.id, structuredClone(order.snapshot()))
+  }
+  async findById(id: OrderId): Promise<Order | null> {
+    const s = this.rows.get(id)
+    return s ? Order.restore(structuredClone(s)) : null
+  }
+}
+```
+
+El `structuredClone` no es un detalle: si guardaras la referencia al objeto, un test podría pasar porque el "repositorio" devuelve el mismo objeto mutado, algo que Postgres nunca haría.
+
+## La raíz de composición
+
+Alguien tiene que conocer a todos: crear los adaptadores concretos e inyectarlos en el núcleo. Ese lugar se llama **raíz de composición** (*composition root*) y es el único archivo que importa de todos lados.
+
+```ts title="src/main.ts"
+import express from 'express'
+import { Pool } from 'pg'
+import Stripe from 'stripe'
+import { PlaceOrderService } from './orders/application/place-order.service'
+import { PostgresOrderRepository } from './orders/adapters/postgres/postgres-order-repository'
+import { PostgresCatalog } from './orders/adapters/postgres/postgres-catalog'
+import { StripePaymentGateway } from './orders/adapters/stripe/stripe-payment-gateway'
+import { httpOrderController } from './orders/adapters/http/order-controller'
+
+const pool = new Pool({ connectionString: process.env.DATABASE_URL })
+const placeOrder = new PlaceOrderService(
+  new PostgresOrderRepository(pool),
+  new PostgresCatalog(pool),
+  new StripePaymentGateway(new Stripe(process.env.STRIPE_KEY!)),
+)
+
+const app = express()
+app.use(express.json())
+app.post('/orders', httpOrderController(placeOrder))
+app.listen(3000)
+```
+
+No necesitas un contenedor de inyección de dependencias. Pasar instancias por constructor, a mano, es perfectamente válido y mucho más fácil de leer. Un contenedor empieza a pagar cuando tienes decenas de servicios y ciclos de vida distintos.
+
+## Tests con adaptadores en memoria
+
+Aquí cobra sentido todo lo anterior. El caso de uso se prueba completo, con reglas reales y sin red, en milisegundos:
+
+```ts title="src/orders/application/place-order.service.test.ts"
+import { describe, expect, it } from 'vitest'
+import { PlaceOrderService } from './place-order.service'
+import { InMemoryOrderRepository } from '../adapters/memory/in-memory-order-repository'
+import type { Catalog, ChargeOutcome, PaymentGateway } from './ports'
+
+const catalog: Catalog = {
+  priceOf: async (skus) => new Map(skus.filter((s) => s !== 'GHOST').map((s) => [s, 600])),
+}
+
+class FakePayments implements PaymentGateway {
+  calls: { amountCents: number; idempotencyKey: string }[] = []
+  constructor(private readonly outcome: ChargeOutcome = { ok: true, paymentId: 'pay-1' }) {}
+  async charge(_customerId: string, amountCents: number, idempotencyKey: string) {
+    this.calls.push({ amountCents, idempotencyKey })
+    return this.outcome
+  }
+}
+
+describe('PlaceOrder', () => {
+  it('cobra el total y deja el pedido pagado', async () => {
+    const orders = new InMemoryOrderRepository()
+    const payments = new FakePayments()
+    const placeOrder = new PlaceOrderService(orders, catalog, payments)
+
+    const { orderId, totalCents } = await placeOrder.execute({ customerId: 'c-42', items: [{ sku: 'TSHIRT-M', quantity: 2 }] })
+
+    expect(totalCents).toBe(1_200)
+    expect(payments.calls).toEqual([{ amountCents: 1_200, idempotencyKey: `order-${orderId}` }])
+    expect((await orders.findById(orderId))?.snapshot().status).toBe('PAID')
+  })
+
+  it('rechaza pedidos por debajo del mínimo sin cobrar', async () => {
+    const payments = new FakePayments()
+    const placeOrder = new PlaceOrderService(new InMemoryOrderRepository(), catalog, payments)
+
+    await expect(placeOrder.execute({ customerId: 'c-42', items: [{ sku: 'STICKER', quantity: 1 }] })).rejects.toThrow('mínimo')
+    expect(payments.calls).toHaveLength(0)
+  })
+})
+```
+
+### La trampa: el fake que miente
+
+Los adaptadores en memoria tienen un riesgo: que se comporten distinto al real. Si `InMemoryOrderRepository` acepta algo que Postgres rechaza, tus tests pasan y producción falla. La defensa es una **suite de contrato**: los mismos tests corren contra todas las implementaciones del puerto.
+
+```ts title="src/orders/application/order-repository.contract.ts"
+import { describe, expect, it } from 'vitest'
+import { Order } from '../domain/order'
+import type { OrderRepository } from './ports'
+
+export function orderRepositoryContract(name: string, make: () => Promise<OrderRepository>) {
+  describe(`OrderRepository contract: ${name}`, () => {
+    it('guarda y recupera un pedido equivalente, no el mismo objeto', async () => {
+      const repo = await make()
+      const order = Order.place(repo.nextId(), 'c-1', [{ sku: 'A', quantity: 2, unitPriceCents: 600 }])
+      await repo.save(order)
+      const loaded = await repo.findById(order.id)
+      expect(loaded).not.toBe(order)
+      expect(loaded?.snapshot()).toEqual(order.snapshot())
+    })
+
+    it('save es idempotente para el mismo id', async () => {
+      const repo = await make()
+      const order = Order.place(repo.nextId(), 'c-1', [{ sku: 'A', quantity: 2, unitPriceCents: 600 }])
+      await repo.save(order)
+      order.markPaid('pay-9')
+      await repo.save(order)
+      expect((await repo.findById(order.id))?.snapshot().status).toBe('PAID')
+    })
+  })
+}
+
+// in-memory.test.ts:  orderRepositoryContract('memoria', async () => new InMemoryOrderRepository())
+// postgres.test.ts:   orderRepositoryContract('postgres', async () => new PostgresOrderRepository(await testPool()))
+```
+
+Con esto tienes la pirámide de tests que la arquitectura hexagonal promete: muchos tests rápidos del núcleo con adaptadores en memoria, unos pocos tests de integración por adaptador (contra Postgres real en un contenedor, contra el modo de prueba de Stripe) y muy pocos tests de punta a punta.
+
+<Quiz
+  question="Todos los tests del caso de uso pasan con InMemoryOrderRepository, pero en producción falla porque Postgres rechaza líneas con cantidad cero por un CHECK. ¿Qué falló en el diseño de tests?"
+  options={[
+    { text: 'Usar adaptadores en memoria es un error: los tests siempre deberían usar la base real.', why: 'Eso hace los tests lentos y frágiles. El problema no es el fake, es que nadie verificó que se comporta como el real.' },
+    { text: 'Faltó una suite de contrato que corra los mismos tests contra ambos adaptadores, y la regla de cantidad debería vivir en el dominio, no solo en la base.', correct: true, why: 'Exacto. La regla de negocio va en el dominio (Order.place la valida), y la suite de contrato detecta cuando el fake y el adaptador real divergen.' },
+    { text: 'Hay que agregar el mismo CHECK al adaptador en memoria y listo.', why: 'Arregla este caso, pero el próximo desajuste aparecerá igual. Sin contrato compartido, los fakes divergen con el tiempo.' },
+    { text: 'Es un problema del ORM.', why: 'No hay ORM involucrado; es un desajuste entre dos implementaciones del mismo puerto.' },
+  ]}
+/>
+
+## Estructura de carpetas
+
+No existe una estructura oficial. Esta es una que funciona bien y se combina con el monolito modular: hexágono **por módulo**, no uno gigante para todo el sistema.
+
+```text
+src/
+  main.ts                         ← raíz de composición
+  orders/                         ← un módulo = un hexágono
+    domain/                       ← entidades, value objects, reglas. Cero imports externos
+      order.ts
+    application/                  ← casos de uso + puertos
+      ports.ts
+      place-order.service.ts
+      place-order.service.test.ts
+      order-repository.contract.ts
+    adapters/
+      http/order-controller.ts    ← conductor
+      cli/place-order-command.ts  ← conductor
+      postgres/                   ← conducido
+      stripe/                     ← conducido
+      memory/                     ← conducido (tests y desarrollo local)
+  payments/
+    ...
+```
+
+Y la regla que hace que la estructura signifique algo, verificada en CI:
+
+```js title=".dependency-cruiser.cjs (extracto)"
+{
+  name: 'domain-is-pure',
+  severity: 'error',
+  from: { path: '/domain/' },
+  to: { path: '/(application|adapters)/|node_modules' },
+},
+{
+  name: 'application-does-not-know-adapters',
+  severity: 'error',
+  from: { path: '/application/' },
+  to: { path: '/adapters/', pathNot: '\\.test\\.ts$' },
+},
+```
+
+La segunda regla deja una excepción explícita para los tests, que sí pueden importar los adaptadores en memoria.
+
+## Errores comunes y cuándo no usarla
+
+**Puertos que copian la tecnología.** Un `OrderRepository` con métodos `query(sql)` o un puerto `HttpClient` en el núcleo. Si el nombre del puerto o de sus tipos menciona una tecnología, la frontera no está protegiendo nada.
+
+**Un puerto por clase, por si acaso.** No todo necesita interfaz. El dominio puro (cálculos, value objects) no tiene puertos: se llama directamente. Los puertos van donde hay I/O o donde hay una razón real para variar la implementación.
+
+**Mapeo en cascada.** DTO HTTP → comando → entidad → fila → entidad → DTO de respuesta. Algo de mapeo es el precio de la independencia, pero si el 90 % del código son *mappers* entre estructuras idénticas, el dominio probablemente es un CRUD.
+
+**Confundir hexagonal con microservicios.** Hexagonal organiza el **interior** de una aplicación. Un monolito puede ser hexagonal y un microservicio puede ser una bola de barro.
+
+<ProsCons
+  pros={[
+    'Las reglas de negocio se prueban en milisegundos, sin infraestructura.',
+    'Cambiar de proveedor, de base o de framework es escribir un adaptador, no reescribir lógica.',
+    'Varios mecanismos de entrada (HTTP, cola, CLI, cron) reutilizan el mismo caso de uso sin duplicar.',
+    'Las decisiones de infraestructura se pueden posponer: empiezas con adaptadores en memoria.',
+  ]}
+  cons={[
+    'Más archivos e indirección; para un CRUD simple es ceremonia pura.',
+    'Mapeos entre modelos de dominio, persistencia y transporte.',
+    'Los fakes pueden mentir si no tienes suites de contrato.',
+    'Requiere disciplina (y reglas en CI) para que la frontera no se erosione.',
+  ]}
+/>
+
+<Callout type="interview" title="Cómo explicarlo en dos frases">
+
+"El núcleo define interfaces (puertos) para todo lo que necesita del exterior y para todo lo que ofrece. Los adaptadores implementan o llaman esas interfaces con tecnologías concretas, así que todas las dependencias apuntan hacia el dominio y puedo probarlo o cambiar la infraestructura sin tocarlo". Si te preguntan cuándo no la usarías: un CRUD con pocas reglas, un prototipo desechable o un script.
+
+</Callout>
+
+<Quiz
+  question="¿Cuál de estos sistemas se beneficia MENOS de una arquitectura hexagonal completa?"
+  options={[
+    { text: 'Un motor de precios con reglas de descuento complejas que cambian cada semana.', why: 'Es el caso ideal: reglas valiosas que quieres probar rápido y aislar de la infraestructura.' },
+    { text: 'Un panel interno que lista y edita registros de una tabla, sin reglas más allá de validaciones de formato.', correct: true, why: 'Exacto. Sin lógica de dominio que proteger, los puertos y mapeos son costo sin beneficio. Un framework con acceso directo a datos es más honesto.' },
+    { text: 'Un servicio de pagos que integra tres proveedores distintos según el país.', why: 'Varias implementaciones del mismo puerto (PaymentGateway) es justamente lo que hexagonal resuelve bien.' },
+    { text: 'Un caso de uso que se dispara desde HTTP, desde una cola y desde un cron nocturno.', why: 'Tres adaptadores conductores sobre el mismo puerto evitan triplicar la lógica.' },
+  ]}
+/>
+
+<Takeaways>
+
+- Hexagonal separa adentro (dominio y casos de uso) de afuera (toda la tecnología); la frontera se cruza solo por puertos.
+- Puertos conductores: lo que la aplicación ofrece y los adaptadores llaman. Puertos conducidos: lo que la aplicación necesita y los adaptadores implementan.
+- Todas las dependencias de código apuntan hacia el núcleo; solo la raíz de composición conoce las implementaciones concretas.
+- Define los puertos por propósito y con tipos propios: si un tipo de la librería cruza la frontera, el aislamiento es falso.
+- Prueba el núcleo con adaptadores en memoria y protege esos fakes con suites de contrato que también corren contra el adaptador real.
+- Úsala donde hay reglas de negocio que proteger o varias tecnologías por puerto; en un CRUD es ceremonia.
+
+</Takeaways>
+
+## Fuentes y lecturas
+
+- Alistair Cockburn, [*Hexagonal Architecture*](https://alistair.cockburn.us/hexagonal-architecture/) (2005), el artículo original.
+- Herberto Graça, [*DDD, Hexagonal, Onion, Clean, CQRS… How I put it all together*](https://herbertograca.com/2017/11/16/explicit-architecture-01-ddd-hexagonal-onion-clean-cqrs-how-i-put-it-all-together/).
+- Martin Fowler, [*Testing Strategies in a Microservice Architecture*](https://martinfowler.com/articles/microservice-testing/): tests de componentes, de integración y de contrato aplicables a adaptadores.
+- Steve Freeman y Nat Pryce, *Growing Object-Oriented Software, Guided by Tests* (Addison-Wesley, 2009): el origen del enfoque de tests de afuera hacia adentro con puertos.
+- [dependency-cruiser](https://github.com/sverweij/dependency-cruiser) para verificar la dirección de las dependencias.

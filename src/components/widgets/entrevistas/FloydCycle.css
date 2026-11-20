@@ -1,0 +1,115 @@
+.fc-pick {
+  display: grid;
+  gap: 4px;
+}
+.fc-pick select {
+  min-height: 40px;
+  padding: 0 10px;
+  border: 1.5px solid var(--rule-strong);
+  border-radius: 8px;
+  background: var(--card);
+  color: var(--ink);
+  font-family: var(--font-sign);
+  font-size: 0.9rem;
+}
+
+.fc-svg {
+  display: block;
+  width: 100%;
+  max-width: 560px;
+  height: auto;
+  margin-inline: auto;
+  overflow: visible;
+}
+
+.fc-edge line {
+  stroke: var(--ink-3);
+  stroke-width: 2;
+}
+.fc-edge path {
+  fill: var(--ink-3);
+}
+.fc-edge.is-back line {
+  stroke: var(--line-ink);
+  stroke-dasharray: 5 3;
+}
+.fc-edge.is-back path {
+  fill: var(--line-ink);
+}
+
+.fc-none rect {
+  fill: none;
+  stroke: var(--rule-strong);
+  stroke-width: 1.5;
+  stroke-dasharray: 4 3;
+}
+.fc-none text {
+  font-family: var(--font-code);
+  font-size: 13px;
+  fill: var(--ink-3);
+}
+
+.fc-node circle {
+  fill: var(--card);
+  stroke: var(--ink-2);
+  stroke-width: 1.75;
+  transition:
+    fill 260ms var(--ease-out),
+    stroke 260ms var(--ease-out);
+}
+.fc-node.is-cycle circle {
+  fill: var(--line-tint);
+}
+.fc-node text {
+  font-family: var(--font-code);
+  font-size: 15px;
+  font-weight: 700;
+  fill: var(--ink);
+}
+.fc-node.is-slow circle {
+  fill: var(--line);
+  stroke: var(--line);
+}
+.fc-node.is-slow text {
+  fill: var(--line-on);
+}
+.fc-node.is-fast circle {
+  stroke: var(--ink);
+  stroke-width: 3.5;
+}
+.fc-node.is-meet circle {
+  stroke: var(--warn);
+  stroke-width: 3.5;
+  stroke-dasharray: 4 3;
+}
+.fc-node.is-entry circle {
+  fill: color-mix(in oklab, var(--ok) 30%, var(--card));
+  stroke: var(--ok);
+  stroke-width: 3.5;
+}
+.fc-node.is-entry text {
+  fill: var(--ink);
+}
+
+.fc-tag rect {
+  stroke-width: 1.5;
+}
+.fc-tag text {
+  font-family: var(--font-code);
+  font-size: 13px;
+  font-weight: 700;
+}
+.fc-tag--slow rect {
+  fill: var(--line);
+  stroke: var(--line);
+}
+.fc-tag--slow text {
+  fill: var(--line-on);
+}
+.fc-tag--fast rect {
+  fill: var(--card);
+  stroke: var(--ink);
+}
+.fc-tag--fast text {
+  fill: var(--ink);
+}

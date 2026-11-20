@@ -1,0 +1,126 @@
+.dpt-pick {
+  display: grid;
+  gap: 4px;
+}
+.dpt-pick select {
+  min-height: 40px;
+  padding: 0 10px;
+  border: 1.5px solid var(--rule-strong);
+  border-radius: 8px;
+  background: var(--card);
+  font-family: var(--font-code);
+  font-size: 0.86rem;
+}
+
+/* coins row */
+.dpt-coins {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-code);
+}
+.dpt-coins__lbl {
+  font-size: 0.8rem;
+  color: var(--ink-3);
+  margin-right: 4px;
+}
+.dpt-coin {
+  display: inline-grid;
+  place-items: center;
+  min-width: 34px;
+  height: 34px;
+  padding: 0 6px;
+  border-radius: 999px;
+  border: 1.5px solid var(--rule-strong);
+  background: var(--card);
+  font-weight: 700;
+  font-size: 0.9rem;
+  color: var(--ink);
+  transition:
+    background-color 220ms var(--ease-out),
+    border-color 220ms var(--ease-out),
+    color 220ms var(--ease-out);
+}
+.dpt-coin.is-on {
+  background: var(--line);
+  border-color: var(--line);
+  color: var(--line-on);
+}
+
+/* 2-D table */
+.dpt-grid-wrap {
+  overflow-x: auto;
+}
+.dpt-grid {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+.dpt-h,
+.dpt-c {
+  display: grid;
+  place-items: center;
+  aspect-ratio: 1;
+  min-height: 28px;
+  font-family: var(--font-code);
+  font-size: clamp(0.72rem, 2.6vw, 0.95rem);
+  font-weight: 600;
+}
+.dpt-h {
+  color: var(--ink-2);
+  font-weight: 700;
+  border-radius: 4px;
+  transition:
+    background-color 220ms var(--ease-out),
+    color 220ms var(--ease-out);
+}
+.dpt-h--empty {
+  color: var(--ink-3);
+  font-weight: 500;
+}
+.dpt-h.is-on {
+  background: var(--hl-soft);
+  color: var(--line-ink);
+}
+.dpt-c {
+  border: 1.5px solid var(--rule-strong);
+  border-radius: 4px;
+  background: var(--card);
+  color: var(--ink);
+  transition:
+    background-color 220ms var(--ease-out),
+    border-color 220ms var(--ease-out),
+    color 220ms var(--ease-out),
+    opacity 220ms var(--ease-out);
+}
+.dpt-c.is-empty {
+  border-style: dashed;
+  opacity: 0.45;
+}
+.dpt-c.is-cur {
+  background: var(--line);
+  border-color: var(--line);
+  color: var(--line-on);
+}
+.dpt-c.is-dep {
+  border-color: var(--line);
+  border-width: 2.5px;
+  background: var(--line-tint-2);
+}
+.dpt-c.is-dim {
+  opacity: 0.45;
+}
+.dpt-c.is-path {
+  background: var(--line-tint);
+  border-color: color-mix(in oklab, var(--line) 60%, var(--rule-strong));
+}
+.dpt-c.is-picked {
+  background: color-mix(in oklab, var(--ok) 24%, var(--card));
+  border-color: var(--ok);
+  font-weight: 800;
+}
+.dpt-c.is-here {
+  outline: 2px solid var(--line-ink);
+  outline-offset: 1px;
+}

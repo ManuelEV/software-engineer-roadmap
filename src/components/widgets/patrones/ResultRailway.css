@@ -1,0 +1,99 @@
+.rr-toggles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+}
+.rr-toggle.is-fail {
+  border-color: var(--bad);
+  color: var(--bad);
+}
+.rr-svg {
+  display: block;
+  width: 100%;
+  max-width: 620px;
+  height: auto;
+  margin: 0 auto;
+}
+.rr-rail {
+  stroke-width: 5;
+  stroke-linecap: round;
+}
+.rr-rail--ok {
+  stroke: var(--ok);
+}
+.rr-rail--err {
+  stroke: var(--bad);
+}
+.rr-rail-label {
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+.rr-rail-label--ok {
+  fill: var(--ok);
+}
+.rr-rail-label--err {
+  fill: var(--bad);
+}
+.rr-switch {
+  stroke: var(--rule-strong);
+  stroke-width: 3;
+  stroke-dasharray: 3 5;
+  stroke-linecap: round;
+  transition: stroke 260ms var(--ease-out);
+}
+.rr-station circle {
+  fill: var(--paper);
+  stroke: var(--ink-2);
+  stroke-width: 3;
+  transition:
+    stroke 260ms var(--ease-out),
+    opacity 260ms var(--ease-out);
+}
+.rr-station text {
+  font-size: 15px;
+  font-weight: 600;
+  fill: var(--ink);
+}
+.rr-station.is-switched .rr-switch {
+  stroke: var(--bad);
+  stroke-dasharray: none;
+  stroke-width: 5;
+}
+.rr-station.is-switched circle {
+  stroke: var(--bad);
+}
+.rr-station.is-skipped {
+  opacity: 0.38;
+}
+.rr-train {
+  fill: var(--card);
+  stroke: var(--line);
+  stroke-width: 4;
+}
+.rr-train.is-err {
+  stroke: var(--bad);
+}
+.rr-readout {
+  display: grid;
+  gap: var(--s-2);
+}
+.rr-code {
+  display: block;
+  font-family: var(--font-code);
+  font-size: 0.8rem;
+  white-space: pre;
+  overflow-x: auto;
+  color: var(--ink-2);
+}
+.rr-result code {
+  font-family: var(--font-code);
+  font-size: 0.82rem;
+  word-break: break-word;
+}
+.rr-result.is-ok code {
+  color: var(--ok);
+}
+.rr-result.is-err code {
+  color: var(--bad);
+}

@@ -1,0 +1,42 @@
+.cst-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: 320px;
+}
+.cst-bar {
+  fill: var(--line);
+}
+.cst-bar.is-over {
+  fill: var(--bad);
+}
+.cst-cap {
+  stroke: var(--ink-3);
+  stroke-width: 1.5;
+  stroke-dasharray: 5 4;
+}
+.cst-cap-label,
+.cst-exp-label,
+.cst-tick {
+  font-family: var(--font-sign);
+  font-size: 13px;
+  fill: var(--ink-3);
+}
+.cst-exp-label {
+  fill: var(--ink-2);
+  font-weight: 700;
+}
+.cst-exp {
+  stroke: var(--ink-2);
+  stroke-width: 1.5;
+}
+.cst-axis {
+  stroke: var(--rule-strong);
+  stroke-width: 1.5;
+}
+.cst-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-3) var(--s-5);
+  margin-bottom: var(--s-3);
+}

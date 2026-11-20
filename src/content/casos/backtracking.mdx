@@ -1,0 +1,859 @@
+import { RecursionTree } from '../../components/widgets/entrevistas/RecursionTree'
+import { NQueens } from '../../components/widgets/entrevistas/NQueens'
+
+"Genera todos los subconjuntos." "Todas las permutaciones." "Todas las combinaciones que sumen 7." "¿Está esta palabra en el tablero?" Cuando el enunciado pide **todas** las soluciones, o pide encontrar una en un espacio que no tiene atajo, la respuesta es casi siempre *backtracking*: construir la solución de a una decisión, explorar lo que sigue y, al volver, **deshacer** la decisión para probar la siguiente.
+
+Es el patrón que más miedo da y el que más se parece a sí mismo. Todos los problemas de esta familia salen de la misma plantilla de diez líneas; lo que cambia es qué guardas en el camino, qué opciones hay en cada paso y cuándo cortas una rama. Si entiendes la plantilla y el árbol que dibuja, los problemas se vuelven variaciones, y en la entrevista puedes dedicar el tiempo a lo que de verdad se evalúa: la poda y la complejidad.
+
+<Sketch
+  width={640}
+  height={320}
+  caption="Backtracking en un dibujo: cada flecha hacia abajo es una decisión que se agrega a path; al volver, se deshace para probar la siguiente."
+  items={[
+    { type: 'text', x: 24, y: 34, text: 'elegir, explorar, deshacer', size: 22, tone: 'line' },
+    { type: 'box', x: 250, y: 56, w: 64, h: 36, label: '[ ]', font: 'code' },
+    { type: 'arrow', from: [262, 94], to: [178, 140], tone: 'line', label: 'elegir 1', labelAt: [170, 112] },
+    { type: 'box', x: 130, y: 144, w: 66, h: 36, label: '[1]', font: 'code', tone: 'line' },
+    { type: 'arrow', from: [160, 182], to: [154, 226], tone: 'line', label: 'elegir 2', labelAt: [88, 210] },
+    { type: 'box', x: 110, y: 230, w: 92, h: 36, label: '[1,2]', font: 'code', tone: 'line' },
+    { type: 'arrow', from: [206, 244], to: [202, 166], bend: 34, dashed: true, tone: 'bad', label: 'deshacer', labelAt: [272, 214] },
+    { type: 'arrow', from: [300, 94], to: [388, 140], tone: 'line', label: 'elegir 2', labelAt: [392, 112] },
+    { type: 'box', x: 370, y: 144, w: 66, h: 36, label: '[2]', font: 'code' },
+    { type: 'cells', x: 480, y: 228, values: [1, 2], size: 44, label: 'path', states: ['line', 'line'] },
+    { type: 'text', x: 470, y: 300, text: 'crece y se achica', size: 18, tone: 'pencil' },
+    { type: 'text', x: 24, y: 300, text: 'cada nodo: una llamada', size: 18, tone: 'pencil' },
+  ]}
+/>
+
+## La plantilla: elegir, explorar, deshacer
+
+Imagina la búsqueda como un **árbol de decisiones**. La raíz es "no decidí nada". Cada arista es una decisión ("pongo el 1", "no pongo el 1", "la reina va en la columna 2"). Cada nodo es un estado parcial y las hojas son estados completos, válidos o no. Backtracking es un **DFS sobre ese árbol**, que nunca construyes en memoria: lo recorres con la recursión, y la pila de llamadas es el camino desde la raíz hasta donde estás.
+
+Para escribirlo, contesta tres preguntas antes de tocar el teclado:
+
+1. **¿Cuál es el estado?** Casi siempre un `path` (la decisión parcial) y quizás un índice o un conjunto de usados.
+2. **¿Cuáles son las opciones en cada paso?** Los elementos que quedan, las letras de un dígito, las columnas de una fila.
+3. **¿Cuándo está completo?** Al llegar a cierta longitud, a una suma o al final de la entrada. Ese es el caso base, y ahí guardas una **copia** del camino.
+
+<CodeTabs>
+
+```java title="Java"
+abstract class Backtracking<C> {
+    final List<List<C>> res = new ArrayList<>();
+    final List<C> path = new ArrayList<>();
+
+    abstract boolean isComplete();
+    abstract List<C> choices();
+    abstract boolean isValid(C choice);
+
+    void backtrack() {
+        if (isComplete()) {
+            res.add(new ArrayList<>(path));       // guardar una COPIA
+            return;
+        }
+        for (C choice : choices()) {
+            if (!isValid(choice)) continue;       // poda: esta rama no puede llevar a nada
+            path.add(choice);                     // elegir
+            backtrack();                          // explorar
+            path.remove(path.size() - 1);         // deshacer: volver al estado de antes
+        }
+    }
+}
+```
+
+```python title="Python"
+def backtrack(state, res):
+    if is_complete(state):
+        res.append(state.path[:])      # guardar una COPIA
+        return
+    for choice in choices(state):
+        if not is_valid(state, choice):
+            continue                   # poda: esta rama no puede llevar a nada
+        make(state, choice)            # elegir
+        backtrack(state, res)          # explorar
+        undo(state, choice)            # deshacer: volver al estado de antes
+```
+
+```ts title="TypeScript"
+function backtrack(state: State, res: Choice[][]): void {
+  if (isComplete(state)) {
+    res.push([...state.path]) // guardar una COPIA
+    return
+  }
+  for (const choice of choices(state)) {
+    if (!isValid(state, choice)) continue // poda: esta rama no puede llevar a nada
+    make(state, choice) // elegir
+    backtrack(state, res) // explorar
+    undo(state, choice) // deshacer: volver al estado de antes
+  }
+}
+```
+
+</CodeTabs>
+
+La línea de **deshacer** es la que da nombre al patrón. Como compartes un único `path` mutable entre todas las llamadas (más barato que copiarlo en cada paso), al volver de una rama tienes que dejarlo exactamente como estaba antes de elegir. Si no, la siguiente opción hereda basura de la anterior.
+
+La **poda** es la otra mitad. Una rama que no puede llevar a una solución válida (la suma ya se pasó, la reina ya está atacada, la letra no coincide) se corta sin entrar. No cambia el peor caso teórico de muchos problemas, pero en la práctica puede ser la diferencia entre millones de nodos y unos pocos cientos, como verás con las N reinas.
+
+<Callout type="interview">
+
+En backtracking el entrevistador evalúa si **estructuras** la recursión con claridad (estado, opciones, caso base), si **copias** el camino al guardarlo y lo **deshaces** al volver, si se te ocurre **podar** y si das la complejidad exponencial sin esconderla. Nadie espera que un backtracking sea polinomial; sí esperan que sepas cuánto cuesta y por qué.
+
+</Callout>
+
+## Subsets y Subsets II
+
+**Enunciado.** Dado un arreglo de enteros **distintos**, devuelve todos sus subconjuntos (el conjunto potencia), en cualquier orden. Con `[1, 2, 3]`: `[[], [1], [1, 2], [1, 2, 3], [1, 3], [2], [2, 3], [3]]`.
+
+**Qué preguntar.** ¿Los elementos son distintos? (Si no, es Subsets II.) ¿Importa el orden de la salida o dentro de cada subconjunto? ¿El conjunto vacío cuenta? (Sí.) ¿Qué tamaño máximo tiene el arreglo? (En LeetCode, hasta 10: la cota pequeña es una pista de que la respuesta es exponencial.)
+
+**Fuerza bruta.** Aquí la fuerza bruta **es** la solución: hay 2ⁿ subconjuntos y tienes que generarlos todos, así que ningún algoritmo baja de O(2ⁿ). Una alternativa iterativa: cada número del 0 al 2ⁿ − 1 es una máscara de bits que dice qué elementos entran. Vale mencionarla.
+
+**La idea.** Cada nodo del árbol es un subconjunto válido, así que lo guardas **al entrar**, no solo en las hojas. Para no generar `[1, 2]` y `[2, 1]` por separado, cada llamada recibe un índice `start` y solo elige elementos **desde ahí en adelante**: los hijos de `[1]` pueden agregar 2 o 3, pero los hijos de `[2]` solo pueden agregar 3.
+
+<Callout type="tip" title="Señal para reconocer el patrón">
+
+"Todos los subconjuntos", "todas las combinaciones", "todas las formas de…" con n pequeño (hasta 15 o 20) es **backtracking**. Si el orden no importa (combinaciones), usa un índice `start`; si importa (permutaciones), un arreglo de usados.
+
+</Callout>
+
+<RecursionTree />
+
+Recorre los tres problemas del selector. En **Subsets**, todos los nodos se guardan y el árbol tiene exactamente 8. En **Subsets II** con `[1, 2, 2]`, aparecen ramas punteadas: son las que se podaron por duplicadas. En **Permutations**, solo se guardan las hojas, y fíjate cómo `path` crece hasta 3 y se achica en cada vuelta.
+
+<CodeTabs>
+
+```java title="Java"
+class Solution {
+    public List<List<Integer>> subsets(int[] nums) {
+        List<List<Integer>> res = new ArrayList<>();
+        dfs(nums, 0, new ArrayList<>(), res);
+        return res;
+    }
+
+    private void dfs(int[] nums, int start, List<Integer> path, List<List<Integer>> res) {
+        res.add(new ArrayList<>(path));           // cada nodo es un subconjunto (copia)
+        for (int i = start; i < nums.length; i++) {
+            path.add(nums[i]);                    // elegir
+            dfs(nums, i + 1, path, res);          // explorar: solo índices posteriores
+            path.remove(path.size() - 1);         // deshacer (por índice, no por valor)
+        }
+    }
+}
+```
+
+```python title="Python"
+def subsets(nums: list[int]) -> list[list[int]]:
+    res: list[list[int]] = []
+    path: list[int] = []
+
+    def dfs(start: int) -> None:
+        res.append(path[:])               # cada nodo es un subconjunto
+        for i in range(start, len(nums)):
+            path.append(nums[i])          # elegir
+            dfs(i + 1)                    # explorar: solo índices posteriores
+            path.pop()                    # deshacer
+
+    dfs(0)
+    return res
+```
+
+```ts title="TypeScript"
+function subsets(nums: number[]): number[][] {
+  const res: number[][] = []
+  const path: number[] = []
+
+  const dfs = (start: number): void => {
+    res.push([...path]) // cada nodo es un subconjunto
+    for (let i = start; i < nums.length; i++) {
+      path.push(nums[i]) // elegir
+      dfs(i + 1) // explorar: solo índices posteriores
+      path.pop() // deshacer
+    }
+  }
+
+  dfs(0)
+  return res
+}
+```
+
+</CodeTabs>
+
+**Complejidad.** 2ⁿ subconjuntos y una copia de hasta n elementos por cada uno: **O(n · 2ⁿ)** de tiempo. Memoria O(n) para la recursión y el camino, más O(n · 2ⁿ) para la salida (que no se puede evitar).
+
+<Callout type="tip" title="En Java">
+
+- Guarda `new ArrayList<>(path)`, no `path`: `res.add(path)` guarda la misma lista que vas a seguir modificando.
+- En una `List<Integer>`, `remove(int)` borra **por índice** y `remove(Object)` **por valor**. `path.remove(path.size() - 1)` es correcto; `path.remove(x)` con un `int x` borra la posición x, no el valor x.
+- `Arrays.sort(nums)` sobre un `int[]` ordena números sin comparador. Si necesitas un orden propio, hace falta `Integer[]` o una lista.
+
+</Callout>
+
+**Casos borde y errores típicos.** Arreglo vacío: la respuesta es `[[]]`, no `[]`. Guardar `path` en vez de una copia (lo vemos en la sección de errores). Llamar a `dfs(start + 1)` en vez de `dfs(i + 1)`: genera subconjuntos repetidos.
+
+### Subsets II: con duplicados
+
+Si la entrada tiene repetidos, como `[1, 2, 2]`, el código anterior genera `[2]` dos veces (una por cada 2) y `[1, 2]` dos veces. La solución tiene dos partes: **ordenar** para que los iguales queden juntos y, en cada nivel del árbol, **saltar un elemento si es igual al anterior y no es la primera opción de ese nivel**.
+
+<CodeTabs>
+
+```java title="Java"
+class Solution {
+    public List<List<Integer>> subsetsWithDup(int[] nums) {
+        Arrays.sort(nums);                        // los iguales quedan juntos
+        List<List<Integer>> res = new ArrayList<>();
+        dfs(nums, 0, new ArrayList<>(), res);
+        return res;
+    }
+
+    private void dfs(int[] nums, int start, List<Integer> path, List<List<Integer>> res) {
+        res.add(new ArrayList<>(path));
+        for (int i = start; i < nums.length; i++) {
+            if (i > start && nums[i] == nums[i - 1]) continue; // poda: misma elección en este nivel
+            path.add(nums[i]);
+            dfs(nums, i + 1, path, res);
+            path.remove(path.size() - 1);
+        }
+    }
+}
+```
+
+```python title="Python"
+def subsets_with_dup(nums: list[int]) -> list[list[int]]:
+    nums.sort()                           # los iguales quedan juntos
+    res: list[list[int]] = []
+    path: list[int] = []
+
+    def dfs(start: int) -> None:
+        res.append(path[:])
+        for i in range(start, len(nums)):
+            if i > start and nums[i] == nums[i - 1]:
+                continue                  # poda: misma elección en este nivel
+            path.append(nums[i])
+            dfs(i + 1)
+            path.pop()
+
+    dfs(0)
+    return res
+```
+
+```ts title="TypeScript"
+function subsetsWithDup(nums: number[]): number[][] {
+  nums.sort((a, b) => a - b) // los iguales quedan juntos (¡sin comparador, JS ordena como texto!)
+  const res: number[][] = []
+  const path: number[] = []
+
+  const dfs = (start: number): void => {
+    res.push([...path])
+    for (let i = start; i < nums.length; i++) {
+      if (i > start && nums[i] === nums[i - 1]) continue // poda: misma elección en este nivel
+      path.push(nums[i])
+      dfs(i + 1)
+      path.pop()
+    }
+  }
+
+  dfs(0)
+  return res
+}
+```
+
+</CodeTabs>
+
+La condición es `i > start`, no `i > 0`. Con `i > 0` saltarías también el segundo 2 cuando el primero ya está en el camino, y perderías `[2, 2]` y `[1, 2, 2]`. Saltar solo cuando `i > start` significa: "en este nivel ya probé empezar con un 2; empezar con el otro 2 daría exactamente las mismas ramas".
+
+<Quiz
+  question="En Subsets II con nums = [1, 2, 2], escribes la poda como `if i > 0 and nums[i] == nums[i - 1]: continue`. ¿Qué devuelve?"
+  options={[
+    { text: 'Los 6 subconjuntos correctos.', why: 'Con i > 0 también se salta el segundo 2 cuando el camino ya tiene el primero, así que nunca se forma [2, 2].' },
+    { text: 'Le faltan [2, 2] y [1, 2, 2].', correct: true, why: 'Esos dos subconjuntos necesitan elegir el segundo 2 como primera opción del nivel siguiente (i == start), y la condición i > 0 lo poda. Por eso la condición es i > start.' },
+    { text: 'Incluye [2] dos veces.', why: 'Ese es el bug de no podar nada. Con i > 0 se poda de más, no de menos.' },
+  ]}
+/>
+
+## Permutations y Combination Sum
+
+### Permutations
+
+**Enunciado.** Dado un arreglo de enteros distintos, devuelve todas sus permutaciones. Con `[1, 2, 3]` hay 6: `[1,2,3]`, `[1,3,2]`, `[2,1,3]`, `[2,3,1]`, `[3,1,2]`, `[3,2,1]`.
+
+**La idea.** Aquí el orden importa, así que en cada nivel cualquier elemento **no usado** puede ir en la siguiente posición. Un arreglo `used` de booleanos dice cuáles ya están en el camino. Solo las hojas (camino de longitud n) son soluciones.
+
+<CodeTabs>
+
+```java title="Java"
+class Solution {
+    public List<List<Integer>> permute(int[] nums) {
+        List<List<Integer>> res = new ArrayList<>();
+        dfs(nums, new boolean[nums.length], new ArrayList<>(), res);
+        return res;
+    }
+
+    private void dfs(int[] nums, boolean[] used, List<Integer> path, List<List<Integer>> res) {
+        if (path.size() == nums.length) {
+            res.add(new ArrayList<>(path));
+            return;
+        }
+        for (int i = 0; i < nums.length; i++) {
+            if (used[i]) continue;
+            used[i] = true;                       // elegir (dos cosas)
+            path.add(nums[i]);
+            dfs(nums, used, path, res);           // explorar
+            path.remove(path.size() - 1);         // deshacer (las mismas dos cosas)
+            used[i] = false;
+        }
+    }
+}
+```
+
+```python title="Python"
+def permute(nums: list[int]) -> list[list[int]]:
+    res: list[list[int]] = []
+    path: list[int] = []
+    used = [False] * len(nums)
+
+    def dfs() -> None:
+        if len(path) == len(nums):
+            res.append(path[:])
+            return
+        for i in range(len(nums)):
+            if used[i]:
+                continue
+            used[i] = True                # elegir (dos cosas)
+            path.append(nums[i])
+            dfs()                         # explorar
+            path.pop()                    # deshacer (las mismas dos cosas)
+            used[i] = False
+
+    dfs()
+    return res
+```
+
+```ts title="TypeScript"
+function permute(nums: number[]): number[][] {
+  const res: number[][] = []
+  const path: number[] = []
+  const used = new Array<boolean>(nums.length).fill(false)
+
+  const dfs = (): void => {
+    if (path.length === nums.length) {
+      res.push([...path])
+      return
+    }
+    for (let i = 0; i < nums.length; i++) {
+      if (used[i]) continue
+      used[i] = true // elegir (dos cosas)
+      path.push(nums[i])
+      dfs() // explorar
+      path.pop() // deshacer (las mismas dos cosas)
+      used[i] = false
+    }
+  }
+
+  dfs()
+  return res
+}
+```
+
+</CodeTabs>
+
+**Complejidad.** n! permutaciones y O(n) para copiar cada una: **O(n · n!)**. Cada nodo interno además recorre las n opciones, lo que no cambia el orden. **Variante:** *Permutations II* (con duplicados) combina las dos ideas: ordena y salta `nums[i]` si es igual a `nums[i - 1]` y el anterior **no** está usado en este momento.
+
+### Combination Sum
+
+**Enunciado.** Dados candidatos distintos y positivos y un `target`, devuelve todas las combinaciones (sin importar el orden) que suman `target`; **cada candidato se puede usar varias veces**. Con `[2, 3, 6, 7]` y `7`: `[[2, 2, 3], [7]]`.
+
+**Qué preguntar.** ¿Los candidatos son positivos? (Si hubiera ceros o negativos, la búsqueda podría no terminar.) ¿Se pueden repetir? ¿Hay duplicados en la entrada?
+
+**La idea.** Es Subsets con dos cambios. Como un número se puede reutilizar, el hijo recibe `i` y no `i + 1`. Y como todos son positivos, puedes **podar**: si ordenas los candidatos y uno ya se pasa de lo que falta, todos los siguientes también, así que cortas el bucle con `break`.
+
+<CodeTabs>
+
+```java title="Java"
+class Solution {
+    public List<List<Integer>> combinationSum(int[] candidates, int target) {
+        Arrays.sort(candidates);
+        List<List<Integer>> res = new ArrayList<>();
+        dfs(candidates, 0, target, new ArrayList<>(), res);
+        return res;
+    }
+
+    private void dfs(int[] cand, int start, int remaining, List<Integer> path, List<List<Integer>> res) {
+        if (remaining == 0) {
+            res.add(new ArrayList<>(path));
+            return;
+        }
+        for (int i = start; i < cand.length; i++) {
+            if (cand[i] > remaining) break;       // poda: ordenados, los siguientes son mayores
+            path.add(cand[i]);
+            dfs(cand, i, remaining - cand[i], path, res); // i y no i + 1: se puede reutilizar
+            path.remove(path.size() - 1);
+        }
+    }
+}
+```
+
+```python title="Python"
+def combination_sum(candidates: list[int], target: int) -> list[list[int]]:
+    candidates.sort()
+    res: list[list[int]] = []
+    path: list[int] = []
+
+    def dfs(start: int, remaining: int) -> None:
+        if remaining == 0:
+            res.append(path[:])
+            return
+        for i in range(start, len(candidates)):
+            c = candidates[i]
+            if c > remaining:
+                break                     # poda: ordenados, los siguientes son mayores
+            path.append(c)
+            dfs(i, remaining - c)         # i y no i + 1: se puede reutilizar
+            path.pop()
+
+    dfs(0, target)
+    return res
+```
+
+```ts title="TypeScript"
+function combinationSum(candidates: number[], target: number): number[][] {
+  candidates.sort((a, b) => a - b)
+  const res: number[][] = []
+  const path: number[] = []
+
+  const dfs = (start: number, remaining: number): void => {
+    if (remaining === 0) {
+      res.push([...path])
+      return
+    }
+    for (let i = start; i < candidates.length; i++) {
+      const c = candidates[i]
+      if (c > remaining) break // poda: ordenados, los siguientes son mayores
+      path.push(c)
+      dfs(i, remaining - c) // i y no i + 1: se puede reutilizar
+      path.pop()
+    }
+  }
+
+  dfs(0, target)
+  return res
+}
+```
+
+</CodeTabs>
+
+**Complejidad.** Con T = target y m = el candidato mínimo, el árbol tiene profundidad como mucho T/m y en el peor caso O(n^(T/m)) nodos. Es exponencial y está bien decirlo así; la poda con `break` es la que lo hace usable. **Variantes:** *Combination Sum II* (cada candidato una vez y con duplicados en la entrada: `i + 1` y el salto de Subsets II) y *Combination Sum III*.
+
+## Letter Combinations y Word Search
+
+### Letter Combinations of a Phone Number
+
+**Enunciado.** Dado un string de dígitos del 2 al 9, devuelve todas las palabras que se pueden formar con las letras de un teclado de teléfono (2 → abc, 3 → def, …, 7 → pqrs, 9 → wxyz). Con `"23"`: `["ad", "ae", "af", "bd", "be", "bf", "cd", "ce", "cf"]`.
+
+**La idea.** El nivel i del árbol corresponde al dígito i y sus opciones son las letras de ese dígito. No hay poda posible: todas las ramas son soluciones. El único caso borde que todos olvidan: con `""` la respuesta es `[]`, no `[""]`.
+
+<CodeTabs>
+
+```java title="Java"
+class Solution {
+    private static final String[] PHONE = {"", "", "abc", "def", "ghi", "jkl", "mno", "pqrs", "tuv", "wxyz"};
+
+    public List<String> letterCombinations(String digits) {
+        List<String> res = new ArrayList<>();
+        if (digits.isEmpty()) return res;
+        dfs(digits, 0, new StringBuilder(), res);
+        return res;
+    }
+
+    private void dfs(String digits, int i, StringBuilder path, List<String> res) {
+        if (i == digits.length()) {
+            res.add(path.toString());
+            return;
+        }
+        for (char ch : PHONE[digits.charAt(i) - '0'].toCharArray()) { // '7' - '0' == 7
+            path.append(ch);
+            dfs(digits, i + 1, path, res);
+            path.deleteCharAt(path.length() - 1);
+        }
+    }
+}
+```
+
+```python title="Python"
+PHONE = {"2": "abc", "3": "def", "4": "ghi", "5": "jkl",
+         "6": "mno", "7": "pqrs", "8": "tuv", "9": "wxyz"}
+
+def letter_combinations(digits: str) -> list[str]:
+    if not digits:
+        return []
+    res: list[str] = []
+    path: list[str] = []
+
+    def dfs(i: int) -> None:
+        if i == len(digits):
+            res.append("".join(path))
+            return
+        for ch in PHONE[digits[i]]:
+            path.append(ch)
+            dfs(i + 1)
+            path.pop()
+
+    dfs(0)
+    return res
+```
+
+```ts title="TypeScript"
+const PHONE: Record<string, string> = {
+  '2': 'abc', '3': 'def', '4': 'ghi', '5': 'jkl',
+  '6': 'mno', '7': 'pqrs', '8': 'tuv', '9': 'wxyz',
+}
+
+function letterCombinations(digits: string): string[] {
+  if (!digits) return []
+  const res: string[] = []
+  const path: string[] = []
+
+  const dfs = (i: number): void => {
+    if (i === digits.length) {
+      res.push(path.join(''))
+      return
+    }
+    for (const ch of PHONE[digits[i]]) {
+      path.push(ch)
+      dfs(i + 1)
+      path.pop()
+    }
+  }
+
+  dfs(0)
+  return res
+}
+```
+
+</CodeTabs>
+
+En Java, `digits.charAt(i) - '0'` convierte el carácter `'7'` en el número 7, porque un `char` es un número: así se indexa el arreglo `PHONE`.
+
+**Complejidad.** Hasta 4 letras por dígito y n dígitos: **O(n · 4ⁿ)**.
+
+### Word Search
+
+**Enunciado.** Dada una grilla de letras y una palabra, di si la palabra se puede formar con letras de celdas adyacentes (horizontal o vertical), **sin usar la misma celda dos veces**. En la grilla `[["A","B","C","E"],["S","F","C","S"],["A","D","E","E"]]`, `"ABCCED"` existe y `"ABCB"` no (necesitaría volver a usar la B).
+
+**Qué preguntar.** ¿Diagonales? ¿Mayúsculas y minúsculas? ¿Puedo modificar la grilla temporalmente?
+
+**La idea.** Para cada celda que coincide con la primera letra, haz un DFS que en el paso i busque `word[i]` en las cuatro vecinas. La regla "sin repetir celda" es el corazón del backtracking: **marca** la celda al entrar (por ejemplo, cambiándola por `#`) y **desmárcala** al salir, para que otros caminos puedan usarla. La poda es inmediata: si la letra no coincide, la rama muere.
+
+<CodeTabs>
+
+```java title="Java"
+class Solution {
+    public boolean exist(char[][] board, String word) {
+        for (int r = 0; r < board.length; r++)
+            for (int c = 0; c < board[0].length; c++)
+                if (dfs(board, word, r, c, 0)) return true;
+        return false;
+    }
+
+    private boolean dfs(char[][] board, String word, int r, int c, int i) {
+        if (i == word.length()) return true;
+        if (r < 0 || r >= board.length || c < 0 || c >= board[0].length || board[r][c] != word.charAt(i))
+            return false;                         // fuera, ya usada o letra distinta: poda
+        board[r][c] = '#';                        // marcar
+        boolean found = dfs(board, word, r + 1, c, i + 1) || dfs(board, word, r - 1, c, i + 1)
+                || dfs(board, word, r, c + 1, i + 1) || dfs(board, word, r, c - 1, i + 1);
+        board[r][c] = word.charAt(i);             // desmarcar: otros caminos pueden usarla
+        return found;
+    }
+}
+```
+
+```python title="Python"
+def exist(board: list[list[str]], word: str) -> bool:
+    rows, cols = len(board), len(board[0])
+
+    def dfs(r: int, c: int, i: int) -> bool:
+        if i == len(word):
+            return True
+        if not (0 <= r < rows and 0 <= c < cols) or board[r][c] != word[i]:
+            return False                  # fuera, ya usada o letra distinta: poda
+        board[r][c] = "#"                 # marcar
+        found = (dfs(r + 1, c, i + 1) or dfs(r - 1, c, i + 1)
+                 or dfs(r, c + 1, i + 1) or dfs(r, c - 1, i + 1))
+        board[r][c] = word[i]             # desmarcar: otros caminos pueden usarla
+        return found
+
+    return any(dfs(r, c, 0) for r in range(rows) for c in range(cols))
+```
+
+```ts title="TypeScript"
+function exist(board: string[][], word: string): boolean {
+  const rows = board.length
+  const cols = board[0].length
+
+  const dfs = (r: number, c: number, i: number): boolean => {
+    if (i === word.length) return true
+    if (r < 0 || r >= rows || c < 0 || c >= cols || board[r][c] !== word[i]) return false
+    board[r][c] = '#' // marcar
+    const found = dfs(r + 1, c, i + 1) || dfs(r - 1, c, i + 1) || dfs(r, c + 1, i + 1) || dfs(r, c - 1, i + 1)
+    board[r][c] = word[i] // desmarcar: otros caminos pueden usarla
+    return found
+  }
+
+  for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) if (dfs(r, c, 0)) return true
+  return false
+}
+```
+
+</CodeTabs>
+
+**Complejidad.** Hay R·C puntos de partida; desde cada uno, el primer paso tiene 4 opciones y los siguientes como mucho 3 (no se vuelve a la celda de la que vienes): **O(R·C · 3^L)**, con L el largo de la palabra. Memoria O(L) por la recursión.
+
+**Errores típicos y repreguntas.** Olvidar desmarcar (la celda queda inutilizable para los caminos siguientes y la respuesta da `False` cuando debía dar `True`). Usar un conjunto de visitados global en vez de uno por camino. Una optimización que suma puntos: si una letra de la palabra aparece más veces en ella que en la grilla, responde `False` sin buscar; y si la última letra es más rara que la primera, busca la palabra al revés. **Word Search II** (muchas palabras a la vez) se resuelve con un *trie* para no repetir la búsqueda por cada palabra.
+
+## N-Queens: podar con conjuntos
+
+**Enunciado.** Coloca n reinas en un tablero de n × n sin que dos se ataquen (misma fila, columna o diagonal) y devuelve todas las configuraciones. Para n = 4 hay 2 soluciones; para n = 8, 92.
+
+**Qué preguntar.** ¿Todas las soluciones o solo cuántas hay (*N-Queens II*)? ¿Qué formato de salida? (En LeetCode, una lista de strings con `Q` y `.` por fila.)
+
+**Fuerza bruta.** Elegir n casillas de n² y validar: C(n², n), que para n = 8 son más de 4.000 millones de combinaciones. Algo menos absurdo: una reina por fila y cualquier columna, n^n tableros (16,7 millones para n = 8), validados al final.
+
+**La idea.** Coloca **una reina por fila**, de arriba hacia abajo: así las filas nunca chocan. Para las columnas y las diagonales, guarda tres conjuntos: columnas ocupadas, diagonales `r - c` y antidiagonales `r + c` (todas las casillas de una misma diagonal comparten esos valores). Comprobar si una casilla está atacada pasa a ser O(1) y, sobre todo, **podas en cuanto una casilla está atacada**, sin bajar a las filas siguientes.
+
+<Sketch
+  width={640}
+  height={290}
+  caption="Por qué bastan dos conjuntos para las diagonales: en una misma diagonal, r − c es constante; en una misma antidiagonal, lo es r + c."
+  items={[
+    { type: 'text', x: 60, y: 36, text: 'r − c', size: 22, font: 'code', tone: 'line' },
+    { type: 'text', x: 380, y: 36, text: 'r + c', size: 22, font: 'code', tone: 'ok', with: true },
+    { type: 'cells', x: 60, y: 56, values: [0, -1, -2, -3], size: 40, states: ['line', null, null, null] },
+    { type: 'cells', x: 380, y: 56, values: [0, 1, 2, 3], size: 40, states: [null, null, null, 'ok'], with: true },
+    { type: 'cells', x: 60, y: 96, values: [1, 0, -1, -2], size: 40, states: [null, 'line', null, null] },
+    { type: 'cells', x: 380, y: 96, values: [1, 2, 3, 4], size: 40, states: [null, null, 'ok', null], with: true },
+    { type: 'cells', x: 60, y: 136, values: [2, 1, 0, -1], size: 40, states: [null, null, 'line', null] },
+    { type: 'cells', x: 380, y: 136, values: [2, 3, 4, 5], size: 40, states: [null, 'ok', null, null], with: true },
+    { type: 'cells', x: 60, y: 176, values: [3, 2, 1, 0], size: 40, states: [null, null, null, 'line'] },
+    { type: 'cells', x: 380, y: 176, values: [3, 4, 5, 6], size: 40, states: ['ok', null, null, null], with: true },
+    { type: 'text', x: 60, y: 242, text: 'diagonal: todos 0', size: 20, tone: 'line' },
+    { type: 'text', x: 380, y: 242, text: 'antidiagonal: todos 3', size: 20, tone: 'ok' },
+    { type: 'text', x: 60, y: 280, text: 'misma diagonal, mismo número: un set por dirección', size: 20, tone: 'pencil' },
+  ]}
+/>
+
+<NQueens />
+
+Empieza con 4 × 4: verás la reina de la fila 0 en la columna 0 llevar a un callejón sin salida, el backtrack que la mueve a la columna 1 y la solución `[1, 3, 0, 2]`. Después prueba 5 × 5, que encuentra una solución casi sin retroceder, y 3 × 3, que agota todas las opciones y no tiene solución. Los contadores comparan el árbol completo con poda contra el que recorrerías probando todas las columnas en cada fila.
+
+<CodeTabs>
+
+```java title="Java"
+class Solution {
+    private int n;
+    private final Set<Integer> cols = new HashSet<>();
+    private final Set<Integer> d1 = new HashSet<>();      // diagonales: r - c es constante
+    private final Set<Integer> d2 = new HashSet<>();      // antidiagonales: r + c es constante
+    private final List<Integer> board = new ArrayList<>(); // board.get(r) = columna de la reina de la fila r
+    private final List<List<String>> res = new ArrayList<>();
+
+    public List<List<String>> solveNQueens(int n) {
+        this.n = n;
+        place(0);
+        return res;
+    }
+
+    private void place(int r) {
+        if (r == n) {
+            List<String> rows = new ArrayList<>();
+            for (int c : board) rows.add(".".repeat(c) + "Q" + ".".repeat(n - c - 1));
+            res.add(rows);
+            return;
+        }
+        for (int c = 0; c < n; c++) {
+            if (cols.contains(c) || d1.contains(r - c) || d2.contains(r + c)) continue; // atacada: poda
+            cols.add(c); d1.add(r - c); d2.add(r + c);
+            board.add(c);
+            place(r + 1);
+            board.remove(board.size() - 1);
+            cols.remove(c); d1.remove(r - c); d2.remove(r + c);
+        }
+    }
+}
+```
+
+```python title="Python"
+def solve_n_queens(n: int) -> list[list[str]]:
+    cols: set[int] = set()
+    d1: set[int] = set()                  # diagonales: r - c es constante
+    d2: set[int] = set()                  # antidiagonales: r + c es constante
+    board: list[int] = []                 # board[r] = columna de la reina de la fila r
+    res: list[list[str]] = []
+
+    def place(r: int) -> None:
+        if r == n:
+            res.append(["." * c + "Q" + "." * (n - c - 1) for c in board])
+            return
+        for c in range(n):
+            if c in cols or r - c in d1 or r + c in d2:
+                continue                  # atacada: poda
+            cols.add(c); d1.add(r - c); d2.add(r + c)
+            board.append(c)
+            place(r + 1)
+            board.pop()
+            cols.remove(c); d1.remove(r - c); d2.remove(r + c)
+
+    place(0)
+    return res
+```
+
+```ts title="TypeScript"
+function solveNQueens(n: number): string[][] {
+  const cols = new Set<number>()
+  const d1 = new Set<number>() // diagonales: r - c es constante
+  const d2 = new Set<number>() // antidiagonales: r + c es constante
+  const board: number[] = [] // board[r] = columna de la reina de la fila r
+  const res: string[][] = []
+
+  const place = (r: number): void => {
+    if (r === n) {
+      res.push(board.map((c) => '.'.repeat(c) + 'Q' + '.'.repeat(n - c - 1)))
+      return
+    }
+    for (let c = 0; c < n; c++) {
+      if (cols.has(c) || d1.has(r - c) || d2.has(r + c)) continue // atacada: poda
+      cols.add(c); d1.add(r - c); d2.add(r + c)
+      board.push(c)
+      place(r + 1)
+      board.pop()
+      cols.delete(c); d1.delete(r - c); d2.delete(r + c)
+    }
+  }
+
+  place(0)
+  return res
+}
+```
+
+</CodeTabs>
+
+**Complejidad.** La cota habitual es **O(n!)**: la primera fila tiene n opciones, la segunda como mucho n − 1 columnas libres, y así; en la práctica la poda por diagonales recorta mucho más. Memoria O(n) más la salida.
+
+**Errores típicos.** Confundir las diagonales (`r - c` identifica una dirección y `r + c` la otra; con una sola, la mitad de los ataques pasan inadvertidos). Olvidar quitar las marcas de los tres conjuntos al deshacer. Comprobar la validez recorriendo todo el tablero en cada paso: funciona, pero convierte cada chequeo O(1) en O(n²). **Variante:** *N-Queens II* solo pide contar; mismo código con un contador en vez de construir strings. Una optimización avanzada usa máscaras de bits en vez de conjuntos.
+
+## Cuánto cuesta: la complejidad, honestamente
+
+Backtracking es exponencial porque la **salida** es exponencial o porque el **espacio de búsqueda** lo es. No hay que pedir disculpas por eso, pero hay que decir el número correcto:
+
+| Problema | Tamaño de la salida | Costo |
+|---|---|---|
+| Subsets | 2ⁿ subconjuntos | O(n · 2ⁿ) |
+| Permutations | n! permutaciones | O(n · n!) |
+| Letter Combinations | hasta 4ⁿ palabras | O(n · 4ⁿ) |
+| Combination Sum | depende de target y del mínimo | O(n^(T/m)) como cota |
+| Word Search | una respuesta sí/no | O(R·C · 3^L) |
+| N-Queens | las soluciones (2 para n = 4, 92 para n = 8) | O(n!) como cota |
+
+<Sketch
+  width={640}
+  height={290}
+  caption="Por qué backtracking es exponencial: en Subsets cada elemento duplica las ramas, así que con n elementos hay 2ⁿ hojas."
+  items={[
+    { type: 'path', d: 'M193 40 a7 7 0 1 0 14 0 a7 7 0 1 0 -14 0', len: 50, tone: 'line', fill: true },
+    { type: 'text', x: 400, y: 46, text: '1', size: 20, font: 'code', with: true },
+    { type: 'path', d: 'M200 47 L120 93 M200 47 L280 93', len: 200 },
+    { type: 'path', d: 'M113 100 a7 7 0 1 0 14 0 a7 7 0 1 0 -14 0 M273 100 a7 7 0 1 0 14 0 a7 7 0 1 0 -14 0', len: 100, tone: 'line', fill: true, with: true },
+    { type: 'text', x: 400, y: 106, text: '2', size: 20, font: 'code', with: true },
+    { type: 'path', d: 'M120 107 L80 153 M120 107 L160 153 M280 107 L240 153 M280 107 L320 153', len: 280 },
+    { type: 'path', d: 'M73 160 a7 7 0 1 0 14 0 a7 7 0 1 0 -14 0 M153 160 a7 7 0 1 0 14 0 a7 7 0 1 0 -14 0 M233 160 a7 7 0 1 0 14 0 a7 7 0 1 0 -14 0 M313 160 a7 7 0 1 0 14 0 a7 7 0 1 0 -14 0', len: 200, tone: 'line', fill: true, with: true },
+    { type: 'text', x: 400, y: 166, text: '4', size: 20, font: 'code', with: true },
+    { type: 'path', d: 'M80 167 L60 213 M80 167 L100 213 M160 167 L140 213 M160 167 L180 213 M240 167 L220 213 M240 167 L260 213 M320 167 L300 213 M320 167 L340 213', len: 420 },
+    { type: 'path', d: 'M53 220 a7 7 0 1 0 14 0 a7 7 0 1 0 -14 0 M93 220 a7 7 0 1 0 14 0 a7 7 0 1 0 -14 0 M133 220 a7 7 0 1 0 14 0 a7 7 0 1 0 -14 0 M173 220 a7 7 0 1 0 14 0 a7 7 0 1 0 -14 0 M213 220 a7 7 0 1 0 14 0 a7 7 0 1 0 -14 0 M253 220 a7 7 0 1 0 14 0 a7 7 0 1 0 -14 0 M293 220 a7 7 0 1 0 14 0 a7 7 0 1 0 -14 0 M333 220 a7 7 0 1 0 14 0 a7 7 0 1 0 -14 0', len: 400, tone: 'line', fill: true, with: true },
+    { type: 'text', x: 400, y: 226, text: '8 = 2³', size: 20, font: 'code', tone: 'bad' },
+    { type: 'text', x: 470, y: 46, text: ['nodos', 'por nivel'], size: 18, tone: 'pencil' },
+    { type: 'text', x: 24, y: 276, text: 'cada nivel duplica: n = 20 da ~1 millón', size: 20, tone: 'bad' },
+  ]}
+/>
+
+El factor n de muchas filas es el costo de **copiar** cada solución. Para dimensionar: 2²⁰ ≈ 1 millón y 10! ≈ 3,6 millones, que se procesan en un segundo o menos; 2³⁰ ≈ mil millones y 13! ≈ 6.200 millones, que ya no. Por eso los problemas de backtracking traen restricciones chicas (n ≤ 10, n ≤ 20). Leer las restricciones es una pista legítima: si n ≤ 20, una solución exponencial probablemente es lo que se espera; si n llega a 10⁵, no lo es.
+
+Dos aclaraciones que vale la pena decir en voz alta. La **poda** casi nunca mejora la cota del peor caso, pero sí el comportamiento real (en el widget de N reinas, el árbol completo con poda para 6 × 6 tiene 153 nodos; sin poda, 55.987). Y si dos ramas distintas llegan al **mismo subproblema** una y otra vez, el problema probablemente no es de backtracking sino de [programación dinámica](/casos/programacion-dinamica): memoriza y deja de recalcular.
+
+<Quiz
+  question="Tienes que devolver todas las permutaciones de un arreglo de 8 elementos distintos. ¿Qué complejidad das?"
+  options={[
+    { text: 'O(2ⁿ), como Subsets.', why: 'Subsets elige entrar o no entrar por elemento; en permutaciones importa el orden, así que hay n! salidas, muchas más que 2ⁿ para n ≥ 4.' },
+    { text: 'O(n · n!): 8! = 40.320 permutaciones y O(n) para copiar cada una.', correct: true, why: 'La salida misma tiene n! elementos de largo n, así que ningún algoritmo puede ser más rápido. Decir el número concreto (40.320) muestra que entiendes la escala.' },
+    { text: 'O(n²), porque hay dos bucles anidados en el código.', why: 'Contar bucles no sirve con recursión: el bucle se ejecuta en cada nodo de un árbol de n! hojas.' },
+    { text: 'O(nⁿ), porque cada posición puede tener cualquiera de los n elementos.', why: 'Es una cota válida pero floja: el arreglo de usados impide repetir, así que la posición k tiene n − k opciones, no n.' },
+  ]}
+/>
+
+## Errores típicos
+
+Tres errores explican casi todos los backtrackings que fallan en vivo:
+
+**1. No copiar el camino al guardarlo.** `res.append(path)` guarda una **referencia** a la misma lista, que después sigue mutando. Al final, como cada `append` tuvo su `pop`, todas las entradas de `res` apuntan a la misma lista vacía:
+
+<CodeTabs>
+
+```java title="Java"
+res.add(path);                     // MAL: al terminar, todas las entradas son la misma lista
+res.add(new ArrayList<>(path));    // bien: una copia del estado de este momento
+```
+
+```python title="Python"
+res.append(path)       # MAL: al terminar, res == [[], [], [], [], [], [], [], []]
+res.append(path[:])    # bien: una copia del estado de este momento
+```
+
+```ts title="TypeScript"
+res.push(path)        // MAL: todas las entradas son el mismo arreglo
+res.push([...path])   // bien: una copia del estado de este momento
+```
+
+</CodeTabs>
+
+Si usas strings inmutables (Letter Combinations con `path + ch`), no hay problema, pero pagas una copia por paso. En Java, `String` también es inmutable; por eso la solución usa un `StringBuilder`: `append` al elegir, `deleteCharAt` al deshacer y `toString()` solo al guardar.
+
+**2. No deshacer (o deshacer a medias).** Todo lo que haces al elegir tiene que revertirse al volver: el `append` del camino, el `used[i] = True`, la celda marcada con `#`, las tres marcas de las reinas. Una regla práctica: escribe la línea de deshacer **inmediatamente** después de escribir la de elegir, en espejo, y después escribe la llamada recursiva en medio.
+
+**3. Olvidar podar.** Sin el `break` de Combination Sum, la recursión sigue explorando sumas que ya se pasaron; sin las diagonales, las N reinas validan tableros completos que estaban perdidos desde la segunda fila. Antes de codificar, pregúntate: "¿hay alguna forma de saber que esta rama no sirve **antes** de terminarla?".
+
+Otros dos clásicos: confundir `i` con `start` en la llamada recursiva (genera repetidos o pierde reutilizaciones) y olvidar el caso de entrada vacía (Subsets devuelve `[[]]`; Letter Combinations, `[]`).
+
+**Palindrome Partitioning** es un buen problema para practicar todo junto: hay que partir un string en pedazos que sean palíndromos. Las opciones en cada paso son "corto el siguiente pedazo en la posición j", la poda es "solo si `s[i:j + 1]` es palíndromo", y una tabla precalculada de qué subcadenas son palíndromos convierte cada chequeo en O(1).
+
+## Problemas típicos de este patrón
+
+| Problema (LeetCode) | Estado y opciones | Poda clave |
+|---|---|---|
+| [Subsets](https://leetcode.com/problems/subsets/) | `path` + `start` | Ninguna: todo nodo es solución |
+| [Subsets II](https://leetcode.com/problems/subsets-ii/) | Igual, con la entrada ordenada | Saltar iguales si `i > start` |
+| [Permutations](https://leetcode.com/problems/permutations/) | `path` + `used` | Saltar usados |
+| [Combination Sum](https://leetcode.com/problems/combination-sum/) | `path` + `start` + lo que falta | `break` si el candidato se pasa |
+| [Combination Sum II](https://leetcode.com/problems/combination-sum-ii/) | Igual, cada uno una vez | `break` + saltar iguales |
+| [Letter Combinations of a Phone Number](https://leetcode.com/problems/letter-combinations-of-a-phone-number/) | `path` + índice del dígito | Ninguna |
+| [Generate Parentheses](https://leetcode.com/problems/generate-parentheses/) | `path` + abiertos y cerrados | No cerrar más de lo abierto |
+| [Word Search](https://leetcode.com/problems/word-search/) | Celda + índice en la palabra | Letra distinta o celda usada |
+| [Palindrome Partitioning](https://leetcode.com/problems/palindrome-partitioning/) | `path` + inicio del pedazo | Solo cortar palíndromos |
+| [N-Queens](https://leetcode.com/problems/n-queens/) | Fila + tres conjuntos | Columna o diagonal atacada |
+
+<Takeaways>
+
+- Backtracking es un **DFS sobre el árbol de decisiones**: elegir, explorar, deshacer. La pila de llamadas es el camino desde la raíz.
+- Antes de codificar, define el **estado**, las **opciones** de cada paso y el **caso base**.
+- Guarda **copias** (`path[:]`, `[...path]`) y **deshaz** todo lo que hiciste al elegir, en espejo.
+- Orden irrelevante (subconjuntos, combinaciones): índice `start`. Orden relevante (permutaciones): arreglo `used`. **Duplicados**: ordenar y saltar si `i > start`.
+- **Podar** es cortar una rama en cuanto sabes que no sirve: `break` con candidatos ordenados, conjuntos de columnas y diagonales, letras que no coinciden.
+- La complejidad es exponencial y hay que decirla con el número correcto: O(n · 2ⁿ), O(n · n!), O(R·C · 3^L). Restricciones chicas (n ≤ 20) son la pista.
+
+</Takeaways>
+
+## Fuentes y lecturas
+
+- Steven Skiena, *The Algorithm Design Manual*, 3.ª ed., capítulo sobre búsqueda combinatoria y backtracking ([sitio del libro](https://www.algorist.com/)).
+- Tech Interview Handbook, [Recursion cheatsheet](https://www.techinterviewhandbook.org/algorithms/recursion/).
+- Wikipedia, [Backtracking](https://en.wikipedia.org/wiki/Backtracking) y [Eight queens puzzle](https://en.wikipedia.org/wiki/Eight_queens_puzzle).
+- OEIS, [A000170: número de soluciones del problema de las n reinas](https://oeis.org/A000170) (2, 10, 4, 40, 92 para n = 4 a 8).
+- LeetCode: [Subsets](https://leetcode.com/problems/subsets/), [Permutations](https://leetcode.com/problems/permutations/), [Combination Sum](https://leetcode.com/problems/combination-sum/), [Word Search](https://leetcode.com/problems/word-search/), [N-Queens](https://leetcode.com/problems/n-queens/).

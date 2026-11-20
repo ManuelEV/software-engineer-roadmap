@@ -1,0 +1,145 @@
+.b62 {
+  display: grid;
+  gap: var(--s-4);
+}
+.b62-input {
+  display: grid;
+  gap: var(--s-2);
+}
+.b62-label {
+  font-family: var(--font-sign);
+  font-weight: 700;
+  font-size: 0.74rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.b62-field {
+  width: 100%;
+  min-height: 44px;
+  padding: 0 var(--s-3);
+  border: 1.5px solid var(--rule-strong);
+  border-radius: var(--radius);
+  background: var(--card);
+  color: var(--ink);
+  font-family: var(--font-code);
+  font-size: 1.05rem;
+  font-variant-numeric: tabular-nums;
+}
+.b62-field:focus-visible {
+  outline: 2px solid var(--line-ink);
+  outline-offset: 1px;
+}
+.b62-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-1);
+}
+.b62-preset {
+  font-family: var(--font-code);
+  font-size: 0.82rem;
+}
+.b62-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+.b62-step {
+  display: grid;
+  grid-template-columns: 1fr auto 2.4rem;
+  align-items: center;
+  gap: var(--s-3);
+  padding: 6px var(--s-3);
+  border-radius: var(--radius);
+  background: var(--paper);
+  border: 1px solid var(--rule);
+}
+.b62-math {
+  font-family: var(--font-code);
+  font-size: 0.82rem;
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
+.b62-rest {
+  font-size: 0.9rem;
+  color: var(--ink-3);
+  white-space: nowrap;
+}
+.b62-rest b {
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+.b62-char {
+  display: grid;
+  place-items: center;
+  width: 2.2rem;
+  height: 2.2rem;
+  border-radius: 50%;
+  border: 3px solid var(--line);
+  background: var(--paper);
+  font-family: var(--font-code);
+  font-weight: 700;
+  color: var(--line-ink);
+}
+.b62-result {
+  display: grid;
+  gap: var(--s-2);
+  justify-items: start;
+}
+.b62-code {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  font-family: var(--font-code);
+  font-size: clamp(1.4rem, 1rem + 2vw, 2rem);
+  font-weight: 700;
+  color: var(--ink);
+}
+.b62-host {
+  color: var(--ink-3);
+  font-weight: 500;
+}
+.b62-codechar {
+  color: var(--line-ink);
+}
+.b62-meta,
+.b62-empty {
+  font-size: 0.9rem;
+  color: var(--ink-3);
+  margin: 0;
+}
+.b62-sliders {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-3) var(--s-5);
+}
+.b62-bars {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+.b62-axis {
+  font-size: 14px;
+  fill: var(--ink-3);
+}
+.b62-val {
+  font-size: 14px;
+  font-weight: 600;
+  fill: var(--ink-3);
+}
+.b62-val.is-on {
+  fill: var(--line-ink);
+  font-weight: 700;
+}
+.b62-marker {
+  font-size: 13px;
+  font-weight: 700;
+  fill: var(--bad);
+}
+.b62-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-3) var(--s-5);
+}

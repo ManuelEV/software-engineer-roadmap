@@ -1,0 +1,215 @@
+import { AgentLoopTrace } from '../../components/widgets/ia/AgentLoopTrace'
+
+Todo agente, desde el más sofisticado hasta el que escribiremos en menos de 200 líneas, gira alrededor del mismo ciclo: **mirar, actuar, comprobar, repetir**. Entender ese ciclo a nivel de mensajes (qué se manda, qué vuelve, quién decide parar) te da algo muy valioso: la capacidad de leer la transcripción de una sesión y diagnosticar por qué el agente hizo lo que hizo.
+
+En este tema vamos a desarmar el loop pieza por pieza: el protocolo de `tool_use` y `tool_result`, el patrón ReAct del que viene, cómo y cuándo se detiene, qué pasa con los errores y las llamadas en paralelo, y por qué la mayoría de los "agentes tontos" son en realidad loops con mal feedback.
+
+## El ciclo: reunir contexto, actuar, verificar
+
+Cuando Anthropic renombró el Claude Code SDK como Claude Agent SDK, describió el funcionamiento de sus agentes como un loop de feedback: **reunir contexto → actuar → verificar el trabajo → repetir**. Es una buena forma de pensar qué capacidades necesita un agente:
+
+- **Reunir contexto.** Buscar archivos (`grep`, `glob`), leerlos, correr el test que falla para ver el error, consultar un issue. Un agente que actúa sin reunir contexto es como un dev que edita antes de leer.
+- **Actuar.** Editar archivos, ejecutar comandos, crear una rama. Las acciones son las que cambian el mundo y las que necesitan control.
+- **Verificar.** Correr los tests, el typecheck, el linter, mirar una captura de pantalla. Sin esta fase, el agente solo puede decir "creo que terminé".
+- **Repetir o terminar.** Con el resultado de la verificación, el modelo decide si sigue (otra vuelta) o si responde sin pedir herramientas, y el loop termina.
+
+Lo importante es que **las fases no las orquesta el harness**. El harness solo ejecuta lo que el modelo pide. Es el modelo el que decide "ahora necesito leer más" o "ahora corro los tests". Por eso un buen agente es, en buena medida, un buen modelo con buenas señales de feedback.
+
+## Anatomía de una vuelta
+
+A nivel de API, una vuelta del loop son dos mensajes. El harness manda la conversación completa junto con las definiciones de herramientas:
+
+```json title="Petición (simplificada)"
+{
+  "model": "claude-opus-5-5",
+  "max_tokens": 16000,
+  "tools": [
+    {
+      "name": "bash",
+      "description": "Ejecuta un comando de shell en la raíz del repo y devuelve stdout y stderr.",
+      "input_schema": {
+        "type": "object",
+        "properties": { "command": { "type": "string" } },
+        "required": ["command"]
+      }
+    }
+  ],
+  "messages": [
+    { "role": "user", "content": "El test de cupones falla en CI. Arréglalo." }
+  ]
+}
+```
+
+El modelo responde con un pedido estructurado. No ejecutó nada: solo dice qué quiere ejecutar.
+
+```json title="Respuesta del modelo"
+{
+  "stop_reason": "tool_use",
+  "content": [
+    {
+      "type": "tool_use",
+      "id": "toolu_01A9",
+      "name": "bash",
+      "input": { "command": "npm test -- src/checkout" }
+    }
+  ]
+}
+```
+
+El harness ejecuta el comando (después de chequear permisos) y agrega dos mensajes a la conversación: la respuesta del modelo tal cual, y un mensaje de usuario con el resultado, enlazado por el `id`:
+
+```json title="Siguiente petición: se agregan estos dos mensajes"
+{ "role": "assistant", "content": [ { "type": "tool_use", "id": "toolu_01A9", "name": "bash", "input": { "command": "npm test -- src/checkout" } } ] },
+{ "role": "user", "content": [
+  {
+    "type": "tool_result",
+    "tool_use_id": "toolu_01A9",
+    "content": "FAIL src/checkout/total.test.ts\n  Expected: 90\n  Received: 81"
+  }
+] }
+```
+
+Y vuelta a empezar. El loop termina cuando el modelo responde con `stop_reason: "end_turn"`, es decir, con un mensaje que no pide herramientas.<Sidenote>Según el modelo y la configuración, la respuesta también puede traer bloques de texto o de razonamiento antes del `tool_use`. El harness debe devolver el contenido del asistente completo, sin recortarlo, en la siguiente petición.</Sidenote>
+
+Tres consecuencias prácticas de este protocolo:
+
+1. **El modelo es sin estado.** Cada petición lleva toda la historia. Una sesión de 40 vueltas reenvía 40 veces el principio de la conversación (el *prompt caching* abarata esa parte repetida, pero el contexto igual crece).
+2. **Todo lo que el modelo sabe del mundo entra por `tool_result`.** Si la salida de un comando es un muro de 3.000 líneas, eso es lo que el modelo tiene que leer.
+3. **El harness es el único que actúa.** Entre el `tool_use` y el `tool_result` hay un programa tuyo que puede preguntar, negar, registrar o modificar.
+
+## Una sesión real, paso a paso
+
+Este es el tipo de transcripción que deberías aprender a leer. El agente recibe un test que falla, reúne contexto, hace un cambio, verifica, descubre que rompió otra cosa y da una segunda vuelta completa al ciclo.
+
+<AgentLoopTrace />
+
+Fíjate en tres decisiones del agente que separan una buena sesión de una mala:
+
+- **Reprodujo antes de tocar.** El primer paso fue correr el test, no abrir un editor. El mensaje `Expected 90, Received 81` ya contenía la pista (descuento aplicado dos veces).
+- **Verificó más allá del test original.** Pasar el test que fallaba no basta; corrió la suite completa y encontró una regresión que él mismo había causado.
+- **Terminó con evidencia.** La respuesta final no dice "listo", dice qué cambió, por qué, y qué comandos lo prueban.
+
+## ReAct: razonar y actuar, intercalados
+
+El patrón tiene nombre y genealogía. En 2022, el paper *ReAct: Synergizing Reasoning and Acting in Language Models* (Yao et al.) mostró que intercalar razonamiento ("pienso que…") con acciones ("busco X") y observaciones ("el resultado fue…") funcionaba mejor que solo razonar o solo actuar. El razonamiento ayuda a planificar y a interpretar resultados; las acciones anclan el razonamiento en datos reales en vez de en lo que el modelo imagina.
+
+En 2022 eso se lograba con prompts que forzaban un formato `Thought / Action / Observation`. Hoy está integrado en los modelos y en las APIs: el *tool use* nativo reemplazó el parseo de texto, y los modelos actuales razonan entre llamadas a herramientas (lo que se conoce como *interleaved thinking*). Pero la estructura es la misma, y conocerla te ayuda a escribir mejores instrucciones: "antes de editar, reproduce el fallo y explica la causa" no es una manía, es pedirle al modelo que haga ReAct bien.
+
+<Callout type="example" title="Prompt que empuja un buen ciclo">
+
+```text
+El test "aplica cupón de 10% una sola vez" falla en CI.
+1. Reprodúcelo localmente y explícame la causa antes de editar.
+2. Arregla la causa, no el síntoma: no modifiques el test salvo que esté mal.
+3. Corre la suite completa y el typecheck.
+4. Termina con: causa, cambio y la salida de los comandos que lo prueban.
+```
+
+</Callout>
+
+<Quiz
+  question="En la transcripción, después de arreglar cart.ts el test que fallaba pasó. ¿Por qué fue correcto que el agente corriera la suite completa en vez de terminar?"
+  options={[
+    { text: 'Porque el modelo siempre corre todos los tests al final, es su configuración por defecto.', why: 'No hay tal configuración garantizada. Fue una decisión del modelo (o una instrucción tuya); si quieres que sea obligatoria, se impone con un hook o en CI.' },
+    { text: 'Porque cambió código compartido, y pasar el test original no prueba que no rompió otra cosa.', correct: true, why: 'Exacto. El cambio tocó cart.ts, que otros usan. La suite completa encontró la regresión que el test aislado no podía ver.' },
+    { text: 'Porque así consume más tokens y el resultado es más confiable.', why: 'Consumir más tokens no hace nada más confiable por sí solo. Lo que aporta es la señal: la suite completa verifica más comportamiento.' },
+  ]}
+/>
+
+## Cuándo se detiene el loop
+
+Esta es la pregunta más subestimada del diseño de agentes. Hay dos tipos de condiciones de parada: las que decide el modelo y las que impone el harness.
+
+### Lo que decide el modelo
+
+El modelo para cuando cree que terminó: responde sin `tool_use` y la API devuelve `stop_reason: "end_turn"`. "Cree" es la palabra clave. Un modelo sin forma de verificar su trabajo parará cuando el código *parezca* terminado. Por eso darle un criterio de terminado verificable ("los tests de `src/refunds` pasan y `tsc` no da errores") cambia tanto el resultado.
+
+La API tiene otros `stop_reason` que tu loop debe manejar:
+
+| `stop_reason` | Qué significa | Qué hace tu loop |
+| --- | --- | --- |
+| `tool_use` | El modelo pide herramientas | Ejecutarlas y devolver todos los `tool_result` |
+| `end_turn` | Terminó su respuesta | Salir del loop y mostrar la respuesta |
+| `max_tokens` | Se cortó por longitud | Subir `max_tokens` o reintentar; nunca ejecutar un `tool_use` truncado |
+| `pause_turn` | Una herramienta del servidor pausó el turno | Reenviar la conversación para que continúe |
+| `refusal` | El modelo declinó por seguridad | Reportarlo; no reintentar a ciegas |
+
+### Lo que impone el harness
+
+Ningún agente serio confía solo en el criterio del modelo. Las salvaguardas típicas:
+
+- **Máximo de vueltas.** Un tope (`--max-turns` en modo headless de Claude Code, una constante `MAX_TURNS` en tu propio loop) que corta sesiones que entraron en círculo.
+- **Presupuesto.** Tope de tokens o de dinero por tarea. En Claude Code, `--max-budget-usd` con `-p`; en la API, los *task budgets* le dan al modelo una cuenta regresiva para que dosifique su trabajo.
+- **Verificación obligatoria al terminar.** Un hook `Stop` que corre el typecheck cuando el agente intenta terminar y, si falla, lo devuelve a trabajar con los errores como feedback.
+- **Un objetivo explícito.** Algunas herramientas permiten fijar una condición de terminado que otro modelo evalúa después de cada turno (`/goal` en Claude Code).
+- **El humano.** Interrumpir (Esc) en cuanto ves que el agente se desvía es una condición de parada legítima, y barata.
+
+<Callout type="warn" title="Loops que no terminan bien">
+
+Dos patrones a vigilar en las transcripciones: la **oscilación** (el agente alterna entre dos arreglos que se rompen mutuamente) y la **exploración infinita** (lee y lee sin decidir nada). Ambos suelen indicar que la tarea es ambigua o que el feedback no discrimina. Más vueltas no lo arreglan; una tarea mejor definida, sí.
+
+</Callout>
+
+## Errores de herramientas y llamadas en paralelo
+
+### Los errores son feedback, no excepciones
+
+Cuando una herramienta falla (archivo inexistente, comando con error, permiso denegado), el harness **no** debe abortar el loop. Debe devolver un `tool_result` con `is_error: true` y un mensaje útil. El modelo lee ese mensaje y corrige el rumbo.
+
+La calidad del mensaje importa muchísimo. Compara:
+
+```text
+Error: ENOENT
+```
+
+```text
+Error: no existe src/checkout/totals.ts. Archivos parecidos: src/checkout/total.ts, src/checkout/totals.test.ts
+```
+
+El segundo convierte un error en una pista. Anthropic recomienda exactamente esto en *Writing effective tools for agents*: los mensajes de error de tus herramientas son una forma de guiar al agente hacia un uso correcto.
+
+### Varias herramientas en una sola vuelta
+
+Los modelos actuales pueden pedir varias herramientas en una misma respuesta (por ejemplo, leer tres archivos a la vez). El harness puede ejecutarlas en paralelo, pero debe devolver **todos** los `tool_result` en un único mensaje de usuario. Separarlos en varios mensajes funciona, pero le enseña al modelo, en la práctica, a dejar de pedir en paralelo. Y si una de las llamadas falla, se devuelve su error igual: nunca se omite un `tool_result`.
+
+## Por qué el loop se rompe (y cómo arreglarlo)
+
+Cuando un agente "es tonto", casi siempre el problema es de loop o de entorno, no de inteligencia. Esta tabla resume los síntomas más comunes:
+
+| Síntoma en la transcripción | Causa probable | Arreglo |
+| --- | --- | --- |
+| Edita sin leer, o lee archivos al azar | Tarea vaga, sin punto de partida | Nombra archivos, comandos o el test que falla |
+| Dice "listo" y no lo está | Sin verificación disponible | Comando de test en CLAUDE.md, hook `Stop`, pedir evidencia |
+| Repite el mismo error | El `tool_result` no explica nada | Mejores mensajes de error, salida filtrada |
+| Se pierde a mitad de una tarea larga | Contexto saturado | Compactar, notas de progreso, subagentes |
+| Debilita tests para pasar | El objetivo era "verde", no "correcto" | Prohibir tocar tests, revisar diffs de tests |
+| Oscila entre dos soluciones | Requisito ambiguo o contradictorio | Aclarar el requisito, decidir tú |
+
+<Quiz
+  question="Tu herramienta run_tests devuelve 4.000 líneas de log cuando falla un test. ¿Cuál es el mejor cambio?"
+  options={[
+    { text: 'Aumentar la ventana de contexto para que entre el log completo.', why: 'Entra, pero el modelo tiene que encontrar 3 líneas útiles entre 4.000. Más contexto con más ruido degrada la atención y encarece cada vuelta.' },
+    { text: 'Devolver solo los tests que fallan, con su mensaje y el stack recortado, y ofrecer un parámetro para pedir más detalle.', correct: true, why: 'Exacto. Es lo que recomienda Anthropic para herramientas: salidas concisas por defecto, con la opción de pedir detalle cuando haga falta.' },
+    { text: 'Devolver solo “FAIL” para ahorrar tokens.', why: 'Demasiado poco: sin el mensaje del error, el modelo no puede diagnosticar. El objetivo es señal alta, no tokens mínimos.' },
+  ]}
+/>
+
+<Takeaways>
+
+- El loop es **reunir contexto → actuar → verificar → repetir**; el modelo decide cada fase, el harness solo ejecuta.
+- A nivel de API: el modelo responde `tool_use`, el harness ejecuta y devuelve `tool_result` enlazado por `id`, hasta que llega `end_turn`.
+- Todo lo que el agente sabe del mundo entra por los resultados de herramientas: hazlos concisos y accionables.
+- El modelo para cuando *cree* que terminó; dale un criterio de terminado verificable y salvaguardas del harness (vueltas, presupuesto, hook `Stop`).
+- Los errores de herramientas son feedback: devuélvelos con `is_error` y mensajes que guíen.
+- Cuando un agente parece tonto, revisa primero el loop y el entorno: tarea vaga, feedback pobre o contexto saturado.
+
+</Takeaways>
+
+## Fuentes y lecturas
+
+- Anthropic, [Building agents with the Claude Agent SDK](https://claude.com/blog/building-agents-with-the-claude-agent-sdk) (septiembre de 2025).
+- Anthropic, [Tool use with Claude](https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview) (documentación de la API).
+- Anthropic, [Writing effective tools for agents — with agents](https://www.anthropic.com/engineering/writing-tools-for-agents) (septiembre de 2025).
+- Yao et al., [ReAct: Synergizing Reasoning and Acting in Language Models](https://arxiv.org/abs/2210.03629) (2022).
+- Anthropic, [Best practices for Claude Code](https://code.claude.com/docs/en/best-practices): sección sobre darle al agente un chequeo para correr.
+- Anthropic, [Hooks reference](https://code.claude.com/docs/en/hooks): evento `Stop` y códigos de salida.

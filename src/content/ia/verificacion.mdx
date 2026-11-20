@@ -1,0 +1,215 @@
+import { DiffReview } from '../../components/widgets/ia/DiffReview'
+
+La guía de buenas prácticas de Claude Code lo dice en una línea: el agente se detiene cuando el trabajo *parece* terminado. Si no tiene nada que ejecutar que le diga si realmente lo está, "parece terminado" es todo lo que tiene. Y entonces tú te conviertes en el test suite: cada error espera ahí hasta que lo descubras.
+
+La verificación es el cuello de botella real del desarrollo con agentes. Generar código es barato y rápido; saber si ese código es correcto no lo es. En este tema vas a ver cómo darle al agente formas de verificarse solo, cómo aplicar TDD para que no se haga trampa, qué son los *evals* y cuándo los necesitas, los límites de usar un LLM como juez, y cómo revisar un diff generado por IA sin que se te escapen las trampas típicas.
+
+## La escalera de verificación
+
+No todas las verificaciones cuestan lo mismo ni prueban lo mismo. Ordenadas de más rápidas y baratas a más lentas y completas:
+
+<Steps>
+<Step title="Tipos y compilación">
+
+Segundos. Atrapan APIs alucinadas, parámetros olvidados, nulos sin manejar. Es el primer filtro y el que más vueltas ahorra.
+
+</Step>
+<Step title="Linters y tests estructurales">
+
+Segundos. Estilo, imports prohibidos, dependencias entre capas. Con mensajes de remediación, el agente se corrige solo.
+
+</Step>
+<Step title="Tests unitarios">
+
+Segundos a minutos. El sensor principal de comportamiento. El agente necesita el comando para correr **un solo archivo**, no solo la suite completa.
+
+</Step>
+<Step title="Integración y end-to-end">
+
+Minutos. Base de datos real, servicios reales o sus sandboxes. Lo que los unitarios no ven.
+
+</Step>
+<Step title="Verificación visual o manual automatizada">
+
+Capturas de pantalla comparadas con un diseño, un navegador controlado por el agente, un script que compara salida contra un fixture. Anthropic reportó que sus agentes verificaban mucho mejor features web cuando se les daba automatización de navegador para probar "como lo haría un usuario".
+
+</Step>
+<Step title="Revisión independiente">
+
+Un revisor que no vio cómo se escribió el código: otro agente con contexto limpio o una persona. Atrapa lo que ningún test cubre: el enfoque equivocado.
+
+</Step>
+</Steps>
+
+Dos reglas prácticas. Primero, **el comando más útil de tu `CLAUDE.md` es el que corre los tests**. Segundo, **pide evidencia, no afirmaciones**: "todos los tests pasan" no te dice nada; la salida del comando, sí. Para una sesión que no estuviste mirando, la evidencia es lo único que tienes.
+
+Puedes subir el nivel de exigencia según la tarea: pedirlo en el prompt ("corre los tests de auth y sigue hasta que pasen"), fijar un objetivo que otro modelo chequea en cada turno, o imponerlo con un hook `Stop` que no deja terminar hasta que el typecheck pasa (lo vimos en [Harness engineering](/ia/harness)).
+
+## TDD con agentes: el test como contrato
+
+El *test-driven development* encaja con los agentes casi demasiado bien. Un test que falla es la especificación más precisa posible: define el comportamiento esperado y verifica el resultado, sin ambigüedad. La primera guía de buenas prácticas de Claude Code, de abril de 2025, ya proponía este flujo:
+
+<Steps>
+<Step title="Tests primero, explícitamente">
+
+```text
+Vamos a hacer TDD. Escribe tests para el cálculo de reembolso parcial
+según specs/reembolsos.md (R1–R3): casos normales, saldo excedido,
+idempotencia. No escribas la implementación ni mocks que la simulen.
+```
+
+</Step>
+<Step title="Confirmar que fallan">
+
+"Corre los tests y confirma que fallan por la razón correcta." Un test que pasa sin implementación no prueba nada.
+
+</Step>
+<Step title="Commitear los tests">
+
+Revisa los tests tú y haz commit. A partir de aquí, son el contrato.
+
+</Step>
+<Step title="Implementar sin tocar los tests">
+
+```text
+Implementa hasta que estos tests pasen. No modifiques los archivos de test.
+Si crees que un test está mal, detente y explícame por qué.
+```
+
+</Step>
+<Step title="Iterar y verificar">
+
+El agente itera contra los tests. Al final revisas el diff con especial atención a que los tests no hayan cambiado.
+
+</Step>
+</Steps>
+
+¿Por qué tanto énfasis en separar? Porque un agente que escribe el código y los tests en la misma pasada tiende a escribir tests que verifican **lo que implementó**, no **lo que se pidió**. Y un agente al que le pides "verde" puede llegar al verde por el camino más corto: debilitar una aserción, agregar un caso especial con el dato exacto del test o capturar una excepción para que no explote.
+
+<Callout type="tip" title="Escritor y verificador separados">
+
+Una variante robusta: un agente (o una sesión) escribe los tests a partir de la spec, y otro, con contexto limpio, implementa. El implementador no puede "acomodar" los tests porque no los escribió, y un hook o una regla de permisos puede impedirle editar los archivos de test.
+
+</Callout>
+
+## Evals: verificar el sistema, no solo el cambio
+
+Los tests verifican un cambio concreto. Los **evals** verifican el comportamiento de un sistema con LLM sobre muchos casos: tu agente interno, tus skills, el prompt de revisión de código de tu equipo, un bot de soporte. Si cambias un prompt, un modelo o una herramienta, ¿mejoró o empeoró? Sin evals, la respuesta es una sensación.
+
+Hamel Husain y Shreya Shankar, que enseñan evals a cientos de equipos, insisten en un orden que contradice la intuición:
+
+1. **Primero, análisis de errores.** Lee trazas reales (transcripciones completas del agente), anota en texto libre qué salió mal, agrupa en categorías y cuenta. Ellos lo llaman la actividad más importante de los evals, y recomiendan revisar al menos unas 30 trazas tú mismo antes de automatizar nada, apuntando a unas 100 variadas.
+2. **No escribas la rúbrica antes de mirar datos.** Los criterios útiles emergen de los errores reales; una rúbrica previa te ciega a lo que no anticipaste.
+3. **Pasa/falla binario, no escalas de 1 a 5.** La diferencia entre un 3 y un 4 es inconsistente entre evaluadores; binario obliga a decidir. Para progreso gradual, varias verificaciones binarias de subcomponentes.
+4. **Código antes que LLM.** Si una regla determinista detecta la falla (el test pasa, el JSON es válido, no se tocó un archivo prohibido), usa código. Reserva el juez LLM para lo que requiere criterio humano, y un juez por modo de falla.
+5. **Valida al juez contra etiquetas humanas** (tasa de verdaderos positivos y negativos) antes de confiar en él.
+
+Para agentes de código, el evaluador más fuerte suele estar a mano: **los tests**. Un eval de un agente de código es un conjunto de tareas (un repo en un estado, una instrucción) donde el "pasa" lo define una suite de tests oculta al agente, más chequeos de proceso: ¿tocó archivos fuera de alcance?, ¿cuántas vueltas y cuántos tokens usó?, ¿modificó los tests?
+
+```ts title="evals/refunds.eval.ts (esquema)"
+interface AgentTask {
+  id: string
+  repoSnapshot: string        // commit desde el que arranca el agente
+  instruction: string         // lo que recibe el agente
+  hiddenTests: string         // comando que decide pasa/falla; el agente no lo ve
+  forbiddenPaths: string[]    // tocar estos archivos es falla automática
+}
+
+const tasks: AgentTask[] = [
+  {
+    id: 'refund-exceeds-balance',
+    repoSnapshot: 'a1f3c2e',
+    instruction: 'Implementa R2 de specs/reembolsos.md',
+    hiddenTests: 'pnpm vitest run evals/hidden/refund-balance.test.ts',
+    forbiddenPaths: ['src/payments/refunds/refund.test.ts', 'src/middleware/'],
+  },
+]
+// Por cada tarea: correr el agente N veces, registrar pasa/falla, vueltas,
+// tokens y archivos tocados. Comparar antes y después de cambiar el prompt.
+```
+
+Los agentes son no deterministas: la misma tarea puede pasar en una corrida y fallar en la siguiente. Corre cada tarea varias veces y mira la tasa, no un resultado aislado.
+
+## LLM como juez: útil, con cuidado
+
+Usar un modelo para evaluar la salida de otro es tentador porque escala. Funciona para criterios difusos ("¿la explicación es correcta y completa?"), pero tiene límites documentados:
+
+- **No es muy robusto.** En su guía del Agent SDK, Anthropic lo describe como generalmente poco robusto y con latencia extra; útil cuando una mejora de rendimiento justifica ese costo.
+- **Sesgos conocidos.** El paper *Judging LLM-as-a-Judge with MT-Bench and Chatbot Arena* (Zheng et al., 2023) documentó sesgo de posición (preferir la primera respuesta), de verbosidad (preferir la más larga) y de autopreferencia.
+- **Un revisor al que le pides problemas siempre encuentra algo.** La guía de Claude Code advierte que si arreglas cada hallazgo de un revisor genérico terminas con capas de abstracción innecesarias y tests para casos imposibles. Pide hallazgos de corrección y di explícitamente "ignora estilo".
+
+Lo que mejor funciona en la práctica: un prompt con criterios binarios y concretos, una puntuación simple más un veredicto pasa/falla (es lo que Anthropic encontró más consistente en su sistema multiagente de investigación), y validación periódica contra juicio humano.
+
+<Quiz
+  question="Quieres medir si un cambio en el prompt de tu agente de migraciones lo mejora. ¿Cuál es el mejor primer paso?"
+  options={[
+    { text: 'Crear un juez LLM que puntúe de 1 a 10 la calidad de cada migración.', why: 'Una escala de 1 a 10 es inconsistente y un juez sin validar puede estar midiendo cualquier cosa (largo, estilo). Además, para migraciones hay evaluadores deterministas.' },
+    { text: 'Leer transcripciones reales del agente, clasificar sus fallas y luego automatizar chequeos para las más frecuentes, empezando por los que se pueden hacer con código.', correct: true, why: 'Exacto: análisis de errores primero, evaluadores deterministas (tests, compilación, archivos tocados) antes que jueces LLM.' },
+    { text: 'Probar el prompt nuevo en tres tareas y, si se ven bien, adoptarlo.', why: 'Tres corridas de un sistema no determinista no distinguen mejora de ruido, y “se ven bien” no es un criterio.' },
+  ]}
+/>
+
+## Revisar diffs generados por IA
+
+Llegamos a la habilidad más importante de este tema. Los tests pasan, el agente dice que terminó, tienes un diff delante. Practica con este:
+
+<DiffReview />
+
+Los cuatro problemas tienen algo en común: **todos producen tests en verde**. Por eso la revisión de código generado necesita un checklist propio, además del habitual:
+
+1. **¿Cambiaron los tests?** Míralos primero y con más sospecha que el código. Aserciones más débiles, casos borrados, `skip` nuevos.
+2. **¿Hay casos especiales sospechosos?** Un `if` con un ID, un email o un valor exacto que coincide con un fixture.
+3. **¿Se silenciaron errores?** `catch` vacíos, valores por defecto que ocultan fallas, reintentos infinitos.
+4. **¿Hay cambios fuera de alcance?** Archivos que la tarea no mencionaba; "ya que estaba" no es un motivo.
+5. **¿Reinventó algo que existía?** Un helper nuevo que duplica uno del repo.
+6. **¿Dependencias nuevas?** ¿Existen de verdad, están mantenidas, hacían falta? Los modelos a veces sugieren paquetes con nombres plausibles que no existen, un vector de ataque conocido.
+7. **¿El tamaño es razonable?** Un diff de 900 líneas para una tarea de 50 no se revisa, se aprueba a ciegas. Pide diffs chicos.
+
+### Revisión asistida
+
+Las herramientas de revisión con IA (la revisión de Copilot en GitHub, `/code-review` en Claude Code, la revisión de Codex y otras) son un buen **primer filtro**: atrapan errores obvios, inconsistencias y problemas de seguridad comunes en segundos. Funcionan mejor cuando el revisor tiene contexto limpio (no heredó el razonamiento del autor) y un objetivo concreto. Un prompt que da buenos resultados:
+
+```text
+Usa un subagente para revisar el diff contra specs/reembolsos.md: verifica que
+cada requisito esté implementado y que los casos borde listados tengan test.
+Reporta solo problemas que afecten la corrección. Ignora estilo.
+```
+
+Pero no reemplazan la revisión humana en lo que importa: si el enfoque es el correcto, si el cambio encaja en la arquitectura, si resuelve el problema del usuario. **Quien aprueba el merge es responsable del código**, lo haya escrito una persona o un agente.
+
+<Callout type="idea" title="Revisa en proporción al riesgo">
+
+No todo diff merece el mismo escrutinio. Un script interno descartable puede pasar con una mirada; un cambio en el flujo de pagos, la autenticación o una migración de datos merece lectura línea por línea, tests revisados y, si puedes, un segundo par de ojos. El criterio es el radio de impacto, no quién escribió el código.
+
+</Callout>
+
+<Quiz
+  question="El agente arregló un bug y en el mismo PR cambió expect(res.status).toBe('succeeded') por expect(res.status).toBeDefined(). Los tests pasan. ¿Qué haces?"
+  options={[
+    { text: 'Apruebas: CI está en verde y el bug quedó arreglado.', why: 'El verde puede ser consecuencia del cambio en el test. Ahora el test acepta cualquier estado, incluido un fallo silenciado.' },
+    { text: 'Rechazas el cambio en el test y le pides que haga pasar la aserción original, o que explique por qué el test estaba mal.', correct: true, why: 'Exacto: debilitar una aserción es la forma más común de llegar al verde sin arreglar nada. Un test solo cambia con una justificación explícita.' },
+    { text: 'Agregas una regla al CLAUDE.md pidiendo no tocar tests y apruebas este PR.', why: 'La regla puede ayudar a futuro, pero este PR sigue teniendo un test que ya no verifica nada. Primero hay que arreglarlo.' },
+  ]}
+/>
+
+<Takeaways>
+
+- El agente para cuando el trabajo *parece* terminado: dale algo que devuelva pasa/falla y pide evidencia, no afirmaciones.
+- Escalera de verificación: tipos → linters → unitarios → integración/e2e → visual → revisión independiente.
+- TDD con agentes: tests primero, confirmar que fallan, commitearlos, implementar sin tocarlos.
+- Evals para sistemas con LLM: análisis de errores primero, pasa/falla binario, evaluadores deterministas antes que jueces LLM, varias corridas por tarea.
+- El LLM como juez tiene sesgos y poca robustez: criterios concretos, “ignora estilo” y validación contra humanos.
+- Revisa diffs de IA con un checklist propio: tests modificados, casos especiales, errores silenciados, alcance, duplicados, dependencias, tamaño.
+- Quien aprueba el merge es responsable; revisa en proporción al riesgo.
+
+</Takeaways>
+
+## Fuentes y lecturas
+
+- Anthropic, [Best practices for Claude Code](https://code.claude.com/docs/en/best-practices): *Give Claude a check to run* y *Review against your spec*.
+- Anthropic, [Building agents with the Claude Agent SDK](https://claude.com/blog/building-agents-with-the-claude-agent-sdk): verificación por reglas, visual y LLM como juez.
+- Hamel Husain y Shreya Shankar, [AI Evals: Everything You Need to Know (FAQ)](https://hamel.dev/blog/posts/evals-faq/).
+- Zheng et al., [Judging LLM-as-a-Judge with MT-Bench and Chatbot Arena](https://arxiv.org/abs/2306.05685) (2023).
+- Anthropic, [Effective harnesses for long-running agents](https://www.anthropic.com/engineering/effective-harnesses-for-long-running-agents): verificación end-to-end con navegador.
+- Anthropic, [How we built our multi-agent research system](https://www.anthropic.com/engineering/multi-agent-research-system): evaluación con jueces LLM.
+- Simon Willison, [Vibe engineering](https://simonwillison.net/2025/Oct/7/vibe-engineering/): tests, review y QA manual como prácticas centrales.

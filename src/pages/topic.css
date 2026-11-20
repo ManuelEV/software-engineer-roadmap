@@ -1,0 +1,303 @@
+.topic {
+  max-width: 1480px;
+  margin: 0 auto;
+  padding: 0 16px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+}
+@media (min-width: 1024px) {
+  .topic {
+    grid-template-columns: 16.5rem minmax(0, 1fr);
+    column-gap: clamp(2rem, 4vw, 4rem);
+    padding: 0 24px;
+  }
+}
+
+.readbar {
+  position: fixed;
+  top: var(--topbar-h);
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: var(--line);
+  transform-origin: 0 50%;
+  z-index: 39;
+}
+
+/* Rail */
+.topic__rail {
+  display: none;
+}
+@media (min-width: 1024px) {
+  .topic__rail {
+    display: block;
+    border-right: 3px double var(--margin-rule);
+    padding-right: var(--s-4);
+  }
+}
+.topic__rail-inner {
+  position: sticky;
+  top: calc(var(--topbar-h) + 1.5rem);
+  max-height: calc(100dvh - var(--topbar-h) - 3rem);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0 6px var(--s-6) 2px;
+  margin-top: 2.5rem;
+}
+.topic__rail-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: var(--s-3);
+  text-decoration: none;
+  font-family: var(--font-display);
+  font-weight: 650;
+  font-size: 1.08rem;
+  line-height: 1.2;
+}
+.topic__rail-head:hover {
+  text-decoration: underline;
+  text-decoration-color: var(--line);
+  text-underline-offset: 3px;
+}
+
+/* Main */
+.topic__main {
+  min-width: 0;
+  padding-top: clamp(1.5rem, 4vw, 2.75rem);
+}
+.topic__head {
+  max-width: calc(var(--measure) + 6rem);
+  margin-bottom: var(--s-6);
+}
+
+/* Where am I: unit tab, one square per topic, position */
+.crumbs {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  margin-bottom: var(--s-5);
+  font-family: var(--font-sign);
+  font-size: var(--step--1);
+  color: var(--ink-3);
+}
+.crumbs__unit {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  text-decoration: none;
+  font-weight: 600;
+  color: var(--ink-2);
+}
+.crumbs__unit:hover {
+  color: var(--ink);
+}
+.crumbs__cells {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  max-width: 260px;
+}
+.crumbs__cells span {
+  width: 10px;
+  height: 10px;
+  border-radius: 1.5px;
+  border: 1.5px solid color-mix(in oklab, var(--line) 55%, var(--rule));
+}
+.crumbs__cells span.is-current {
+  border-color: var(--ink);
+  background: var(--ink);
+}
+.crumbs__pos {
+  font-variant-numeric: tabular-nums;
+}
+
+.topic__title {
+  font-size: var(--step-4);
+  font-weight: 660;
+  letter-spacing: -0.02em;
+  line-height: 1.06;
+}
+/* textbook numbering: 2.4 Caché y CDN */
+.topic__num {
+  color: var(--line-ink);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  margin-right: 0.12em;
+}
+.topic__lead {
+  margin: var(--s-4) 0 0;
+  font-size: var(--step-1);
+  line-height: 1.5;
+  color: var(--ink-2);
+  max-width: 58ch;
+}
+.topic__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 18px;
+  margin-top: var(--s-5);
+  padding-top: var(--s-4);
+  border-top: 1px solid var(--rule);
+  font-family: var(--font-sign);
+  font-size: var(--step--1);
+  color: var(--ink-3);
+}
+.topic__meta > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+/* Mobile/tablet table of contents */
+.topic__toc {
+  max-width: var(--measure);
+  margin-bottom: var(--s-6);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--card);
+  font-family: var(--font-sign);
+}
+@media (min-width: 1024px) {
+  .topic__toc {
+    display: none;
+  }
+}
+.topic__toc summary {
+  cursor: pointer;
+  padding: 10px 16px;
+  font-weight: 600;
+  list-style-position: inside;
+}
+.topic__toc summary::marker {
+  color: var(--line-ink);
+}
+.topic__toc ol {
+  margin: 0;
+  padding: 0 16px 12px 36px;
+  font-size: 0.98rem;
+}
+.topic__toc li + li {
+  margin-top: 4px;
+}
+.topic__toc li::marker {
+  color: var(--line-ink);
+  font-weight: 700;
+}
+.topic__toc a {
+  text-decoration: none;
+  color: var(--ink-2);
+}
+.topic__toc a:hover {
+  color: var(--ink);
+  text-decoration: underline;
+}
+
+/* Loading */
+.topic__skeleton {
+  display: grid;
+  gap: 14px;
+  max-width: var(--measure);
+}
+.topic__skeleton span {
+  height: 14px;
+  border-radius: 7px;
+  background: linear-gradient(90deg, var(--paper-3), var(--paper-2), var(--paper-3));
+  background-size: 200% 100%;
+  animation: skel 1.4s linear infinite;
+}
+.topic__skeleton span.short {
+  width: 60%;
+}
+@keyframes skel {
+  to {
+    background-position: -200% 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .topic__skeleton span {
+    animation: none;
+  }
+}
+
+/* End of page */
+.topic__end {
+  max-width: calc(var(--measure) + 6rem);
+  margin-top: var(--s-8);
+  padding-top: var(--s-6);
+  border-top: 2px solid var(--ink);
+}
+.topic__nav {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--s-3);
+  margin-top: var(--s-6);
+}
+@media (min-width: 720px) {
+  .topic__nav {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr);
+  }
+}
+.topic__nav-link {
+  display: grid;
+  gap: 4px;
+  align-content: start;
+  padding: var(--s-4);
+  border-radius: var(--radius);
+  border: 1.5px solid var(--rule);
+  text-decoration: none;
+  background: var(--card);
+  transition:
+    border-color 160ms var(--ease-out),
+    background-color 160ms var(--ease-out);
+}
+.topic__nav-link:hover {
+  border-color: var(--line);
+}
+.topic__nav-link.is-next {
+  border-color: var(--line);
+  background: var(--line-tint);
+}
+.topic__nav-link.is-next:hover {
+  background: var(--line-tint-2);
+}
+.topic__nav-link.is-prev {
+  order: 2;
+}
+@media (min-width: 720px) {
+  .topic__nav-link.is-prev {
+    order: 0;
+  }
+}
+.topic__nav-dir {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-family: var(--font-sign);
+  font-weight: 700;
+  font-size: 0.78rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.topic__nav-link.is-next .topic__nav-dir {
+  color: var(--line-ink);
+}
+.topic__nav-title {
+  font-family: var(--font-display);
+  font-weight: 640;
+  font-size: var(--step-1);
+  line-height: 1.25;
+}
+.topic__nav-num {
+  color: var(--line-ink);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+.topic__nav-sum {
+  font-size: 0.92rem;
+  line-height: 1.45;
+  color: var(--ink-2);
+}

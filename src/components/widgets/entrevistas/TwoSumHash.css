@@ -1,0 +1,49 @@
+.tsh-pick {
+  display: grid;
+  gap: 4px;
+}
+.tsh-pick select {
+  min-height: 40px;
+  padding: 0 10px;
+  border: 1.5px solid var(--rule-strong);
+  border-radius: 8px;
+  background: var(--card);
+  font-family: var(--font-code);
+  font-size: 0.86rem;
+}
+.tsh-map {
+  font-family: var(--font-code);
+  font-size: 0.86rem;
+  color: var(--ink-2);
+}
+.tsh-map__rows {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px 0 6px 1.2em;
+  min-height: 2.6em;
+}
+.tsh-map__empty {
+  color: var(--ink-3);
+  font-style: italic;
+}
+.tsh-map__pair {
+  padding: 3px 9px;
+  border: 1.5px solid var(--rule-strong);
+  border-radius: 6px;
+  background: var(--card);
+  transition:
+    background-color 220ms var(--ease-out),
+    border-color 220ms var(--ease-out);
+}
+.tsh-map__pair b {
+  color: var(--ink);
+}
+.tsh-map__pair.is-new {
+  border-color: var(--line);
+  background: var(--line-tint);
+}
+.tsh-map__pair.is-hit {
+  border-color: var(--ok);
+  background: color-mix(in oklab, var(--ok) 22%, var(--card));
+}

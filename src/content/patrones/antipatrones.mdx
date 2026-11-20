@@ -1,0 +1,432 @@
+import { SmellSpotter } from '../../components/widgets/patrones/SmellSpotter'
+import { UmlDiagram } from '../../components/widgets/patrones/UmlDiagram'
+
+Los patrones te dicen qué hacer. Los antipatrones te dicen qué evitar, y en el trabajo real son casi más útiles, porque la mayor parte del tiempo no diseñas desde cero: heredas código. Saber nombrar lo que ves ("esto es un dominio anémico", "esto ya es un monolito distribuido") es el primer paso para arreglarlo, y para convencer al equipo de que vale la pena.
+
+Un **antipatrón** es una solución que se repite mucho, que parece razonable en el momento y cuyas consecuencias netas son negativas. Lo importante de esa definición es "parece razonable": nadie escribe un *god object* a propósito. Llega solo, un método a la vez, porque cada cambio individual tenía sentido.
+
+Este tema recorre los antipatrones que más vas a encontrar, desde el nivel de una clase hasta el de un sistema distribuido, el catálogo de *code smells* que los delata y cómo refactorizar sin romper nada.
+
+## Antipatrón, code smell y deuda técnica
+
+Son tres ideas relacionadas que conviene separar:
+
+- **Code smell** (olor de código). Término de Kent Beck, popularizado en *Refactoring* de Martin Fowler (1999). Es un **síntoma superficial** que suele indicar un problema más profundo: un método de 200 líneas, un `switch` repetido en cinco archivos. Un olor no es un bug ni una condena; es una invitación a mirar más de cerca.
+- **Antipatrón.** Un **diagnóstico con nombre**: una estructura recurrente con causas, consecuencias y una solución refactorizada conocida. El término lo acuñó Andrew Koenig en 1995 y lo popularizó el libro *AntiPatterns* (Brown, Malveau, McCormick y Mowbray, 1998).
+- **Deuda técnica.** La metáfora de Ward Cunningham: decisiones que aceleran hoy y cobran intereses mañana. Algunos antipatrones son deuda tomada sin darse cuenta.
+
+La relación típica: varios olores apuntan a un antipatrón, y el antipatrón se paga como deuda en cada cambio.
+
+<Callout type="idea" title="Un olor depende del contexto">
+
+Un `switch` sobre tipos de envío en un script de 50 líneas que nadie va a tocar no es un problema. El mismo `switch` copiado en cinco servicios que cambian cada sprint sí lo es. Los olores se evalúan contra **la frecuencia de cambio** del código, no contra una regla estética.
+
+</Callout>
+
+## God object: la clase que lo sabe todo
+
+El *god object* (o *Large Class*, o *blob*) es una clase que concentra demasiadas responsabilidades: `OrderManager`, `Utils`, `AppService`, `Helpers`. Tiene miles de líneas, decenas de dependencias, y cualquier cambio en el sistema termina tocándola.
+
+**Por qué aparece.** Por gravedad. Cuando una clase ya tiene acceso a la base de datos, al mailer y al cliente de pagos, el camino más corto para cualquier funcionalidad nueva es agregar un método ahí. Cada decisión individual es razonable; la suma no.
+
+**Por qué duele.**
+
+- Responde a muchos actores a la vez: viola la [responsabilidad única](/patrones/introduccion) en su forma más pura.
+- Es imposible de testear en aislamiento: para instanciarla necesitas todo el sistema.
+- Es un imán de conflictos de merge: todos los equipos la tocan.
+- Nadie la entiende completa, así que nadie se atreve a refactorizarla, así que crece. Es un círculo vicioso.
+
+<UmlDiagram
+  caption="Antes: una clase que crea sus dependencias concretas y mezcla pedidos, reportes y cuentas."
+  classes={[
+    { id: 'om', name: 'OrderManager', w: 1.15, fields: ['db: PostgresClient', 'mailer: SmtpMailer'], methods: ['process(o, type, sendMail)', 'applyTaxes(o)', 'shippingCost(o, type)', 'charge(o)', 'sendConfirmation(o)', 'monthlySalesReport(m)', 'exportCsv()', 'resetPassword(userId)'], x: 0, y: 0, tone: 'line', desc: 'Ocho métodos, tres actores (Operaciones, Finanzas, Seguridad) y dependencias concretas creadas adentro.' },
+    { id: 'pg', name: 'PostgresClient', x: 1.45, y: -0.6, tone: 'muted' },
+    { id: 'smtp', name: 'SmtpMailer', x: 1.45, y: 0, tone: 'muted' },
+    { id: 'stripe', name: 'Stripe SDK', x: 1.45, y: 0.6, tone: 'muted' },
+  ]}
+  relations={[
+    { from: 'om', to: 'pg', kind: 'depends', label: 'new' },
+    { from: 'om', to: 'smtp', kind: 'depends', label: 'new' },
+    { from: 'om', to: 'stripe', kind: 'depends' },
+  ]}
+/>
+
+La salida no es "partirla en partes iguales". Es separarla **por actor y por razón de cambio**, y a la vez invertir las dependencias para que cada pieza reciba lo que necesita:
+
+<UmlDiagram
+  caption="Después: un caso de uso que orquesta piezas pequeñas; lo que no era de pedidos se va a su propio módulo."
+  classes={[
+    { id: 'po', name: 'PlaceOrder', methods: ['execute(cmd)'], x: 1, y: 0, mx: 0.5, my: 0, tone: 'line', desc: 'Caso de uso. Solo orquesta: no calcula impuestos ni sabe de SMTP.' },
+    { id: 'repo', name: 'OrderRepository', kind: 'interface', methods: ['save(order)'], x: 0, y: 1.1, mx: 0, my: 1.1 },
+    { id: 'tax', name: 'TaxPolicy', kind: 'interface', methods: ['taxFor(order)'], x: 1, y: 1.1, mx: 1, my: 1.1 },
+    { id: 'pay', name: 'PaymentGateway', kind: 'interface', methods: ['charge(amount)'], x: 2, y: 1.1, mx: 0.5, my: 2.2 },
+    { id: 'rep', name: 'SalesReport', methods: ['monthly(m)'], x: 0.3, y: 2.25, mx: 0, my: 3.3, tone: 'muted', desc: 'Responde a Finanzas. Vive en otro módulo y lee sus propios datos.' },
+    { id: 'pwd', name: 'PasswordReset', methods: ['request(userId)'], x: 1.7, y: 2.25, mx: 1, my: 3.3, tone: 'muted', desc: 'Responde a Seguridad. Nada que ver con pedidos.' },
+  ]}
+  relations={[
+    { from: 'po', to: 'repo', kind: 'depends' },
+    { from: 'po', to: 'tax', kind: 'depends' },
+    { from: 'po', to: 'pay', kind: 'depends' },
+  ]}
+/>
+
+Los refactorings del catálogo de Fowler que más usarás aquí son *Extract Class*, *Move Function* y *Extract Function*. Pero **antes** de mover nada, necesitas una red de seguridad: tests de caracterización que fijen el comportamiento actual, incluso el incorrecto. Michael Feathers dedica a esto buena parte de *Working Effectively with Legacy Code*.
+
+## Modelo de dominio anémico
+
+Martin Fowler le puso nombre en 2003: objetos de dominio que tienen datos pero casi ningún comportamiento, mientras toda la lógica vive en "servicios" que los manipulan desde afuera. Se ve orientado a objetos (hay clases `Order`, `Customer`, `Invoice`), pero en realidad es programación procedural con estructuras de datos.
+
+El problema no es estético. Si `Order` no protege sus reglas, **cualquiera puede romperlas**. "No se cancela un pedido enviado" queda escrito en `OrderService.cancel()`, pero nada impide que un controlador haga `order.status = 'CANCELLED'` directamente. Las invariantes se dispersan y se duplican.
+
+<CodeTabs>
+
+```ts title="TypeScript"
+type OrderStatus = 'pending' | 'paid' | 'shipped' | 'cancelled'
+
+class Order {
+  private readonly items: LineItem[] = []
+  private status: OrderStatus = 'pending'
+
+  constructor(readonly id: string) {}
+
+  addItem(item: LineItem): void {
+    if (this.status !== 'pending') {
+      throw new DomainError('Solo se editan pedidos pendientes')
+    }
+    this.items.push(item)
+  }
+
+  total(): Money {
+    return this.items.reduce(
+      (sum, i) => sum.add(i.unitPrice.times(i.qty)),
+      Money.zero('USD'),
+    )
+  }
+
+  cancel(): void {
+    if (this.status === 'shipped') {
+      throw new DomainError('No se cancela un pedido enviado')
+    }
+    this.status = 'cancelled'
+  }
+}
+
+// El servicio de aplicación ya no decide reglas: orquesta
+class CancelOrder {
+  constructor(private readonly orders: OrderRepository) {}
+
+  async execute(orderId: string): Promise<void> {
+    const order = await this.orders.get(orderId)
+    order.cancel()
+    await this.orders.save(order)
+  }
+}
+```
+
+```python title="Python"
+from dataclasses import dataclass, field
+from decimal import Decimal
+from enum import Enum
+
+class OrderStatus(Enum):
+    PENDING = "pending"
+    PAID = "paid"
+    SHIPPED = "shipped"
+    CANCELLED = "cancelled"
+
+class DomainError(Exception): ...
+
+@dataclass
+class LineItem:
+    sku: str
+    unit_price: Decimal
+    qty: int
+
+@dataclass
+class Order:
+    id: str
+    _items: list[LineItem] = field(default_factory=list)
+    _status: OrderStatus = OrderStatus.PENDING
+
+    def add_item(self, item: LineItem) -> None:
+        if self._status is not OrderStatus.PENDING:
+            raise DomainError("Solo se editan pedidos pendientes")
+        self._items.append(item)
+
+    def total(self) -> Decimal:
+        return sum((i.unit_price * i.qty for i in self._items), Decimal("0"))
+
+    def cancel(self) -> None:
+        if self._status is OrderStatus.SHIPPED:
+            raise DomainError("No se cancela un pedido enviado")
+        self._status = OrderStatus.CANCELLED
+
+class CancelOrder:
+    def __init__(self, orders: "OrderRepository") -> None:
+        self._orders = orders
+
+    def execute(self, order_id: str) -> None:
+        order = self._orders.get(order_id)
+        order.cancel()
+        self._orders.save(order)
+```
+
+</CodeTabs>
+
+En Python, el guion bajo es una convención, no una barrera: el lenguaje no impide escribir `order._status`. Aun así, la intención queda clara y los linters la vigilan.
+
+<Callout type="note" title="Cuándo el modelo 'anémico' está bien">
+
+Si tu aplicación es básicamente CRUD (formularios que guardan y leen filas, sin reglas que proteger), un modelo rico es ceremonia. Fowler mismo describe en *Patterns of Enterprise Application Architecture* el patrón *Transaction Script*, que es legítimo para lógica simple. El antipatrón aparece cuando **hay** reglas de negocio importantes y aun así viven dispersas en servicios. Para modelar dominios ricos, sigue con [DDD táctico](/arquitectura/ddd-tactico).
+
+</Callout>
+
+<Quiz
+  question="¿Cuál de estas señales indica con más fuerza un modelo de dominio anémico?"
+  options={[
+    { text: 'Las clases de dominio tienen getters.', why: 'Tener getters no es el problema. Un modelo rico también expone datos para leer; lo que importa es dónde viven las reglas y quién puede cambiar el estado.' },
+    { text: 'Hay muchos servicios con nombres como OrderService que modifican campos de Order según reglas de negocio.', correct: true, why: 'Exacto: las reglas viven fuera del objeto que debería protegerlas. Cualquier otro código puede saltárselas escribiendo los campos directamente.' },
+    { text: 'Las entidades se guardan con un ORM.', why: 'Usar un ORM es compatible con un modelo rico. El ORM resuelve la persistencia; no decide dónde está la lógica.' },
+    { text: 'El sistema usa TypeScript en lugar de Java.', why: 'El lenguaje no tiene nada que ver. Puedes tener modelos ricos o anémicos en cualquier lenguaje.' },
+  ]}
+/>
+
+## Golden hammer: cuando todo parece un clavo
+
+Abraham Maslow escribió en 1966 algo que se cita como "si la única herramienta que tienes es un martillo, todo te parece un clavo". En software, el *golden hammer* es aplicar la tecnología o el patrón que conoces bien a problemas para los que no fue pensado:
+
+- Microservicios para un equipo de tres personas y un producto que todavía busca su mercado.
+- Kafka como base de datos, o una base de datos como cola de mensajes.
+- Todo el estado de la app en un store global, incluido el texto de cada input.
+- El patrón que acabas de aprender, metido en el siguiente PR "para practicar".
+
+Su primo cercano es el **cargo cult**: copiar las prácticas de una empresa grande (sus herramientas, su arquitectura) sin tener sus problemas. Lo que funciona para miles de ingenieros y millones de usuarios suele ser un lastre para veinte.
+
+**El antídoto** es empezar siempre por el problema y sus restricciones, y obligarte a nombrar al menos una alternativa más simple antes de elegir. En entrevistas de diseño, esto se nota: la respuesta senior incluye "y aquí **no** usaría X porque...".
+
+## Abstracción prematura y generalidad especulativa
+
+Este es el antipatrón favorito de las personas que acaban de leer sobre patrones. Fowler lo llama *Speculative Generality*: interfaces con una sola implementación, clases abstractas con un solo hijo, parámetros "por si acaso", ganchos que nadie usa. Todo justificado con "algún día vamos a necesitar...".
+
+Sandi Metz describió cómo degenera una abstracción equivocada, y su descripción es tan precisa que vale la pena resumirla:
+
+<Steps>
+<Step title="Alguien ve duplicación y la extrae">
+
+Dos funciones parecidas se unen en una abstracción compartida. Hasta aquí, bien.
+
+</Step>
+<Step title="Llega un caso que casi encaja">
+
+En vez de cuestionar la abstracción, se le agrega un parámetro y un `if`.
+
+</Step>
+<Step title="Se repite varias veces">
+
+Cada caso nuevo agrega su flag. La abstracción ya no representa una idea; es un conjunto de condicionales que nadie se atreve a tocar porque "es código compartido".
+
+</Step>
+<Step title="La salida es retroceder">
+
+Metz propone reintroducir la duplicación: copiar la abstracción de vuelta en cada llamador, borrar en cada copia lo que no aplica, y recién entonces buscar la abstracción correcta.
+
+</Step>
+</Steps>
+
+```ts title="notify.ts (seis meses después)"
+// Empezó como "enviar una notificación".
+export async function notify(
+  user: User,
+  message: string,
+  opts: {
+    channel?: 'email' | 'sms'
+    skipIfUnsubscribed?: boolean
+    isInvoice?: boolean       // solo lo usa Facturación
+    attachPdf?: boolean       // solo lo usa Facturación
+    legacyTemplate?: boolean  // solo el módulo viejo de reservas
+    retries?: number
+  } = {},
+) {
+  /* 140 líneas de if (opts.isInvoice && !opts.legacyTemplate) ... */
+}
+```
+
+Cada flag usado por **un solo llamador** es una señal de que ese comportamiento pertenece al llamador, no a la abstracción. Recuerda la regla de tres de la [introducción](/patrones/introduccion): con tres casos reales ves la forma verdadera de lo común.
+
+<Callout type="warn" title="La trampa de la interfaz con una implementación">
+
+"Siempre programo contra interfaces" no significa crear `IUserService` para cada `UserService`. Una interfaz se justifica cuando hay variación real (dos implementaciones, o un fake que de verdad usas en tests) o cuando marca un **límite de arquitectura**, como un puerto hacia infraestructura. Si no, es un archivo más que hay que leer para llegar al código que importa.
+
+</Callout>
+
+<Quiz
+  question="Una función compartida tiene seis flags booleanos y cada flag lo usa un solo llamador. ¿Cuál es el mejor primer paso?"
+  options={[
+    { text: 'Agregar un séptimo flag para el caso nuevo que llegó hoy.', why: 'Eso profundiza el problema: cada flag hace la función más difícil de entender y de testear.' },
+    { text: 'Convertir los flags en un objeto de configuración con valores por defecto.', why: 'Mejora la firma, pero no cambia el problema: la función sigue mezclando seis comportamientos que pertenecen a seis llamadores.' },
+    { text: 'Reintroducir el código en cada llamador, borrar lo que no aplica en cada copia y luego buscar lo verdaderamente común.', correct: true, why: 'Es la receta de Sandi Metz para la abstracción equivocada: retroceder a la duplicación es más barato que seguir parchando una abstracción que no representa una idea real.' },
+    { text: 'Reescribir la función con el patrón Strategy, una estrategia por flag.', why: 'Puede ser el destino final, pero empezar por ahí asume que conoces la abstracción correcta. Primero entiende qué es común de verdad.' },
+  ]}
+/>
+
+## Singleton y estado global
+
+El [*Singleton*](/patrones/creacionales) es el único patrón del GoF que suele aparecer en las listas de antipatrones. El problema no es "una sola instancia", que es perfectamente razonable para un pool de conexiones o un logger. El problema es el **acceso global**:
+
+- **Dependencias ocultas.** Si `CheckoutService` llama a `Database.getInstance()` por dentro, su constructor miente: dice que no necesita nada, pero necesita una base de datos.
+- **Tests acoplados.** El estado del singleton sobrevive entre tests; el orden de ejecución empieza a importar.
+- **Cambios imposibles.** Cuando un día necesitas dos instancias (dos bases de datos, multi-tenant), cada llamada a `getInstance()` es un punto a modificar.
+
+Su versión "elegante" es el **Service Locator**: un registro global al que cualquiera le pide dependencias. Mark Seemann explica por qué también es un antipatrón: esconde las dependencias de una clase, y los errores aparecen en tiempo de ejecución en vez de en compilación.
+
+La alternativa es la misma en ambos casos: crea **una** instancia en la *composition root* y pásala por constructor. Tienes una sola instancia sin estado global. Lo verás en detalle en [patrones de aplicación](/patrones/patrones-aplicacion).
+
+## Monolito distribuido
+
+El antipatrón más caro de esta lista, porque se paga en infraestructura, en latencia y en coordinación entre equipos. Es un sistema partido en servicios que se despliegan por separado, pero que **no pueden evolucionar por separado**. Tiene la complejidad operativa de los microservicios y el acoplamiento de un monolito. Lo peor de ambos mundos.
+
+<FlowDiagram
+  caption="Crear un pedido en un monolito distribuido: cadena síncrona y base de datos compartida."
+  nodes={[
+    { id: 'u', label: 'App', kind: 'mobile', x: 0, y: 1, mx: 0, my: 0 },
+    { id: 'o', label: 'Pedidos', kind: 'service', x: 1, y: 1, mx: 1, my: 0 },
+    { id: 'i', label: 'Inventario', kind: 'service', x: 2, y: 0, mx: 0, my: 1.2 },
+    { id: 'p', label: 'Pagos', kind: 'payment', x: 2, y: 1, mx: 1, my: 1.2 },
+    { id: 's', label: 'Envíos', kind: 'service', x: 2, y: 2, mx: 1, my: 2.4 },
+    { id: 'db', label: 'BD compartida', kind: 'db', x: 3, y: 1, mx: 0, my: 2.4, tone: 'warn', sub: 'tabla orders' },
+  ]}
+  edges={[
+    { from: 'u', to: 'o', label: 'POST /orders' },
+    { from: 'o', to: 'i' },
+    { from: 'o', to: 'p' },
+    { from: 'p', to: 's' },
+    { from: 'i', to: 'db', dashed: true },
+    { from: 'p', to: 'db', dashed: true },
+    { from: 's', to: 'db', dashed: true },
+  ]}
+  steps={[
+    { title: 'Llega la petición', body: 'La app crea un pedido. Hasta aquí, normal.', active: ['u', 'o'], flow: ['u-o'] },
+    { title: 'Cadena síncrona', body: 'Pedidos llama a Inventario y espera; luego a Pagos, que a su vez llama a Envíos y espera. Las latencias se suman y el usuario espera la cadena completa.', active: ['o', 'i', 'p', 's'], flow: ['o-i', 'o-p', 'p-s'] },
+    { title: 'Disponibilidad que se multiplica', body: 'Si cada servicio tiene 99,9 % de disponibilidad y los cuatro deben responder en serie, la operación queda en torno a 0,999⁴ ≈ 99,6 %: unas cuatro veces más tiempo caído que cada servicio por separado.', active: ['o', 'i', 'p', 's'], flow: ['o-i', 'o-p', 'p-s'] },
+    { title: 'La base compartida', body: 'Todos leen y escriben la misma tabla orders (Pedidos también, aunque el diagrama no lo dibuja). Renombrar una columna obliga a coordinar cuatro equipos y cuatro despliegues.', active: ['db', 'o', 'i', 'p', 's'], flow: ['i-db', 'p-db', 's-db'] },
+    { title: 'Despliegue en bloque', body: 'Si para lanzar una funcionalidad tienes que desplegar varios servicios a la vez y en orden, no tienes microservicios: tienes un monolito con latencia de red.', active: ['o', 'i', 'p', 's', 'db'] },
+  ]}
+/>
+
+**Las señales:**
+
+- Tienes que desplegar varios servicios juntos, en un orden específico, para sacar una funcionalidad.
+- Varios servicios leen y escriben las mismas tablas.
+- Un servicio caído tumba a todos los demás (fallas en cascada).
+- Hay una librería "común" con modelos de dominio que todos importan y que hay que actualizar en todas partes a la vez.
+- Los equipos no pueden avanzar sin reuniones de coordinación con otros equipos.
+
+**Por qué pasa.** Casi siempre por partir antes de entender el dominio: los límites se trazan por capas técnicas (un servicio de "datos", uno de "notificaciones") en vez de por capacidades de negocio. Fowler argumenta por eso a favor de empezar con un monolito bien modularizado (*MonolithFirst*) y extraer servicios cuando los límites estén claros.
+
+**La salida** no es necesariamente volver a un monolito, aunque a veces es la opción más honesta. Es redibujar los límites por [contextos acotados](/arquitectura/ddd-estrategico), dar a cada servicio su propia base de datos, y reemplazar cadenas síncronas por eventos donde la consistencia eventual sea aceptable (ver [event-driven](/arquitectura/event-driven) y [sagas y outbox](/arquitectura/sagas-y-outbox)). Las decisiones de cuándo partir están en [microservicios](/arquitectura/microservicios) y [cómo elegir arquitectura](/arquitectura/elegir-arquitectura).
+
+<Quiz
+  question="Tienes ocho servicios. Para lanzar cualquier funcionalidad importante hay que desplegar cinco de ellos el mismo día, y todos leen la tabla orders. ¿Qué diagnóstico es el más preciso?"
+  options={[
+    { text: 'Necesitan más microservicios para separar mejor las responsabilidades.', why: 'Partir más sin arreglar los límites y la base compartida multiplica el problema: más servicios acoplados, más despliegues coordinados.' },
+    { text: 'Es un monolito distribuido: servicios desplegables por separado pero acoplados por datos y por cambios.', correct: true, why: 'Las dos señales clásicas están presentes: despliegues coordinados y base de datos compartida. Los servicios no pueden evolucionar de forma independiente.' },
+    { text: 'Es un god object.', why: 'God object es un antipatrón a nivel de clase. Aquí el acoplamiento es entre servicios desplegados, aunque las causas (límites mal trazados) se parecen.' },
+    { text: 'Es normal: los microservicios siempre requieren coordinación.', why: 'La promesa central de los microservicios es el despliegue independiente. Si siempre se coordinan, pagas el costo sin el beneficio.' },
+  ]}
+/>
+
+## El catálogo de code smells
+
+Los olores son la herramienta de diagnóstico del día a día. Refactoring.Guru los agrupa en cinco familias, y cada olor tiene refactorings asociados en el catálogo de Fowler:
+
+| Familia | Olores típicos | Refactorings que los curan |
+| --- | --- | --- |
+| **Bloaters** (lo que creció demasiado) | Long Method, Large Class, Long Parameter List, Primitive Obsession, Data Clumps | Extract Function, Extract Class, Introduce Parameter Object, Replace Primitive with Object |
+| **Abusos de la orientación a objetos** | Switch Statements, Refused Bequest, Temporary Field, clases alternativas con interfaces distintas | Replace Conditional with Polymorphism, Replace Subclass with Delegate, Extract Class |
+| **Impiden el cambio** | Divergent Change, Shotgun Surgery, Parallel Inheritance Hierarchies | Split Phase, Move Function, Combine Functions into Class |
+| **Prescindibles** | Duplicate Code, Dead Code, Lazy Class, Speculative Generality, Data Class, comentarios que explican código confuso | Extract Function, Remove Dead Code, Inline Class, Collapse Hierarchy |
+| **Acopladores** | Feature Envy, Inappropriate Intimacy, Message Chains, Middle Man | Move Function, Hide Delegate, Remove Middle Man |
+
+Dos parejas que conviene distinguir porque son opuestas:
+
+- **Divergent Change**: una clase cambia por muchos motivos distintos (síntoma de god object). **Shotgun Surgery**: un solo motivo de cambio obliga a tocar muchas clases (la lógica está desparramada).
+- **Middle Man**: una clase que solo delega. **Message Chains**: `a.b().c().d()`, el cliente conoce demasiado de la estructura. Arreglar uno en exceso produce el otro.
+
+Ahora practica. Elige un fragmento y toca las líneas que te parezcan sospechosas:
+
+<SmellSpotter />
+
+## Otros antipatrones que vas a escuchar
+
+| Nombre | Qué es | Señal típica |
+| --- | --- | --- |
+| **Big Ball of Mud** | Sistema sin estructura reconocible, crecido por parches. Brian Foote y Joseph Yoder lo describieron en 1997 como la arquitectura más común de todas. | Nadie puede dibujar el sistema en una pizarra. |
+| **Lava flow** | Código muerto o experimental que nadie se atreve a borrar porque "quizás algo lo usa". | Comentarios como "no tocar" sin explicación. |
+| **Copy-paste programming** | Duplicar en vez de entender. | El mismo bug arreglado en tres lugares, pero no en el cuarto. |
+| **Magic numbers / strings** | Literales con significado de negocio sin nombre. | `if (status === 3)`, `total * 1.19`. |
+| **Not invented here** | Reescribir lo que ya existe y está probado. | Un ORM, un framework de logging o un motor de plantillas hechos en casa. |
+| **Poltergeist** | Clases que existen solo para pasar llamadas de un lado a otro y desaparecer. | Un `OrderManagerHelperController`. |
+
+## Cómo refactorizar sin romper nada
+
+Reconocer el antipatrón es la mitad. La otra mitad es salir de él sin detener el desarrollo ni introducir bugs. Kent Beck lo resumió en una frase muy citada: primero haz que el cambio sea fácil (aunque eso sea difícil), y después haz el cambio fácil.
+
+<Steps>
+<Step title="Asegura la red: tests de caracterización">
+
+Antes de tocar nada, escribe tests que fijen el comportamiento **actual**, incluso los bugs. Su objetivo no es validar que el código está bien, sino avisarte si cambias algo sin querer.
+
+</Step>
+<Step title="Pasos pequeños, uno a la vez">
+
+Un refactoring por commit: extraer una función, mover un método, renombrar. Cada paso deja los tests en verde. Si algo falla, el culpable es el último paso y lo reviertes en segundos.
+
+</Step>
+<Step title="Separa refactorizar de cambiar comportamiento">
+
+Fowler lo llama "los dos sombreros": o estás refactorizando (el comportamiento no cambia) o estás agregando funcionalidad. Nunca los dos en el mismo commit. Los PR quedan revisables y los bugs, rastreables.
+
+</Step>
+<Step title="Refactoriza en el camino, no en un proyecto aparte">
+
+Mejora el código que tienes que tocar para la tarea actual (la "regla del boy scout"). Los grandes proyectos de "limpieza" sin valor de negocio visible tienden a cancelarse a la mitad.
+
+</Step>
+<Step title="Para lo grande, estrangula">
+
+Si el problema es un módulo o un sistema completo, no lo reescribas de golpe. Construye lo nuevo al lado y desvía el tráfico gradualmente: el patrón [Strangler Fig](/patrones/patrones-resiliencia).
+
+</Step>
+</Steps>
+
+<Callout type="interview" title="Cómo hablar de código legado en una entrevista">
+
+Si te preguntan "¿qué harías con esta clase de 3.000 líneas?", la respuesta que buscan no es "reescribirla". Es: primero tests de caracterización, después identificar los actores y las razones de cambio, extraer piezas en pasos pequeños mientras sigues entregando funcionalidades, y medir el progreso con algo concreto (tiempo de los cambios, bugs en esa zona, conflictos de merge).
+
+</Callout>
+
+<Takeaways>
+
+- Un antipatrón es una solución recurrente que **parece razonable** y sale cara. Un code smell es el síntoma que lo delata. Evalúalos contra la frecuencia de cambio del código.
+- El god object crece por gravedad. Se parte por actor y razón de cambio, con tests de caracterización como red de seguridad.
+- El dominio anémico deja las reglas fuera del objeto que debería protegerlas. Si hay reglas de negocio importantes, muévelas al modelo; si es CRUD, no te preocupes.
+- La abstracción prematura cuesta más que la duplicación. Flags usados por un solo llamador son la señal; retroceder a la duplicación es una salida válida.
+- El problema del Singleton es el acceso global, no la instancia única. Una instancia creada en la composition root e inyectada resuelve ambos.
+- Un monolito distribuido tiene despliegues coordinados y base de datos compartida. Se arregla redibujando límites, no agregando servicios.
+- Refactoriza en pasos pequeños, con tests en verde, separando refactor de cambios de comportamiento.
+
+</Takeaways>
+
+## Fuentes y lecturas
+
+- Martin Fowler, [*Refactoring: Improving the Design of Existing Code*, 2.ª edición](https://martinfowler.com/books/refactoring.html) (2018) y su [catálogo de refactorings](https://refactoring.com/catalog/).
+- [Refactoring.Guru: code smells](https://refactoring.guru/refactoring/smells), con ejemplos de cada olor y su refactoring.
+- Martin Fowler, [*Anemic Domain Model*](https://martinfowler.com/bliki/AnemicDomainModel.html) (2003).
+- Martin Fowler, [*Monolith First*](https://martinfowler.com/bliki/MonolithFirst.html) (2015).
+- Sandi Metz, [*The Wrong Abstraction*](https://sandimetz.com/blog/2016/1/20/the-wrong-abstraction) (2016).
+- Mark Seemann, [*Service Locator is an Anti-Pattern*](https://blog.ploeh.dk/2010/02/03/ServiceLocatorisanAnti-Pattern/) (2010).
+- Brian Foote y Joseph Yoder, [*Big Ball of Mud*](http://www.laputan.org/mud/) (1997).
+- William J. Brown et al., *AntiPatterns: Refactoring Software, Architectures, and Projects in Crisis* (Wiley, 1998).
+- Michael Feathers, *Working Effectively with Legacy Code* (Prentice Hall, 2004).
+- Sam Newman, *Building Microservices*, 2.ª edición (O'Reilly, 2021), sobre límites de servicios y acoplamiento.
+- Microsoft, [catálogo de antipatrones para aplicaciones en la nube](https://learn.microsoft.com/en-us/azure/architecture/antipatterns/).

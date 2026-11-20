@@ -1,0 +1,162 @@
+.vb-pick {
+  display: grid;
+  gap: 4px;
+}
+.vb-pick select {
+  min-height: 40px;
+  max-width: 100%;
+  padding: 0 10px;
+  border: 1.5px solid var(--rule-strong);
+  border-radius: 8px;
+  background: var(--card);
+  color: var(--ink);
+  font-family: var(--font-code);
+  font-size: 0.82rem;
+}
+
+.vb-svg {
+  display: block;
+  width: 100%;
+  max-width: 460px;
+  height: auto;
+  margin-inline: auto;
+  overflow: visible;
+}
+.vb-edge {
+  stroke: var(--rule-strong);
+  stroke-width: 2;
+  transition: stroke 220ms var(--ease-out);
+}
+.vb-edge.is-ok {
+  stroke: var(--ok);
+  stroke-width: 3;
+}
+.vb-edge.is-bad {
+  stroke: var(--bad);
+  stroke-width: 3;
+}
+.vb-node circle {
+  fill: var(--card);
+  stroke: var(--ink-2);
+  stroke-width: 1.75;
+  transition:
+    fill 240ms var(--ease-out),
+    stroke 240ms var(--ease-out);
+}
+.vb-node text {
+  font-family: var(--font-code);
+  font-size: 16px;
+  font-weight: 700;
+  fill: var(--ink);
+}
+.vb-node .vb-range {
+  font-size: 13px;
+  font-weight: 600;
+  fill: var(--line-ink);
+}
+.vb-node.is-ok circle {
+  fill: color-mix(in oklab, var(--ok) 18%, var(--card));
+  stroke: var(--ok);
+}
+.vb-node.is-bad circle {
+  fill: color-mix(in oklab, var(--bad) 20%, var(--card));
+  stroke: var(--bad);
+  stroke-width: 3;
+}
+.vb-node.is-bad .vb-range {
+  fill: var(--bad);
+}
+.vb-node.is-cur circle {
+  stroke-width: 4;
+}
+.vb-node.is-cur:not(.is-bad) circle {
+  stroke: var(--line);
+  fill: var(--line-tint-2);
+}
+
+.vb-line {
+  display: grid;
+  gap: 4px;
+}
+.vb-line__title {
+  font-size: 0.74rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.vb-line svg {
+  display: block;
+  width: 100%;
+  max-width: 460px;
+  height: auto;
+  overflow: visible;
+}
+.vb-axis {
+  stroke: var(--ink-3);
+  stroke-width: 1.5;
+}
+.vb-tick {
+  stroke: var(--ink-3);
+  stroke-width: 1.5;
+}
+.vb-tick-label {
+  font-family: var(--font-code);
+  font-size: 13px;
+  fill: var(--ink-3);
+}
+.vb-band {
+  stroke-width: 1.5;
+}
+.vb-band.is-ok {
+  fill: color-mix(in oklab, var(--ok) 22%, transparent);
+  stroke: var(--ok);
+}
+.vb-band.is-bad {
+  fill: color-mix(in oklab, var(--line) 18%, transparent);
+  stroke: var(--line);
+}
+.vb-dot {
+  stroke: var(--card);
+  stroke-width: 2;
+}
+.vb-dot.is-ok {
+  fill: var(--ok);
+}
+.vb-dot.is-bad {
+  fill: var(--bad);
+}
+.vb-dot-label {
+  font-family: var(--font-code);
+  font-size: 14px;
+  font-weight: 700;
+  fill: var(--ink);
+}
+
+.vb-hint {
+  margin: 0;
+  font-size: 0.9rem;
+  color: var(--ink-2);
+}
+.vb-verdict {
+  margin: 0;
+  justify-self: start;
+  padding: 6px 12px;
+  border: 1.5px solid;
+  border-radius: 8px;
+  font-family: var(--font-code);
+  font-size: 0.86rem;
+  color: var(--ink);
+}
+.vb-verdict.is-ok {
+  border-color: var(--ok);
+  background: color-mix(in oklab, var(--ok) 14%, var(--card));
+}
+.vb-verdict.is-bad {
+  border-color: var(--bad);
+  background: color-mix(in oklab, var(--bad) 12%, var(--card));
+}
+.vb-verdict.is-warn {
+  border-color: var(--warn);
+  background: color-mix(in oklab, var(--warn) 16%, var(--card));
+}

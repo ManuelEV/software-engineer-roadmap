@@ -1,0 +1,86 @@
+.rvm-tree {
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+.rvm-tree svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: 420px;
+}
+.rvm-edge {
+  stroke: var(--rule-strong);
+  stroke-width: 1.5;
+  transition: stroke 220ms var(--ease-out);
+}
+.rvm-edge.is-live {
+  stroke: var(--line);
+  stroke-width: 2;
+}
+.rvm-node circle {
+  fill: var(--card);
+  stroke: var(--rule-strong);
+  stroke-width: 1.5;
+  transition:
+    fill 220ms var(--ease-out),
+    stroke 220ms var(--ease-out);
+}
+.rvm-node__n {
+  font-family: var(--font-code);
+  font-size: 15px;
+  font-weight: 700;
+  fill: var(--ink);
+}
+.rvm-node__v {
+  font-family: var(--font-code);
+  font-size: 13px;
+  font-weight: 600;
+  fill: var(--ink-2);
+}
+/* on the call stack */
+.rvm-node.is-stack circle {
+  fill: var(--line-tint);
+  stroke: var(--line);
+}
+/* the call this step is about */
+.rvm-node.is-cur circle {
+  fill: var(--line);
+  stroke: var(--line);
+  stroke-width: 2.5;
+}
+.rvm-node.is-cur .rvm-node__n {
+  fill: var(--line-on);
+}
+.rvm-node.is-done circle {
+  fill: var(--paper-3);
+}
+.rvm-node.is-done .rvm-node__n {
+  fill: var(--ink-2);
+}
+/* repeated work (naive version) */
+.rvm-node.is-repeat circle {
+  stroke: var(--warn);
+  stroke-width: 2;
+  fill: color-mix(in oklab, var(--warn) 18%, var(--card));
+}
+.rvm-node.is-repeat.is-cur circle {
+  fill: var(--warn);
+  stroke: var(--warn);
+}
+.rvm-node.is-repeat.is-cur .rvm-node__n {
+  fill: var(--paper);
+}
+/* answered from memo */
+.rvm-node.is-hit circle {
+  stroke: var(--ok);
+  stroke-width: 2;
+  stroke-dasharray: 4 3;
+  fill: color-mix(in oklab, var(--ok) 16%, var(--card));
+}
+.rvm-node.is-hit.is-cur circle {
+  stroke-dasharray: none;
+  fill: color-mix(in oklab, var(--ok) 32%, var(--card));
+}
+.rvm-node.is-hit.is-cur .rvm-node__n {
+  fill: var(--ink);
+}

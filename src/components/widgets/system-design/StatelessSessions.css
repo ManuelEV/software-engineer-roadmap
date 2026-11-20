@@ -1,0 +1,126 @@
+.ss__svg {
+  display: block;
+  width: 100%;
+  max-width: 620px;
+  height: auto;
+  margin: 0 auto;
+}
+.ss__wire {
+  stroke: var(--rule-strong);
+  stroke-width: 2;
+  transition: stroke 200ms var(--ease-out), stroke-width 200ms var(--ease-out);
+}
+.ss__wire--thin {
+  stroke-dasharray: 4 4;
+}
+.ss__wire.is-ok {
+  stroke: var(--ok);
+  stroke-width: 4;
+}
+.ss__wire.is-bad {
+  stroke: var(--bad);
+  stroke-width: 4;
+}
+.ss__wire.is-down {
+  opacity: 0.35;
+  stroke-dasharray: 3 5;
+}
+.ss__user,
+.ss__server {
+  cursor: pointer;
+  outline: none;
+}
+.ss__ucircle {
+  fill: var(--paper);
+  stroke: var(--ink-2);
+  stroke-width: 3;
+  transition: stroke 200ms var(--ease-out), fill 200ms var(--ease-out);
+}
+.ss__user:hover .ss__ucircle,
+.ss__user:focus-visible .ss__ucircle {
+  stroke: var(--line);
+  stroke-width: 4;
+}
+.ss__user.is-last .ss__ucircle {
+  fill: var(--line-tint-2);
+  stroke: var(--line);
+}
+.ss__uname {
+  font-size: 14px;
+  font-weight: 700;
+  fill: var(--ink);
+  pointer-events: none;
+}
+.ss__token {
+  font-size: 13px;
+  font-weight: 600;
+  fill: var(--line-ink);
+}
+.ss__lb {
+  fill: var(--paper);
+  stroke: var(--line);
+  stroke-width: 4;
+}
+.ss__lbtext {
+  font-size: 14px;
+  font-weight: 700;
+  fill: var(--ink);
+}
+.ss__sbox {
+  fill: var(--card);
+  stroke: var(--ink-2);
+  stroke-width: 2.5;
+  transition: stroke 200ms var(--ease-out);
+}
+.ss__server:hover .ss__sbox,
+.ss__server:focus-visible .ss__sbox {
+  stroke: var(--line);
+  stroke-width: 3.5;
+}
+.ss__server.is-hit.is-ok .ss__sbox {
+  stroke: var(--ok);
+  stroke-width: 3.5;
+}
+.ss__server.is-hit.is-bad .ss__sbox {
+  stroke: var(--bad);
+  stroke-width: 3.5;
+}
+.ss__server.is-down .ss__sbox {
+  fill: var(--paper-3);
+  stroke: var(--rule-strong);
+  stroke-dasharray: 5 4;
+}
+.ss__stitle {
+  font-size: 14px;
+  font-weight: 700;
+  fill: var(--ink);
+}
+.ss__server.is-down .ss__stitle {
+  fill: var(--bad);
+}
+.ss__chip {
+  font-size: 13px;
+  font-weight: 600;
+  fill: var(--ink-2);
+}
+.ss__stateless {
+  font-size: 13px;
+  font-style: italic;
+  fill: var(--ink-3);
+}
+.ss__store {
+  fill: var(--line-tint);
+  stroke: var(--line);
+  stroke-width: 2.5;
+}
+.ss__btns {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+}
+.ss__stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-3) var(--s-5);
+  margin: var(--s-3) 0;
+}

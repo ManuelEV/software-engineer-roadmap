@@ -1,0 +1,322 @@
+import { EventReplay } from '../../components/widgets/arquitectura/EventReplay'
+
+En una arquitectura basada en llamadas, el servicio de Pedidos le dice a cada uno qué hacer: "Inventario, reserva", "Correo, envía", "Analítica, registra". Cada destinatario nuevo es un cambio en Pedidos, y si alguno está caído, el pedido falla. En una arquitectura **orientada a eventos**, Pedidos anuncia lo que pasó ("se confirmó el pedido o-981") y cada interesado reacciona por su cuenta, cuando puede. Pedidos ni siquiera sabe quién escucha.
+
+Ese cambio desacopla en dos dimensiones: en **conocimiento** (el emisor no conoce a los receptores) y en **tiempo** (los receptores no necesitan estar disponibles en el mismo instante). El precio es que el flujo se vuelve implícito, la consistencia pasa a ser eventual y aparecen problemas nuevos: duplicados, orden, evolución de esquemas. Martin Fowler señaló en 2017 que "event-driven" se usa para al menos cuatro patrones distintos. Este tema los separa y los cubre todos: notificación de eventos, transferencia de estado por eventos, event sourcing y CQRS.
+
+## Mensajes, comandos y eventos
+
+Un **mensaje** es el sobre: datos que viajan de un emisor a uno o más receptores a través de un canal. Lo que importa es la intención de lo que va adentro, y ahí hay dos tipos que conviene no mezclar:
+
+| | Comando | Evento |
+| --- | --- | --- |
+| Expresa | Una intención: "haz esto" | Un hecho: "esto pasó" |
+| Nombre | Imperativo: `ReserveStock`, `ChargePayment` | Pasado: `StockReserved`, `PaymentCharged` |
+| Destinatarios | Uno, que el emisor conoce | Cero, uno o muchos, que el emisor no conoce |
+| ¿Se puede rechazar? | Sí: el receptor puede decir que no | No: ya ocurrió; solo se puede reaccionar |
+| Acoplamiento | El emisor depende del receptor | El receptor depende del emisor (de su contrato) |
+
+La distinción importa porque cambia quién es dueño de la decisión. Si Pedidos envía `ReserveStock` a Inventario, Pedidos decide que hay que reservar. Si Pedidos publica `OrderConfirmed` e Inventario decide reservar, la regla vive en Inventario. Ninguna es mejor en abstracto: los comandos dejan el flujo explícito y los eventos dejan los servicios desacoplados.
+
+<Callout type="warn" title="El comando disfrazado">
+
+Un evento llamado `SendWelcomeEmailRequested` que solo escucha el servicio de correo es un comando con nombre de evento. Tienes el acoplamiento de un comando (el emisor sabe qué debe pasar) con la opacidad de un evento (no se ve en el código quién lo atiende). Fowler lo menciona como uno de los problemas típicos de la notificación de eventos.
+
+</Callout>
+
+### Eventos de dominio vs eventos de integración
+
+Dentro de un bounded context, los **eventos de dominio** pueden ser detallados y cambiar con libertad: son un detalle interno. Los eventos que **cruzan** contextos o servicios son **eventos de integración**: un contrato público, versionado, que otros equipos consumen. Publicar tus eventos de dominio internos tal cual hacia afuera es el equivalente a exponer tus tablas: cualquier refactor interno rompe a los consumidores.
+
+## Colas y logs: dos tipos de broker
+
+Los eventos viajan por un **broker**, y hay dos modelos con comportamientos muy distintos.
+
+**Cola** (RabbitMQ, Amazon SQS): cada mensaje se entrega a **un** consumidor de un grupo y se borra al confirmarse. Ideal para repartir trabajo (*competing consumers*). Para que varios servicios reciban el mismo evento, cada uno necesita su propia cola suscrita a un *exchange* o tópico.
+
+**Log** (Apache Kafka, Amazon Kinesis, Redpanda): los eventos se agregan a un registro ordenado e **inmutable** que se **retiene** por días o para siempre. Cada grupo de consumidores lleva su propia posición (*offset*). Un consumidor nuevo puede leer desde el principio, y uno que falló puede volver atrás. El orden se garantiza **dentro de una partición**, así que se elige una clave de partición (por ejemplo, el `orderId`) para que todos los eventos de un mismo pedido lleguen en orden.
+
+<FlowDiagram
+  caption="Publicación en un log particionado: cada grupo de consumidores lee todos los eventos a su propio ritmo; el orden se respeta por clave de partición."
+  nodes={[
+    { id: 'ord', label: 'Pedidos', kind: 'service', x: 0, y: 1, mx: 0, my: 0 },
+    { id: 'k', label: 'orders.events', kind: 'stream', x: 1.5, y: 1, mx: 1, my: 1, sub: 'partición por orderId' },
+    { id: 'inv', label: 'Inventario', kind: 'service', x: 3, y: 0, mx: 0, my: 2.2, sub: 'grupo inventory' },
+    { id: 'mail', label: 'Correo', kind: 'mail', x: 3, y: 1, mx: 1, my: 2.2, sub: 'grupo notifications' },
+    { id: 'ana', label: 'Analítica', kind: 'monitor', x: 3, y: 2, mx: 0.5, my: 3.2, sub: 'grupo analytics' },
+  ]}
+  edges={[
+    { from: 'ord', to: 'k', label: 'OrderConfirmed' },
+    { from: 'k', to: 'inv' },
+    { from: 'k', to: 'mail' },
+    { from: 'k', to: 'ana' },
+  ]}
+  steps={[
+    { title: 'Publicar', body: 'Pedidos agrega OrderConfirmed al tópico, con clave o-981. Todos los eventos de o-981 caen en la misma partición y quedan en orden.', active: ['ord', 'k'], flow: ['ord-k'] },
+    { title: 'Fan-out', body: 'Cada grupo de consumidores recibe el evento de forma independiente. Pedidos no sabe que existen.', active: ['k', 'inv', 'mail', 'ana'], flow: ['k-inv', 'k-mail', 'k-ana'] },
+    { title: 'Un consumidor cae', body: 'Si Correo está caído una hora, sus eventos se acumulan en el log. Al volver, sigue desde su último offset. Pedidos e Inventario no se enteraron.', active: ['mail'] },
+    { title: 'Consumidor nuevo', body: 'Analítica se agregó hoy y lee el tópico desde el principio (si la retención lo permite) para construir su historia completa.', active: ['ana', 'k'], flow: ['k-ana'] },
+  ]}
+/>
+
+### Garantías de entrega
+
+- **Como máximo una vez** (*at-most-once*): puede perder mensajes, nunca duplica. Aceptable para métricas.
+- **Al menos una vez** (*at-least-once*): nunca pierde, puede duplicar. Es la garantía por defecto en casi todos los sistemas reales.
+- **Exactamente una vez**: Kafka la ofrece dentro de su ecosistema (productores idempotentes y transacciones), pero en cuanto el efecto sale del broker (escribir en tu base, llamar a una API) vuelves a necesitar **consumidores idempotentes**. En la práctica, diseña siempre para duplicados.
+
+## Notificación vs transferencia de estado
+
+Los dos primeros patrones de Fowler responden a la pregunta: ¿cuánta información lleva el evento?
+
+**Event notification**: el evento solo avisa que algo pasó y lleva lo mínimo (un ID). Si el receptor necesita más, consulta al emisor.
+
+```json title="Evento delgado (notificación)"
+{
+  "type": "CustomerAddressChanged",
+  "eventId": "8f1c…",
+  "occurredAt": "2026-11-19T14:02:11Z",
+  "customerId": "c-42"
+}
+```
+
+**Event-carried state transfer**: el evento lleva los datos que cambiaron, para que los receptores mantengan su propia copia sin volver a preguntar.
+
+```json title="Evento gordo (transferencia de estado)"
+{
+  "type": "CustomerAddressChanged",
+  "eventId": "8f1c…",
+  "occurredAt": "2026-11-19T14:02:11Z",
+  "customerId": "c-42",
+  "version": 7,
+  "address": { "street": "Av. Providencia 1234", "city": "Santiago", "country": "CL", "postalCode": "7500000" }
+}
+```
+
+<Compare>
+<Option title="Notificación">
+
+**Ganas**: eventos pequeños y estables; el emisor sigue siendo la única fuente de verdad.
+
+**Pagas**: cada receptor llama de vuelta al emisor, que queda acoplado en tiempo de ejecución (si está caído, nadie procesa) y recibe un pico de lecturas por cada evento.
+
+</Option>
+<Option title="Transferencia de estado">
+
+**Ganas**: los receptores son autónomos y rápidos; funcionan aunque el emisor esté caído.
+
+**Pagas**: datos duplicados, consistencia eventual, eventos más grandes y un contrato más amplio que mantener. Incluye la `version` para que los receptores descarten eventos viejos que lleguen tarde.
+
+</Option>
+</Compare>
+
+La recomendación general en sistemas de microservicios es **transferencia de estado** para los datos que otros servicios necesitan en su camino crítico (es lo que elimina cadenas síncronas) y **notificación** cuando el payload sería enorme o sensible.
+
+<Quiz
+  question="Envíos necesita la dirección del cliente al momento de despachar. Hoy la pide por HTTP a Clientes en cada despacho, y cuando Clientes cae, no se despacha nada. ¿Qué patrón lo resuelve mejor?"
+  options={[
+    { text: 'Event notification: Clientes avisa que la dirección cambió y Envíos la consulta.', why: 'Envíos seguiría llamando a Clientes (ahora al recibir el evento), así que sigue dependiendo de su disponibilidad.' },
+    { text: 'Event-carried state transfer: Clientes publica la dirección completa en el evento y Envíos guarda su propia copia.', correct: true, why: 'Exacto. Envíos tiene los datos localmente y despacha aunque Clientes esté caído. El costo es la duplicación y la consistencia eventual, aceptable para una dirección.' },
+    { text: 'Compartir la tabla customers entre ambos servicios.', why: 'Resuelve la disponibilidad pero acopla ambos servicios por el esquema y elimina el despliegue independiente.' },
+    { text: 'Aumentar el timeout de la llamada HTTP.', why: 'No cambia nada cuando Clientes está caído; solo hace que Envíos espere más antes de fallar.' },
+  ]}
+/>
+
+## Event sourcing
+
+Los dos patrones anteriores usan eventos para **comunicar**. **Event sourcing** los usa para **persistir**: en lugar de guardar el estado actual de un agregado (una fila que se sobrescribe), guardas la secuencia de eventos que lo produjo, y el estado se calcula aplicándolos en orden. El log de eventos es la fuente de verdad; todo lo demás se deriva.
+
+Es la misma idea que un libro contable: no guardas "saldo: $500", guardas cada movimiento, y el saldo es la suma. Prueba moverte en la historia de un pedido:
+
+<EventReplay />
+
+En código, un agregado event-sourced tiene dos partes: decidir qué eventos emitir (validando reglas) y aplicar eventos al estado (sin validar nada, porque ya ocurrieron).
+
+```ts title="src/orders/domain/order.es.ts"
+type OrderEvent =
+  | { type: 'ItemAdded'; sku: string; qty: number; priceCents: number }
+  | { type: 'ItemRemoved'; sku: string }
+  | { type: 'OrderConfirmed' }
+
+interface OrderState {
+  status: 'DRAFT' | 'CONFIRMED'
+  lines: Map<string, { qty: number; priceCents: number }>
+}
+
+const initial = (): OrderState => ({ status: 'DRAFT', lines: new Map() })
+
+// evolve: aplica un hecho. Nunca lanza errores; el evento ya ocurrió.
+export function evolve(s: OrderState, e: OrderEvent): OrderState {
+  const lines = new Map(s.lines)
+  switch (e.type) {
+    case 'ItemAdded':
+      lines.set(e.sku, { qty: (lines.get(e.sku)?.qty ?? 0) + e.qty, priceCents: e.priceCents })
+      return { ...s, lines }
+    case 'ItemRemoved':
+      lines.delete(e.sku)
+      return { ...s, lines }
+    case 'OrderConfirmed':
+      return { ...s, status: 'CONFIRMED' }
+  }
+}
+
+// decide: valida un comando contra el estado y devuelve los eventos a guardar.
+export function confirm(s: OrderState): OrderEvent[] {
+  if (s.status !== 'DRAFT') throw new Error('El pedido ya fue confirmado')
+  if (s.lines.size === 0) throw new Error('No se puede confirmar un pedido vacío')
+  return [{ type: 'OrderConfirmed' }]
+}
+
+export const rehydrate = (events: OrderEvent[]) => events.reduce(evolve, initial())
+```
+
+Y el event store garantiza la concurrencia con una **versión esperada**: solo agrega si nadie escribió en el stream desde que lo leíste.
+
+```ts title="src/orders/application/confirm-order.ts"
+const { events, version } = await store.readStream(`order-${orderId}`)
+const newEvents = confirm(rehydrate(events))
+await store.append(`order-${orderId}`, newEvents, { expectedVersion: version }) // falla si otro escribió
+```
+
+### Lo que ganas y lo que pagas
+
+<ProsCons
+  pros={[
+    'Historia completa y auditable por diseño: sabes qué pasó, cuándo y en qué orden.',
+    'Consultas temporales: el estado en cualquier momento del pasado.',
+    'Proyecciones nuevas sobre todo el historial, aunque nadie las haya imaginado al principio.',
+    'Depuración: reproduces exactamente la secuencia que produjo un bug.',
+  ]}
+  cons={[
+    'Los eventos son para siempre: cambiar su esquema es difícil y necesitas estrategias de versionado.',
+    'Consultar el estado actual requiere proyecciones (casi siempre con CQRS), con consistencia eventual.',
+    'Streams largos necesitan snapshots para rehidratar rápido.',
+    'El derecho al olvido (GDPR) choca con un log inmutable; se resuelve con técnicas como cifrar datos personales por usuario y borrar la clave (crypto-shredding).',
+    'Curva de aprendizaje alta y menos herramientas que el CRUD tradicional.',
+  ]}
+/>
+
+<Callout type="tip" title="Dónde sí, dónde no">
+
+Event sourcing brilla donde la historia **es** el negocio: libros contables, inventario con trazabilidad, flujos con auditoría regulatoria, sistemas donde "¿cómo llegamos a este estado?" es una pregunta frecuente. Aplicarlo a todo el sistema, incluidos los CRUDs de configuración, es uno de los errores de arquitectura más caros que se ven en la industria. Úsalo por bounded context, no por empresa.
+
+</Callout>
+
+## CQRS y proyecciones
+
+**CQRS** (*Command Query Responsibility Segregation*) separa el modelo que **escribe** del modelo que **lee**. La idea parte de un principio de Bertrand Meyer (separar comandos de consultas en métodos) y Greg Young la llevó al nivel de arquitectura. Fowler advierte que CQRS agrega complejidad y que en la mayoría de los sistemas no vale la pena; donde vale, cambia todo.
+
+El problema que resuelve: un modelo optimizado para validar reglas (agregados, normalizado, transaccional) es malo para pantallas que necesitan datos de diez lugares, filtrados y ordenados. CQRS acepta que son dos problemas distintos y les da dos modelos distintos, conectados por eventos.
+
+<FlowDiagram
+  caption="CQRS con proyecciones: los comandos pasan por el agregado; las consultas leen modelos desnormalizados construidos a partir de los eventos."
+  nodes={[
+    { id: 'ui', label: 'Cliente', kind: 'client', x: 0, y: 1, mx: 0, my: 0 },
+    { id: 'cmd', label: 'Comandos', kind: 'service', x: 1, y: 0, mx: 0, my: 1, sub: 'ConfirmOrder' },
+    { id: 'agg', label: 'Agregado', kind: 'core', x: 2, y: 0, mx: 0, my: 2, sub: 'Order' },
+    { id: 'es', label: 'Event store', kind: 'stream', x: 3, y: 0, mx: 1, my: 2.5, sub: 'fuente de verdad' },
+    { id: 'proj', label: 'Proyector', kind: 'worker', x: 4, y: 1, mx: 1, my: 3.5 },
+    { id: 'rdb', label: 'Modelo lectura', kind: 'search', x: 2.5, y: 2, mx: 0.5, my: 4.5, sub: 'Postgres / Elastic' },
+    { id: 'qry', label: 'Consultas', kind: 'service', x: 1, y: 2, mx: 1, my: 1, sub: 'GET /orders' },
+  ]}
+  edges={[
+    { from: 'ui', to: 'cmd', label: 'POST' },
+    { from: 'cmd', to: 'agg' },
+    { from: 'agg', to: 'es', label: 'eventos' },
+    { from: 'es', to: 'proj' },
+    { from: 'proj', to: 'rdb' },
+    { from: 'qry', to: 'rdb' },
+    { from: 'ui', to: 'qry', label: 'GET' },
+  ]}
+  steps={[
+    { title: 'Escritura', body: 'El comando carga el agregado (rehidratando sus eventos), valida reglas y agrega eventos nuevos con versión esperada.', active: ['ui', 'cmd', 'agg', 'es'], flow: ['ui-cmd', 'cmd-agg', 'agg-es'] },
+    { title: 'Proyección', body: 'Un proyector se suscribe a los eventos y actualiza un modelo de lectura desnormalizado: una fila por pedido con todo lo que la pantalla necesita, ya calculado.', active: ['es', 'proj', 'rdb'], flow: ['es-proj', 'proj-rdb'] },
+    { title: 'Lectura', body: 'Las consultas leen ese modelo directamente, sin pasar por el dominio. Son simples, rápidas y se pueden escalar aparte.', active: ['ui', 'qry', 'rdb'], flow: ['ui-qry', 'qry-rdb'] },
+    { title: 'Consistencia eventual', body: 'Entre la escritura y la actualización de la proyección hay un retraso (milisegundos a segundos). La UI debe contemplarlo: devolver el resultado del comando, mostrar "procesando" o leer con la versión esperada.', active: ['proj', 'rdb'] },
+  ]}
+/>
+
+Tres aclaraciones que separan a quien entiende CQRS de quien lo recita:
+
+- **CQRS no requiere event sourcing.** Puedes tener un modelo de escritura relacional normal y alimentar el de lectura con eventos de dominio, con CDC o incluso con una vista materializada. Event sourcing casi siempre necesita CQRS (para consultar algo que no sea un stream por ID), pero no al revés.
+- **CQRS no requiere dos bases de datos.** Puede ser el mismo Postgres con tablas de lectura separadas. Lo esencial es la separación de modelos, no de infraestructura.
+- **Las proyecciones son desechables.** Si una proyección tiene un bug o necesitas un formato nuevo, la borras y la reconstruyes reprocesando los eventos desde el principio. Por eso los proyectores deben ser deterministas e idempotentes.
+
+<Quiz
+  question="Un compañero dice: 'Para usar CQRS necesitamos event sourcing, Kafka y dos bases de datos'. ¿Qué es correcto?"
+  options={[
+    { text: 'Tiene razón: CQRS es inseparable de event sourcing.', why: 'Son patrones independientes que combinan bien. Fowler y Young lo aclaran explícitamente.' },
+    { text: 'Ninguna de las tres es obligatoria: CQRS es separar el modelo de escritura del de lectura, y puede hacerse con una sola base y sin event sourcing.', correct: true, why: 'Exacto. Puedes empezar con tablas o vistas de lectura en la misma base, alimentadas en la misma transacción o por eventos internos. La infraestructura extra se agrega solo si la escala lo exige.' },
+    { text: 'Solo necesita Kafka; el resto es opcional.', why: 'Un broker es una forma de conectar ambos modelos, pero no la única ni la obligatoria.' },
+    { text: 'CQRS solo sirve con bases NoSQL.', why: 'No tiene ninguna relación con el tipo de base de datos.' },
+  ]}
+/>
+
+## Evolución de esquemas
+
+Un evento publicado es un contrato con consumidores que no controlas, y en event sourcing además es un registro que vas a releer dentro de años. Cambiarlo sin romper nada es una disciplina con reglas claras.
+
+**Cambios seguros** (compatibles): agregar un campo **opcional** con valor por defecto; agregar un tipo de evento nuevo que los consumidores viejos ignoran.
+
+**Cambios peligrosos**: renombrar un campo, eliminarlo, cambiar su tipo o, el peor, **cambiar su significado** sin cambiar su nombre (`amount` que pasa de dólares a centavos).
+
+Las herramientas para manejarlo:
+
+- **Tolerant reader.** Los consumidores leen solo los campos que necesitan e ignoran el resto. Fowler lo describe como un patrón para integraciones robustas: no falles porque apareció un campo nuevo.
+- **Schema registry con reglas de compatibilidad.** Herramientas como Confluent Schema Registry (con Avro, Protobuf o JSON Schema) rechazan en el momento de publicar un esquema que rompa la compatibilidad configurada: *BACKWARD* (los consumidores nuevos pueden leer eventos viejos), *FORWARD* (los consumidores viejos pueden leer eventos nuevos) o *FULL* (ambas).
+- **Versionado explícito y *upcasting*.** Cuando el cambio es incompatible, publicas una versión nueva del evento. En event sourcing, un *upcaster* transforma eventos viejos a la forma nueva al leerlos, sin reescribir el log.
+
+```ts title="src/orders/infra/upcasters.ts"
+// v1 guardaba el total en dólares con decimales; v2 en centavos enteros y con moneda.
+type OrderConfirmedV1 = { type: 'OrderConfirmed'; schema: 1; orderId: string; total: number }
+type OrderConfirmedV2 = { type: 'OrderConfirmed'; schema: 2; orderId: string; totalCents: number; currency: string }
+
+export function upcast(raw: OrderConfirmedV1 | OrderConfirmedV2): OrderConfirmedV2 {
+  if (raw.schema === 2) return raw
+  return { type: 'OrderConfirmed', schema: 2, orderId: raw.orderId, totalCents: Math.round(raw.total * 100), currency: 'USD' }
+}
+```
+
+Greg Young dedicó un libro entero a esto (*Versioning in an Event Sourced System*), y su recomendación de fondo es simple: diseña los eventos pensando en que van a vivir para siempre, con nombres de negocio precisos y sin filtrar detalles internos.
+
+## Cuándo duele
+
+La arquitectura orientada a eventos tiene modos de falla propios, y conviene conocerlos antes de adoptarla:
+
+- **Flujos invisibles.** "¿Qué pasa cuando se confirma un pedido?" ya no se responde leyendo una función: hay que buscar a todos los suscriptores. Sin tracing distribuido y un catálogo de eventos (AsyncAPI, por ejemplo), nadie entiende el sistema completo.
+- **Cadenas de eventos.** El evento A dispara B que dispara C que dispara D. Es una cadena síncrona disfrazada, más difícil de depurar. Si un proceso de negocio tiene pasos y compensaciones, probablemente necesita una saga orquestada (siguiente tema).
+- **Consistencia eventual en la UX.** El usuario guarda y la lista no muestra el cambio. Hay que diseñar la interfaz para eso.
+- **Duplicados y desorden.** Con entrega al menos una vez, todo consumidor debe ser idempotente y tolerar eventos fuera de orden (o garantizar orden por clave).
+
+<Quiz
+  question="Tu sistema event-driven tiene un bug: algunos pedidos quedan sin despachar. Nadie sabe qué servicio debía reaccionar. ¿Qué falta, sobre todo?"
+  options={[
+    { text: 'Más particiones en Kafka.', why: 'Las particiones afectan el paralelismo y el orden, no la visibilidad de los flujos.' },
+    { text: 'Observabilidad de flujos: tracing distribuido que propague un ID de correlación por los eventos, y un catálogo de qué servicio publica y consume cada evento.', correct: true, why: 'Exacto. El flujo implícito es el costo central de la coreografía por eventos. Sin correlación y sin catálogo, depurar es arqueología.' },
+    { text: 'Volver a llamadas HTTP síncronas.', why: 'Podría ser correcto para ese flujo si necesita ser explícito, pero el problema inmediato es que no puedes ver lo que está pasando.' },
+    { text: 'Usar exactly-once en el broker.', why: 'Las garantías de entrega no ayudan a entender qué servicio debía reaccionar.' },
+  ]}
+/>
+
+<Takeaways>
+
+- Comando = intención con un destinatario conocido que puede negarse; evento = hecho en pasado con receptores desconocidos. No disfraces comandos de eventos.
+- Los eventos que cruzan servicios son contratos públicos versionados; los eventos de dominio internos no deberían filtrarse tal cual.
+- Colas reparten trabajo; logs como Kafka retienen y permiten reprocesar, con orden por clave de partición. Diseña siempre para entrega al menos una vez: consumidores idempotentes.
+- Notificación mantiene una sola fuente de verdad pero acopla en tiempo de ejecución; transferencia de estado da autonomía a cambio de duplicar datos.
+- Event sourcing guarda los hechos y deriva el estado; úsalo donde la historia es el negocio, por bounded context, nunca en todo el sistema.
+- CQRS separa modelos de escritura y lectura; no requiere event sourcing ni dos bases, y las proyecciones se pueden reconstruir.
+- Evoluciona esquemas solo con cambios compatibles, tolerant readers, schema registry y upcasters para lo incompatible.
+
+</Takeaways>
+
+## Fuentes y lecturas
+
+- Martin Fowler, [*What do you mean by "Event-Driven"?*](https://martinfowler.com/articles/201701-event-driven.html) (2017).
+- Martin Fowler, [*Event Sourcing*](https://martinfowler.com/eaaDev/EventSourcing.html), [*CQRS*](https://martinfowler.com/bliki/CQRS.html) y [*Tolerant Reader*](https://martinfowler.com/bliki/TolerantReader.html).
+- Microsoft Azure Architecture Center, [Event Sourcing pattern](https://learn.microsoft.com/en-us/azure/architecture/patterns/event-sourcing) y [CQRS pattern](https://learn.microsoft.com/en-us/azure/architecture/patterns/cqrs).
+- Chris Richardson, microservices.io: [Event sourcing](https://microservices.io/patterns/data/event-sourcing.html) y [CQRS](https://microservices.io/patterns/data/cqrs.html).
+- Gregor Hohpe y Bobby Woolf, *Enterprise Integration Patterns*: [Command Message](https://www.enterpriseintegrationpatterns.com/patterns/messaging/CommandMessage.html) y [Event Message](https://www.enterpriseintegrationpatterns.com/patterns/messaging/EventMessage.html).
+- Greg Young, [*Versioning in an Event Sourced System*](https://leanpub.com/esversioning).
+- Confluent, [Schema Evolution and Compatibility](https://docs.confluent.io/platform/current/schema-registry/fundamentals/schema-evolution.html).
+- Apache Kafka, [documentación sobre semánticas de entrega](https://kafka.apache.org/documentation/#semantics).

@@ -1,0 +1,262 @@
+import { CacheSimulator } from '../../components/widgets/system-design/CacheSimulator'
+import { CacheStampede } from '../../components/widgets/system-design/CacheStampede'
+
+Una caché guarda una copia de un resultado caro en un lugar más rápido y más cercano, para no recalcularlo ni ir a buscarlo cada vez. Es la herramienta de escalado con mejor relación esfuerzo-impacto que existe: una caché bien puesta puede quitarle a tu base de datos la gran mayoría de las lecturas y bajar la latencia de decenas de milisegundos a menos de uno.
+
+También es una fuente inagotable de bugs sutiles. En cuanto tienes dos copias del mismo dato, tienes que decidir qué pasa cuando difieren, cuándo se borra la copia, qué hacer cuando se llena y qué pasa cuando mil peticiones descubren a la vez que la copia ya no está. Este tema cubre esas decisiones, que son exactamente las que un entrevistador va a pinchar cuando digas "y aquí pongo Redis".
+
+## Por qué funciona (y cuándo no)
+
+Las cachés funcionan porque el acceso a los datos casi nunca es uniforme. En una tienda, unos pocos productos concentran la mayoría de las visitas; en una red social, unas pocas publicaciones virales concentran la mayoría de las lecturas. Esa distribución de **ley de potencias** hace que una caché que guarda una fracción pequeña de los datos atienda una fracción grande de las peticiones.
+
+La métrica central es la **tasa de aciertos** (*hit ratio*): qué fracción de las lecturas se resuelve en la caché. Dos cuentas que conviene tener a mano:
+
+- **Latencia efectiva** ≈ `h × t_caché + (1 − h) × t_origen`. Con un acierto en Redis de 1 ms, un fallo que va a la base de datos en 20 ms y `h = 0,9`, la latencia media es de unos 2,9 ms.
+- **Carga en el origen** = `(1 − h) × QPS`. Pasar de 90 % a 99 % de aciertos parece una mejora del 9 %, pero **divide por 10** las lecturas que llegan a la base de datos.
+
+Por eso, en sistemas con mucha lectura, la base de datos se dimensiona para los fallos de caché, no para el tráfico total. Y por eso mismo una caché que se vacía de golpe puede tumbar al origen: lo veremos más abajo.
+
+Cuándo **no** cachear: datos que se leen una sola vez, datos que cambian más rápido de lo que se leen, datos donde servir una versión vieja es inaceptable (el saldo antes de autorizar un pago) y, en general, cuando el origen ya es suficientemente rápido. Cada caché que agregas es una copia más que puede quedar desactualizada.
+
+## Dónde cachear
+
+Puedes cachear en casi todas las capas del camino de una petición. Cuanto más cerca del usuario, más latencia y carga ahorras, y menos control tienes sobre la invalidación.
+
+| Capa | Ejemplo | Qué guarda | Ojo con |
+| --- | --- | --- | --- |
+| Cliente | Caché HTTP del navegador, caché en la app móvil | Assets, respuestas con `Cache-Control` | No puedes invalidarla a voluntad |
+| CDN | Cloudflare, CloudFront, Akamai | Estáticos, imágenes, video, a veces respuestas de API | Claves de caché, purgas, datos personalizados |
+| Gateway / proxy | NGINX, Varnish | Respuestas completas | Respetar cabeceras, no cachear lo privado |
+| Aplicación (en proceso) | Un mapa LRU en memoria | Objetos calientes, configuración | Cada réplica tiene su copia; incoherencia entre réplicas |
+| Caché distribuida | Redis, Memcached, Valkey | Objetos, sesiones, resultados de consultas | Un salto de red, otro sistema que operar |
+| Base de datos | Buffer pool, caché de páginas del SO | Páginas de disco | Ya existe; no la controlas directamente |
+
+La elección más frecuente en diseño es entre caché **en proceso** y caché **distribuida**. La en proceso es gratis en latencia (nanosegundos, sin red) y no tiene dependencias, pero cada réplica calienta la suya, cada réplica nueva arranca fría y la carga sobre el origen crece con el tamaño de la flota. La distribuida comparte una sola copia entre todas las réplicas, sobrevive a los despliegues y mantiene la carga del origen independiente del número de servidores, a cambio de un salto de red y un sistema más que operar.<Sidenote>Este análisis de local vs externa, junto con el problema del arranque en frío, está muy bien contado en el artículo de Jas Chhabra en la Amazon Builders' Library.</Sidenote> Es común usar las dos: una caché local pequeña con TTL corto para las claves más calientes, delante de Redis.
+
+## Estrategias de lectura y escritura
+
+Hay cuatro patrones clásicos. Se diferencian en **quién** carga la caché y **cuándo** se escribe en ella.
+
+### Cache-aside (lazy loading)
+
+La aplicación habla con la caché y con la base de datos por separado. Al leer, pregunta a la caché; si no está, va a la base, guarda el resultado en la caché y responde. Al escribir, actualiza la base y **borra** la entrada de la caché. Es el patrón más usado porque es simple, solo cachea lo que de verdad se pide y tolera que la caché se caiga (todo sigue funcionando, más lento).
+
+<FlowDiagram
+  caption="Cache-aside: la aplicación decide cuándo leer y cuándo invalidar."
+  nodes={[
+    { id: 'u', label: 'Cliente', kind: 'client', x: 0, y: 1 },
+    { id: 'app', label: 'Servicio', kind: 'service', x: 1, y: 1, sub: 'productos' },
+    { id: 'c', label: 'Redis', kind: 'cache', x: 2, y: 0, sub: 'TTL 10 min' },
+    { id: 'db', label: 'Postgres', kind: 'db', x: 2, y: 2 },
+  ]}
+  edges={[
+    { from: 'u', to: 'app', label: 'GET /productos/42' },
+    { from: 'app', to: 'c' },
+    { from: 'app', to: 'db' },
+  ]}
+  steps={[
+    { title: 'Lectura: preguntar a la caché', body: <>El servicio hace <code>GET producto:42</code> en Redis.</>, active: ['u', 'app', 'c'], flow: ['u-app', 'app-c'] },
+    { title: 'Hit', body: 'Si está, responde en alrededor de un milisegundo. La base de datos ni se entera. Este es el camino del 90 % o más de las lecturas.', active: ['app', 'c'] },
+    { title: 'Miss: ir al origen', body: <>Si no está, consulta Postgres: <code>SELECT * FROM productos WHERE id = 42</code>.</>, active: ['app', 'db'], flow: ['app-db'] },
+    { title: 'Poblar la caché', body: <>Guarda el resultado con TTL: <code>SET producto:42 … EX 600</code>. La próxima lectura será un hit.</>, active: ['app', 'c'], flow: ['app-c'] },
+    { title: 'Escritura: base primero, luego borrar', body: <>Al cambiar el precio, actualiza Postgres y después hace <code>DEL producto:42</code>. Borrar en vez de reescribir evita que dos escrituras concurrentes dejen en la caché el valor equivocado.</>, active: ['app', 'db', 'c'], flow: ['app-db', 'app-c'] },
+  ]}
+/>
+
+```ts title="productos/cache.ts"
+const TTL_S = 600
+
+export async function getProducto(id: string): Promise<Producto | null> {
+  const key = `producto:${id}`
+  const cached = await redis.get(key)
+  if (cached !== null) return cached === 'NULL' ? null : JSON.parse(cached)
+
+  const producto = await db.productos.findById(id)
+  // TTL con jitter para que no venzan todas a la vez; caché negativa corta
+  const ttl = producto ? TTL_S + Math.floor(Math.random() * 60) : 30
+  await redis.set(key, producto ? JSON.stringify(producto) : 'NULL', 'EX', ttl)
+  return producto
+}
+
+export async function actualizarPrecio(id: string, precio: number) {
+  await db.productos.update(id, { precio }) // 1. fuente de verdad
+  await redis.del(`producto:${id}`)          // 2. invalidar (no reescribir)
+}
+```
+
+### Read-through, write-through, write-behind y write-around
+
+- **Read-through**: igual que cache-aside, pero quien va al origen en un fallo es la propia caché (o una librería), no tu código. Simplifica la aplicación; necesitas una caché que lo soporte, como DAX delante de DynamoDB.
+- **Write-through**: cada escritura pasa por la caché y esta la escribe en la base de forma síncrona. La caché nunca queda vieja respecto a las escrituras que pasan por ella, pero cada escritura paga los dos saltos y llenas la caché de datos que quizá nadie lea.
+- **Write-behind** (*write-back*): la escritura se confirma al llegar a la caché y se vuelca a la base después, en lotes. Escrituras rapidísimas y absorción de picos. El precio es serio: si la caché pierde datos antes del volcado, se pierden escrituras confirmadas. Úsalo solo para datos donde eso es aceptable (contadores de vistas, métricas) o con una caché durable.
+- **Write-around**: las escrituras van directo a la base sin tocar la caché; la caché se llena solo con lecturas. Evita llenar la caché con datos escritos y nunca leídos.
+
+<Compare>
+<Option title="Cache-aside" verdict="El default">
+
+Simple, tolerante a fallas de la caché, solo cachea lo leído. Primer acceso siempre lento; posibles datos viejos hasta el TTL o la invalidación.
+
+</Option>
+<Option title="Write-through" verdict="Lecturas frescas">
+
+Caché coherente con las escrituras que pasan por ella. Escrituras más lentas; cachea datos que quizá nadie lea. Se combina con TTL.
+
+</Option>
+<Option title="Write-behind" verdict="Escrituras masivas">
+
+Latencia de escritura mínima y escrituras agrupadas. Riesgo de perder datos confirmados; consistencia eventual con la base.
+
+</Option>
+</Compare>
+
+## Invalidación: el problema difícil
+
+Una entrada de caché deja de ser válida cuando cambia el dato de origen.<Sidenote>La frase "hay solo dos cosas difíciles en ciencias de la computación: invalidar cachés y ponerle nombre a las cosas" se atribuye a Phil Karlton.</Sidenote> Tienes cuatro formas de enterarte:
+
+1. **TTL (expiración)**: la entrada muere sola tras un tiempo. Es la red de seguridad que siempre debes tener, porque acota cuánto puede durar un error. El TTL es un trade-off explícito: más largo, más aciertos y datos más viejos.
+2. **Invalidación explícita**: quien escribe borra la clave. Rápido y preciso, pero solo si **todos** los caminos de escritura lo hacen, incluidos los scripts de migración y el panel de administración.
+3. **Invalidación por eventos**: un proceso escucha los cambios de la base (por ejemplo con CDC sobre el log de replicación, con Debezium) y borra las claves afectadas. Desacopla a los escritores de la caché y no se olvida de nadie.
+4. **Claves versionadas**: en lugar de borrar, cambias la clave. `perfil:42:v7` pasa a `perfil:42:v8` y la versión vieja muere por TTL. Para estáticos en una CDN es la técnica reina: `app.3f9a1c.js` nunca se invalida, simplemente se publica `app.8b2e07.js`.
+
+### La carrera que nadie ve
+
+Incluso cache-aside con "escribir en la base y luego borrar" tiene una ventana de inconsistencia:
+
+1. La petición A lee `producto:42`, falla en la caché y lee de la base: precio 100.
+2. La petición B actualiza el precio a 120 en la base y borra la clave de la caché (que todavía no existía).
+3. A, que se quedó lenta, escribe en la caché el precio 100 que leyó antes.
+
+Ahora la caché tiene 100 hasta que venza el TTL. Es poco probable, pero a escala de millones de peticiones ocurre. Facebook describe este problema (*stale sets*) en su artículo sobre Memcache y lo resuelve con **leases**: en un fallo, la caché entrega un token; la escritura posterior solo se acepta si el token sigue vigente, y un borrado intermedio lo invalida. El mismo mecanismo limita la frecuencia con que se entregan tokens para una clave, lo que también frena las estampidas. Sin leases, las defensas prácticas son un TTL razonable, un **doble borrado** (borrar de nuevo unos cientos de milisegundos después de escribir) y aceptar explícitamente la consistencia eventual.
+
+<Quiz
+  question="En cache-aside, ¿por qué se recomienda borrar la clave al escribir en vez de escribir el valor nuevo en la caché?"
+  options={[
+    { text: 'Porque borrar es más rápido que escribir en Redis.', why: 'La diferencia de velocidad es irrelevante. El motivo es de correctitud, no de rendimiento.' },
+    { text: 'Porque con dos escrituras concurrentes, el orden en que llegan a la base y a la caché puede diferir, y la caché quedaría con el valor perdedor indefinidamente; borrar hace que la próxima lectura traiga el valor real.', correct: true, why: 'Exacto. Si A escribe 100 y B escribe 120, la base puede quedar en 120 y la caché en 100. Borrar es idempotente y deja que la base, la fuente de verdad, decida. Además evita cachear datos que quizá nadie vuelva a leer.' },
+    { text: 'Porque así la caché nunca tiene datos viejos.', why: 'Borrar reduce el riesgo, pero no lo elimina: la carrera entre una lectura lenta y una escritura todavía puede dejar un valor viejo hasta el TTL.' },
+    { text: 'Porque Redis no permite sobrescribir claves con TTL.', why: 'Redis permite sobrescribir cualquier clave; SET reemplaza el valor y, por defecto, también el TTL.' },
+  ]}
+/>
+
+## Desalojo: qué sacar cuando se llena
+
+La memoria es finita. Cuando la caché llega a su límite, una **política de desalojo** decide qué entrada sacar para hacer lugar:
+
+- **LRU** (*least recently used*): saca la que hace más tiempo que no se usa. Apuesta a que lo reciente volverá a usarse. Es el default razonable para casi todo.
+- **LFU** (*least frequently used*): saca la que se usa con menos frecuencia. Protege mejor a las claves populares de una ráfaga de accesos únicos, pero se adapta mal cuando la popularidad cambia, salvo que los contadores envejezcan.
+- **FIFO**: saca la más antigua por llegada, sin importar el uso. Barata, pero castiga a las claves calientes que llevan mucho tiempo.
+- **Aleatoria**: sorprendentemente decente cuando el acceso es parejo, y sin ningún estado extra.
+- **Por TTL**: saca primero las que están más cerca de expirar.
+
+<CacheSimulator />
+
+Juega con el patrón **+ escaneo**: cada cierto tiempo un job de reportes recorre doce claves frías una sola vez. LRU y FIFO las meten y expulsan a los productos calientes; LFU las ignora porque tienen frecuencia 1. Ahora cambia a **cambio de moda**: la popularidad se invierte a mitad de camino y LFU se queda aferrada a contadores viejos mientras LRU se adapta enseguida. Y con **uniforme**, ninguna política gana: si no hay localidad, la caché no puede inventarla.
+
+En la práctica, nadie implementa LRU exacto a gran escala: mantener una lista ordenada por cada acceso cuesta memoria y contención. Redis aproxima LRU muestreando unas pocas claves al azar (5 por defecto, ajustable con `maxmemory-samples`) y desalojando la más vieja de la muestra; su LFU usa contadores probabilísticos de pocos bits con decaimiento en el tiempo, justamente para resolver el problema de adaptación que viste en el simulador. La política se elige con `maxmemory-policy`: `allkeys-lru` es la recomendación general, las variantes `volatile-*` solo consideran claves con TTL, y `noeviction` devuelve error en las escrituras cuando se llena la memoria, que es lo que quieres si usas Redis como almacén y no como caché.
+
+<Quiz
+  question="Tu caché de productos funciona bien, pero cada noche un job de exportación recorre todo el catálogo y a la mañana la tasa de aciertos se desploma durante una hora. ¿Qué cambio ataca la causa?"
+  options={[
+    { text: 'Duplicar la memoria de la caché.', why: 'Ayuda poco: el escaneo recorre todo el catálogo, que probablemente no cabe. Solo retrasas el problema y pagas más memoria.' },
+    { text: 'Que el job lea directo de una réplica de la base sin pasar por la caché (o sin poblarla), y considerar una política resistente a escaneos como LFU.', correct: true, why: 'Correcto. El problema es contaminación de la caché por accesos únicos. Lo mejor es que esos accesos no entren a la caché; una política tipo LFU (o variantes como TinyLFU) también filtra claves vistas una sola vez.' },
+    { text: 'Bajar el TTL de todas las claves.', why: 'Un TTL más corto expulsaría también a las claves calientes con más frecuencia: empeora la tasa de aciertos.' },
+    { text: 'Cambiar de LRU a FIFO.', why: 'FIFO sufre el mismo problema que LRU con los escaneos: las claves nuevas empujan a las viejas sin importar cuánto se usaban.' },
+  ]}
+/>
+
+## Cuando la caché se vuelve el problema
+
+Una caché exitosa crea dependencia: el origen se dimensiona asumiendo que la caché absorbe la mayoría del tráfico. Los incidentes más graves ocurren cuando esa suposición se rompe de golpe.
+
+### Estampida (thundering herd)
+
+Una clave muy consultada vence. En el instante siguiente, cientos de peticiones encuentran un fallo, y **todas** van a la base a recalcular el mismo valor. Si el cálculo es caro, la base se satura, el cálculo tarda más, la ventana de fallo se alarga y llegan todavía más peticiones. Es un ciclo que se realimenta.
+
+<CacheStampede />
+
+Las mitigaciones, de la más simple a la más fina:
+
+- **Lock o *request coalescing*** (*single-flight*): solo la primera petición que falla recalcula; las demás esperan su resultado. Con Redis, un `SET clave:lock 1 NX PX 5000` decide quién recalcula. Una sola consulta al origen, pero los que esperan pagan la latencia, y necesitas un timeout por si el dueño del lock muere.
+- **Stale-while-revalidate** (TTL blando y duro): al vencer el TTL blando, se sigue sirviendo el valor viejo mientras una sola petición refresca en segundo plano; el TTL duro marca hasta cuándo es aceptable servir datos viejos. Nadie espera. AWS describe este patrón, y también la ventaja de seguir sirviendo el valor viejo si el origen falla.
+- **Expiración temprana probabilística**: cada lectura, antes del vencimiento, decide al azar si recalcula, con una probabilidad que crece al acercarse la expiración y con el costo del cálculo. Es el algoritmo XFetch de Vattani, Chierichetti y Lowenstein (VLDB 2015). No necesita locks ni coordinación.
+- **TTL con *jitter***: si cargaste diez mil claves a la vez con el mismo TTL, vencerán a la vez. Sumar un componente aleatorio al TTL las desincroniza. Esto evita la "avalancha", que es la estampida de muchas claves a la vez.
+
+### Claves calientes
+
+Algunas claves reciben tanto tráfico que saturan el nodo de la caché que las guarda: el perfil de una celebridad, el producto del Hot Sale, el contador de un evento en vivo. Repartir mejor no ayuda, porque es **una** clave. Las salidas:
+
+- **Caché local** delante de la distribuida, con TTL de pocos segundos, para que cada réplica de la aplicación absorba la mayoría de las lecturas de esa clave.
+- **Replicar la clave**: guardar `perfil:42#1` … `perfil:42#8` en nodos distintos y leer una al azar. Multiplica la capacidad de lectura y complica la invalidación (hay que borrar las ocho).
+- **Réplicas de lectura** del nodo de caché.
+
+### Arranque en frío, caché negativa y penetración
+
+- **Arranque en frío**: después de un reinicio o de vaciar la caché, todas las lecturas van al origen. Calienta la caché antes de recibir tráfico, o sube el tráfico de forma gradual.
+- **Caché negativa**: si un producto no existe, cachea también ese "no existe" con un TTL corto. Si no, cada petición por un ID inexistente atraviesa la caché, y un atacante puede hacerlo a propósito (*cache penetration*). Un filtro de Bloom de los IDs válidos también lo frena.
+- **Fallar abierto o cerrado**: decide qué hace el servicio si la caché no responde. Ir directo al origen con todo el tráfico puede tumbarlo; a veces es mejor degradar (rechazar una parte de las peticiones) que provocar una caída en cascada.
+
+<Callout type="interview" title="Cómo hablar de la caché en un diseño">
+
+No digas solo "pongo Redis". Di **qué** cacheas, **con qué patrón**, **cómo invalidas** y **qué pasa si falla**. Por ejemplo: "Cacheo el perfil del usuario en Redis con cache-aside y TTL de 10 minutos con jitter; al editar el perfil borro la clave. Espero más de 95 % de aciertos porque el acceso sigue una ley de potencias, así que la base solo ve el 5 % de las lecturas. Para claves muy calientes agrego una caché local de 5 segundos, y para evitar estampidas uso request coalescing. Si Redis cae, el servicio sigue funcionando contra la base con load shedding". Eso son cuatro decisiones justificadas en treinta segundos.
+
+</Callout>
+
+## CDN: caché en el borde
+
+Una CDN es una red de servidores de caché distribuidos por el mundo (puntos de presencia, o PoP). El usuario se conecta al PoP más cercano, normalmente vía anycast o DNS, y si el contenido está en caché, lo recibe sin cruzar el océano. Para estáticos, imágenes y video, una CDN no es una optimización: es obligatoria. Reduce latencia, ancho de banda de salida del origen y absorbe picos (y ataques).
+
+Hay dos modelos de llenado:
+
+- **Pull**: la CDN pide el contenido al origen en el primer fallo y lo guarda según las cabeceras HTTP. Cero mantenimiento; el primer usuario de cada PoP paga la latencia. Es lo habitual.
+- **Push**: subes el contenido a la CDN por adelantado. Útil para archivos grandes y predecibles (el estreno de un video, un instalador) o si quieres controlar exactamente qué está publicado. Más trabajo operativo.
+
+Lo que controla la caché HTTP son las cabeceras definidas en el RFC 9111. Las que más usarás:
+
+```http
+# Estático con nombre versionado: cachear "para siempre"
+Cache-Control: public, max-age=31536000, immutable
+
+# Respuesta de API pública: 60 s en la CDN, 0 en el navegador, y servir vieja mientras revalida
+Cache-Control: public, max-age=0, s-maxage=60, stale-while-revalidate=30
+
+# Datos privados del usuario: que ninguna caché compartida lo guarde
+Cache-Control: private, no-store
+```
+
+Tres ideas que cierran el tema:
+
+- **Clave de caché**: por defecto, la URL. Si la respuesta varía por idioma o dispositivo, la CDN tiene que saberlo (con `Vary` o reglas de clave), o le servirás a un usuario la página en el idioma de otro. Peor aún: cachear por error una respuesta con datos personales es una fuga de información.
+- **Invalidación en la CDN**: las purgas existen, pero propagarlas a cientos de PoP lleva tiempo. Para estáticos, prefiere URLs versionadas; para lo demás, TTL cortos con `stale-while-revalidate`.
+- **Escudo de origen** (*origin shield* o caché por niveles): los PoP no van directo al origen, sino a un PoP intermedio que concentra los fallos. Así un fallo simultáneo en 200 PoP se convierte en una sola petición al origen.
+
+<Quiz
+  question="Publicas una nueva versión de tu frontend, pero algunos usuarios siguen viendo el JavaScript viejo durante horas. ¿Cuál es la práctica correcta?"
+  options={[
+    { text: 'Poner max-age=0 a todos los archivos estáticos.', why: 'Funciona, pero renuncias a la caché de los estáticos: cada visita revalida cada archivo contra la CDN o el origen.' },
+    { text: 'Incluir un hash del contenido en el nombre del archivo (app.3f9a1c.js) con max-age largo e immutable, y servir el HTML que los referencia con TTL corto.', correct: true, why: 'Correcto. Cada versión es una URL nueva, así que nunca hay que invalidar los estáticos; solo el HTML, que es pequeño, se revalida seguido.' },
+    { text: 'Purgar toda la CDN en cada despliegue.', why: 'Las purgas tardan en propagarse, provocan un pico de fallos en todos los PoP y no limpian la caché del navegador del usuario.' },
+    { text: 'Usar push en vez de pull.', why: 'El modelo de llenado no cambia el problema: el navegador y la CDN siguen teniendo la versión vieja bajo la misma URL.' },
+  ]}
+/>
+
+<Takeaways>
+
+- La caché funciona porque el acceso sigue una ley de potencias. Cada punto de tasa de aciertos cuenta: de 90 % a 99 % divide por diez la carga sobre el origen.
+- Cache-aside con TTL y borrado al escribir es el default. Write-through da lecturas frescas a costa de escrituras más lentas; write-behind acelera escrituras arriesgando datos.
+- Siempre ten un TTL como red de seguridad, con jitter. La invalidación explícita o por eventos acorta la ventana de datos viejos, pero no la elimina: asume consistencia eventual.
+- LRU es el default de desalojo; LFU resiste escaneos pero necesita envejecer contadores. Sin localidad, ninguna política ayuda.
+- Prepárate para las fallas de la caché: estampidas (coalescing, stale-while-revalidate, expiración probabilística), claves calientes (caché local, replicar la clave), arranque en frío y caché negativa.
+- En la CDN, versiona los estáticos en la URL y controla todo con `Cache-Control`; nunca cachees en una caché compartida respuestas con datos personales.
+
+</Takeaways>
+
+## Fuentes y lecturas
+
+- Jas Chhabra, [Caching challenges and strategies](https://builder.aws.com/content/3K9TeXp6strMiJ4vhakpRD7BQWO/caching-challenges-and-strategies), Amazon Builders' Library: caché local vs externa, arranque en frío, TTL blando y duro, coalescing.
+- Nishtala et al., [Scaling Memcache at Facebook](https://www.usenix.org/conference/nsdi13/technical-sessions/presentation/nishtala), NSDI 2013: leases contra stale sets y estampidas.
+- Vattani, Chierichetti y Lowenstein, [Optimal Probabilistic Cache Stampede Prevention](https://doi.org/10.14778/2757807.2757813), VLDB 2015 (XFetch).
+- [Key eviction](https://redis.io/docs/latest/develop/reference/eviction/), documentación de Redis: políticas, LRU aproximado y LFU con decaimiento.
+- [Caching strategies](https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/Strategies.html), documentación de Amazon ElastiCache: lazy loading, write-through y TTL.
+- [RFC 9111: HTTP Caching](https://www.rfc-editor.org/rfc/rfc9111) y [RFC 5861: stale-while-revalidate y stale-if-error](https://www.rfc-editor.org/rfc/rfc5861).
+- Martin Kleppmann, *Designing Data-Intensive Applications*, O'Reilly ([sitio del libro](https://dataintensive.net/)): capítulos sobre datos derivados y flujos de cambios.
+

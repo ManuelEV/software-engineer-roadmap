@@ -1,0 +1,75 @@
+.rb-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-2) var(--s-4);
+  margin-bottom: var(--s-2);
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--ink-3);
+}
+.rb-legend {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.rb-legend::before {
+  content: '';
+  width: 14px;
+  height: 10px;
+  border-radius: 2px;
+}
+.rb-legend--ok::before {
+  background: var(--line);
+}
+.rb-legend--fail::before {
+  background: color-mix(in oklab, var(--bad) 70%, var(--paper));
+}
+.rb-legend--cap::before {
+  height: 0;
+  border-top: 2px dashed var(--ink-2);
+}
+.rb-seed {
+  margin-left: auto;
+}
+.rb-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.rb-outage {
+  fill: color-mix(in oklab, var(--bad) 8%, transparent);
+}
+.rb-outage__label {
+  font-size: 13px;
+  font-weight: 700;
+  fill: var(--bad);
+}
+.rb-bar--ok {
+  fill: var(--line);
+}
+.rb-bar--fail {
+  fill: color-mix(in oklab, var(--bad) 70%, var(--paper));
+}
+.rb-cap {
+  stroke: var(--ink-2);
+  stroke-width: 1.5;
+  stroke-dasharray: 5 4;
+}
+.rb-axis {
+  stroke: var(--rule-strong);
+  stroke-width: 1.5;
+}
+.rb-tick {
+  font-size: 13px;
+  fill: var(--ink-3);
+}
+.rb-readout {
+  display: grid;
+  gap: var(--s-3);
+}
+.rb-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-3) var(--s-5);
+}

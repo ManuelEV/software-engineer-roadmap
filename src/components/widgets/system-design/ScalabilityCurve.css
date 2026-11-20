@@ -1,0 +1,72 @@
+.usl__svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.usl__grid {
+  stroke: var(--rule);
+  stroke-width: 1;
+}
+.usl__tick {
+  font-size: 13px;
+  fill: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+}
+.usl__axis {
+  font-size: 13px;
+  font-weight: 700;
+  fill: var(--ink-3);
+}
+.usl__ideal {
+  stroke: var(--rule-strong);
+  stroke-width: 2;
+  stroke-dasharray: 6 5;
+}
+.usl__amdahl {
+  fill: none;
+  stroke: var(--ink-3);
+  stroke-width: 2;
+  stroke-dasharray: 2 4;
+}
+.usl__curve {
+  fill: none;
+  stroke: var(--line);
+  stroke-width: 5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.usl__peak {
+  stroke: var(--warn);
+  stroke-width: 1.5;
+  stroke-dasharray: 4 4;
+}
+.usl__cursor {
+  stroke: var(--ink-3);
+  stroke-width: 1;
+}
+.usl__dot {
+  fill: var(--paper);
+  stroke: var(--line);
+  stroke-width: 3;
+}
+.usl__lbl {
+  font-size: 13px;
+  font-weight: 700;
+  fill: var(--ink-2);
+}
+.usl__lbl--ideal,
+.usl__lbl--muted {
+  fill: var(--ink-3);
+  font-weight: 600;
+}
+.usl__presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  flex-basis: 100%;
+}
+.usl__stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-3) var(--s-6);
+}

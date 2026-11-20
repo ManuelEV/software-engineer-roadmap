@@ -1,0 +1,115 @@
+.ct-buttons {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+}
+.ct-ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.ct-row {
+  --ct-step: 22px;
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 42px;
+  padding: 2px var(--s-2) 2px calc(var(--depth) * var(--ct-step) + 4px);
+  border-radius: var(--radius);
+  transition: background-color 220ms var(--ease-out);
+}
+@media (max-width: 420px) {
+  .ct-row {
+    --ct-step: 14px;
+  }
+}
+.ct-station {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 3px solid var(--rule-strong);
+  background: var(--paper);
+  transition:
+    border-color 220ms var(--ease-out),
+    background-color 220ms var(--ease-out);
+}
+.ct-row.is-stack .ct-station {
+  border-color: var(--line);
+}
+.ct-row.is-current {
+  background: var(--line-tint-2);
+}
+.ct-row.is-current .ct-station {
+  border-color: var(--line);
+  background: var(--line);
+}
+.ct-row.is-done .ct-station {
+  border-color: var(--ok);
+}
+.ct-toggle {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 32px;
+  height: 40px;
+  border: 0;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--ink-2);
+  cursor: pointer;
+}
+.ct-toggle:hover {
+  background: var(--paper-3);
+}
+.ct-toggle:focus-visible {
+  outline: 2px solid var(--line-ink);
+}
+.ct-toggle--leaf {
+  cursor: default;
+}
+.ct-toggle--leaf:hover {
+  background: transparent;
+}
+.ct-chev {
+  transition: transform 200ms var(--ease-out);
+}
+.ct-chev.is-open {
+  transform: rotate(90deg);
+}
+.ct-icon {
+  flex: none;
+  color: var(--ink-3);
+}
+.ct-row.is-stack .ct-icon {
+  color: var(--line-ink);
+}
+.ct-name {
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
+  font-size: var(--step--1);
+  color: var(--ink);
+}
+.ct-own {
+  font-weight: 400;
+  font-size: 0.78rem;
+  color: var(--ink-3);
+}
+.ct-total {
+  flex: none;
+  font-family: var(--font-code);
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-2);
+}
+.ct-row.is-done .ct-total {
+  color: var(--ok);
+}
+.ct-readout code {
+  font-size: 0.82rem;
+}
+.ct-stack {
+  overflow-wrap: anywhere;
+}

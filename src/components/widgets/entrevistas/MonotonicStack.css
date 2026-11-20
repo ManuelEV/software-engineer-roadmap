@@ -1,0 +1,106 @@
+.mst-field {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+.mst-field--grow {
+  flex: 1 1 13rem;
+}
+.mst-field select,
+.mst-field input {
+  width: 100%;
+  min-height: 40px;
+  padding: 0 10px;
+  border: 1.5px solid var(--rule-strong);
+  border-radius: 8px;
+  background: var(--card);
+  color: var(--ink);
+  font-family: var(--font-code);
+  font-size: 0.86rem;
+}
+.mst-field input[aria-invalid='true'] {
+  border-color: var(--bad);
+}
+.mst-field select:focus-visible,
+.mst-field input:focus-visible {
+  outline: 2px solid var(--line-ink);
+  outline-offset: 1px;
+}
+
+.mst-stage {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 5.4rem;
+  gap: var(--s-4);
+  align-items: start;
+}
+.mst-arrays {
+  display: grid;
+  gap: var(--s-4);
+  min-width: 0;
+}
+.mst-col {
+  display: grid;
+  justify-items: stretch;
+  gap: 2px;
+  font-family: var(--font-code);
+}
+.mst-col__cap {
+  font-size: 0.8rem;
+  color: var(--ink-3);
+}
+.mst-col__top {
+  font-family: var(--font-hand);
+  font-size: 0.9rem;
+  color: var(--ink-3);
+  text-align: center;
+}
+.mst-col__well {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 4px;
+  min-height: 9rem;
+  padding: 5px;
+  border: 2px solid var(--ink-3);
+  border-top: 0;
+  border-radius: 0 0 8px 8px;
+  overflow: hidden;
+}
+.mst-col__empty {
+  margin: auto 0 4px;
+  text-align: center;
+  font-size: 0.78rem;
+  font-style: italic;
+  color: var(--ink-3);
+}
+.mst-box {
+  display: grid;
+  justify-items: center;
+  padding: 3px 2px;
+  border: 1.5px solid color-mix(in oklab, var(--line) 60%, var(--rule-strong));
+  border-radius: 5px;
+  background: var(--line-tint);
+  line-height: 1.15;
+  transition:
+    background-color 220ms var(--ease-out),
+    border-color 220ms var(--ease-out);
+}
+.mst-box__t {
+  font-weight: 700;
+  font-size: 0.92rem;
+  color: var(--ink);
+}
+.mst-box__i {
+  font-family: var(--font-sign);
+  font-size: 0.7rem;
+  color: var(--ink-2);
+}
+.mst-box.is-out {
+  border-color: var(--ok);
+  background: color-mix(in oklab, var(--ok) 24%, var(--card));
+}
+.mst-box.is-keep {
+  border-color: var(--line);
+  border-width: 2.5px;
+  background: var(--line-tint-2);
+}

@@ -1,0 +1,215 @@
+.oc {
+  display: grid;
+  gap: var(--s-4);
+}
+.oc-reset {
+  margin-left: auto;
+}
+
+.oc-seg--base {
+  background: var(--line);
+}
+.oc-seg--bonus {
+  background: var(--l4);
+}
+.oc-seg--equity {
+  background: repeating-linear-gradient(-45deg, var(--l2) 0 5px, color-mix(in oklab, var(--l2) 45%, var(--card)) 5px 9px);
+}
+.oc-seg--benefits {
+  background: var(--l5);
+}
+
+/* inputs: one row per field, one column per offer */
+.oc-grid {
+  display: grid;
+  grid-template-columns: minmax(6.5rem, 1.2fr) repeat(var(--oc-n), minmax(0, 1fr));
+  gap: 6px 8px;
+  align-items: center;
+}
+.oc-grid__corner,
+.oc-grid__label {
+  font-family: var(--font-sign);
+  font-weight: 700;
+  font-size: 0.86rem;
+  line-height: 1.2;
+  color: var(--ink-2);
+}
+.oc-grid__corner {
+  font-size: 0.74rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.oc-input {
+  width: 100%;
+  min-width: 0;
+  min-height: 40px;
+  padding: 0 8px;
+  border: 1.5px solid var(--rule-strong);
+  border-radius: 8px;
+  background: var(--card);
+  font-family: var(--font-code);
+  font-size: 0.86rem;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  color: var(--ink);
+}
+.oc-input--name {
+  font-family: var(--font-sign);
+  font-weight: 700;
+  font-size: 0.86rem;
+  text-align: left;
+}
+.oc-input:focus-visible {
+  outline: 2px solid var(--line-ink);
+  outline-offset: 1px;
+  border-color: var(--line);
+}
+
+.oc-hints {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0 0 0 1.1em;
+  font-family: var(--font-read);
+  font-size: 0.88rem;
+  line-height: 1.45;
+  color: var(--ink-3);
+}
+.oc-hints b {
+  color: var(--ink-2);
+}
+
+/* chart */
+.oc-chart {
+  display: grid;
+  gap: var(--s-4);
+  padding-top: var(--s-3);
+  border-top: 1px solid var(--rule);
+}
+.oc-row {
+  display: grid;
+  gap: 4px;
+}
+.oc-row__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--s-3);
+  flex-wrap: wrap;
+}
+.oc-row__name {
+  font-weight: 700;
+  font-size: 0.95rem;
+  color: var(--ink);
+}
+.oc-row.is-best .oc-row__name {
+  text-decoration-line: underline;
+  text-decoration-color: var(--hl);
+  text-decoration-thickness: 0.42em;
+  text-underline-offset: -0.26em;
+  text-decoration-skip-ink: none;
+}
+.oc-row__total {
+  font-size: 0.85rem;
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+}
+.oc-row__total b {
+  font-size: 1.05rem;
+  color: var(--ink);
+}
+.oc-bar {
+  display: flex;
+  height: 26px;
+  gap: 2px;
+  border-radius: 5px;
+  overflow: hidden;
+  background: var(--paper-3);
+}
+.oc-seg {
+  display: block;
+  height: 100%;
+  transition: width 300ms var(--ease-out);
+}
+.oc-net {
+  position: relative;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--paper-3);
+}
+.oc-net__fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 999px;
+  background: var(--ink-2);
+  transition: width 300ms var(--ease-out);
+}
+.oc-net__cost {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-radius: 0 999px 999px 0;
+  background: repeating-linear-gradient(-45deg, var(--bad) 0 3px, transparent 3px 6px);
+  transition:
+    width 300ms var(--ease-out),
+    left 300ms var(--ease-out);
+}
+.oc-row__foot {
+  display: flex;
+  gap: var(--s-3);
+  flex-wrap: wrap;
+  font-size: 0.8rem;
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+}
+.oc-row__cost {
+  color: var(--bad);
+}
+
+.oc-legend {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+  gap: var(--s-2) var(--s-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.oc-legend li {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-family: var(--font-read);
+  font-size: 0.9rem;
+  line-height: 1.45;
+  color: var(--ink-2);
+}
+.oc-legend b {
+  color: var(--ink);
+}
+.oc-sw {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  margin-top: 3px;
+  border-radius: 3px;
+}
+.oc-sw--cost {
+  border: 1.5px solid var(--bad);
+  background: repeating-linear-gradient(-45deg, var(--bad) 0 2px, transparent 2px 5px);
+}
+
+.oc-sum {
+  font-family: var(--font-read);
+  font-size: 0.98rem;
+  line-height: 1.55;
+  color: var(--ink);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .oc-seg,
+  .oc-net__fill,
+  .oc-net__cost {
+    transition: none;
+  }
+}

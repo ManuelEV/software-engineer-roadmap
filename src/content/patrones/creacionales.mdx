@@ -1,0 +1,740 @@
+import { UmlDiagram } from '../../components/widgets/patrones/UmlDiagram'
+import { BuilderSteps } from '../../components/widgets/patrones/BuilderSteps'
+import { PrototypeClone } from '../../components/widgets/patrones/PrototypeClone'
+
+Cada `new` que escribes es una decisión: amarras ese punto del código a una clase concreta, con su constructor, sus parámetros y sus dependencias. Mientras haya una sola implementación da igual. El problema llega cuando aparece la segunda (SMS además de email, MercadoPago además de Stripe, un doble de prueba además del cliente real) y descubres que la palabra `new EmailSender()` está repetida en catorce archivos.
+
+Los patrones **creacionales** del catálogo GoF tratan exactamente eso: **quién decide qué clase se instancia, cuándo y cómo**. No eliminan el `new`; lo concentran en un lugar donde cambiarlo cuesta poco. En este tema verás los cinco: Factory Method, Abstract Factory, Builder, Prototype y Singleton. De este último también verás por qué casi todos los equipos con experiencia lo miran con desconfianza.
+
+## El problema: `new` también es acoplamiento
+
+Mira este servicio de notificaciones. Funciona, pero tiene un olor clásico: la lógica de negocio (avisar al cliente que su pedido salió) está mezclada con la decisión de **qué clase concreta** construir.
+
+```ts title="notification-service.ts (antes)"
+export class NotificationService {
+  async orderShipped(user: User, order: Order) {
+    let sender
+    if (user.channel === 'email') {
+      sender = new EmailSender(process.env.SMTP_HOST!, 587)
+    } else if (user.channel === 'sms') {
+      sender = new SmsSender(new TwilioClient(process.env.TWILIO_KEY!))
+    } else if (user.channel === 'push') {
+      sender = new PushSender(firebaseApp)
+    } else {
+      throw new Error(`Canal desconocido: ${user.channel}`)
+    }
+    await sender.send(user, `Tu pedido ${order.id} va en camino`)
+  }
+  // ...y el mismo if/else se repite en orderDelivered, paymentFailed, etc.
+}
+```
+
+Tres síntomas que vale la pena aprender a reconocer:
+
+- **El mismo `switch` en varios lugares.** Agregar WhatsApp te obliga a buscar todos los `if (user.channel === ...)` del código. Es el smell *Switch Statements* de Fowler, y casi siempre esconde una decisión de creación.
+- **El servicio conoce detalles de construcción** (host SMTP, cliente de Twilio) que no tienen nada que ver con avisar de un envío.
+- **No puedes testearlo sin enviar mensajes reales**, porque las clases concretas están cableadas adentro.
+
+Cada patrón creacional ataca este problema desde un ángulo distinto:
+
+| Patrón | Pregunta que responde | Señal típica |
+| --- | --- | --- |
+| Factory Method | ¿Quién decide la clase concreta de **un** producto? | `switch` sobre un tipo para hacer `new` |
+| Abstract Factory | ¿Cómo garantizo que creo una **familia** coherente? | Objetos que solo funcionan bien si vienen del mismo proveedor |
+| Builder | ¿Cómo construyo un objeto con muchas partes opcionales? | Constructores con 6+ parámetros, muchos `undefined` |
+| Prototype | ¿Cómo creo copias de algo ya configurado? | Construcción cara o configurada en runtime |
+| Singleton | ¿Cómo aseguro una única instancia? | "Necesito acceder a la config desde todos lados" |
+
+## Factory Method
+
+**Intención:** definir una operación para crear un objeto, pero dejar que las subclases (o quien la implemente) decidan qué clase concreta instanciar.
+
+La clave está en separar **usar** un objeto de **elegir** cuál. El código que usa el `Sender` no debería cambiar cuando aparece un canal nuevo. En la versión GoF, una clase base (el *creator*) contiene el flujo de trabajo y llama a un método abstracto `createSender()`. Cada subclase implementa ese método y devuelve su producto.
+
+<UmlDiagram
+  caption="Factory Method: el creator define el flujo y delega la creación en un método que redefinen las subclases."
+  classes={[
+    { id: 'creator', name: 'Notifier', kind: 'abstract', methods: ['notify(user, msg)', '#createSender(): Sender'], x: 0.5, y: 0, w: 1.1, desc: 'Contiene la lógica estable (formatear, registrar, enviar) y llama a createSender() sin saber qué devuelve.' },
+    { id: 'email', name: 'EmailNotifier', methods: ['#createSender()'], x: 0, y: 1.25, desc: 'Redefine solo el método fábrica: devuelve un EmailSender configurado.' },
+    { id: 'sms', name: 'SmsNotifier', methods: ['#createSender()'], x: 1, y: 1.25, desc: 'Otra subclase, otro producto. El flujo de notify() no cambia.' },
+    { id: 'sender', name: 'Sender', kind: 'interface', methods: ['send(user, msg)'], x: 2, y: 0, desc: 'El producto: la interfaz que el creator conoce.' },
+    { id: 'es', name: 'EmailSender', methods: ['send(user, msg)'], x: 2, y: 1.25, tone: 'muted', desc: 'Producto concreto que crea EmailNotifier.' },
+  ]}
+  relations={[
+    { from: 'email', to: 'creator', kind: 'inherits' },
+    { from: 'sms', to: 'creator', kind: 'inherits' },
+    { from: 'creator', to: 'sender', kind: 'depends', label: 'crea' },
+    { from: 'es', to: 'sender', kind: 'implements' },
+  ]}
+/>
+
+En lenguajes con funciones de primera clase casi nunca necesitas la jerarquía de subclases: una función que recibe un parámetro y devuelve un objeto es una fábrica perfectamente válida. Lo importante es la idea (un solo lugar decide la clase concreta), no la forma.
+
+<CodeTabs>
+
+```ts title="TypeScript"
+interface Sender {
+  send(user: User, message: string): Promise<void>
+}
+
+// Versión GoF: el creator define el flujo; las subclases eligen el producto.
+abstract class Notifier {
+  protected abstract createSender(): Sender
+
+  async notify(user: User, message: string) {
+    const sender = this.createSender()
+    await sender.send(user, message.trim())
+    metrics.increment('notifications.sent')
+  }
+}
+
+class EmailNotifier extends Notifier {
+  protected createSender(): Sender {
+    return new EmailSender(config.smtpHost, 587)
+  }
+}
+
+// Versión pragmática (muy común en TS): una fábrica con un registro.
+const senderFactories: Record<Channel, () => Sender> = {
+  email: () => new EmailSender(config.smtpHost, 587),
+  sms: () => new SmsSender(new TwilioClient(config.twilioKey)),
+  push: () => new PushSender(firebaseApp),
+}
+
+export function createSender(channel: Channel): Sender {
+  return senderFactories[channel]() // agregar WhatsApp = una línea aquí
+}
+```
+
+```python title="Python"
+from typing import Callable, Protocol
+
+class Sender(Protocol):
+    def send(self, user: "User", message: str) -> None: ...
+
+# En Python las clases ya son "fábricas": se llaman como funciones.
+# Un diccionario de callables suele bastar; no hace falta jerarquía.
+SENDER_FACTORIES: dict[str, Callable[[], Sender]] = {
+    "email": lambda: EmailSender(settings.SMTP_HOST, 587),
+    "sms": lambda: SmsSender(TwilioClient(settings.TWILIO_KEY)),
+    "push": PushSender,  # la clase misma es el callable
+}
+
+def create_sender(channel: str) -> Sender:
+    try:
+        return SENDER_FACTORIES[channel]()
+    except KeyError:
+        raise ValueError(f"Canal desconocido: {channel}") from None
+
+class NotificationService:
+    def order_shipped(self, user: "User", order: "Order") -> None:
+        create_sender(user.channel).send(user, f"Tu pedido {order.id} va en camino")
+```
+
+</CodeTabs>
+
+<Callout type="note" title="Simple Factory no es Factory Method">
+
+La función `createSender(channel)` con un registro suele llamarse *Simple Factory*. No está en el libro GoF, pero es lo que más vas a ver en código real. Factory Method, estrictamente, usa polimorfismo: el método fábrica se **redefine** en subclases. En entrevistas conviene saber la diferencia, y también decir que en la práctica ambas resuelven el mismo dolor.
+
+</Callout>
+
+**Dónde aparece:** `Collection.iterator()` en Java es el ejemplo de manual: cada colección devuelve su propio iterador sin que el cliente sepa la clase concreta. `document.createElement('div')` en el DOM decide qué subclase de `HTMLElement` instanciar. Los métodos estáticos tipo `LoggerFactory.getLogger(...)` (SLF4J) o `List.of(...)` son *static factory methods* (Joshua Bloch, *Effective Java*, ítem 1): un primo cercano que esconde la clase concreta detrás de un nombre.
+
+**Cuándo no usarlo:** si solo existe una implementación y no hay una segunda en el horizonte, un `new` directo es más honesto. Crear `UserFactory` para devolver siempre `new User()` es abstracción especulativa (la verás en [antipatrones](/patrones/antipatrones)).
+
+**Relacionados:** Factory Method suele vivir dentro de un [Template Method](/patrones/comportamiento-2) (el flujo fijo llama al paso que crea). Varios factory methods agrupados forman un Abstract Factory.
+
+## Abstract Factory
+
+**Intención:** ofrecer una interfaz para crear **familias** de objetos relacionados sin especificar sus clases concretas.
+
+La diferencia con Factory Method es la palabra *familia*. Imagina que tu checkout acepta Stripe y MercadoPago. Cada proveedor necesita tres piezas: un `PaymentGateway` para cobrar, un `RefundService` para devolver y un `WebhookVerifier` para validar las notificaciones firmadas. Las piezas **tienen que venir del mismo proveedor**: verificar con el secreto de MercadoPago un webhook que mandó Stripe es un bug garantizado (y de los que se descubren en producción).
+
+```ts title="checkout.ts (antes)"
+// Cada pieza se elige por separado: nada impide mezclar proveedores.
+const gateway = country === 'AR' ? new MercadoPagoGateway(mpKey) : new StripeGateway(stripeKey)
+const verifier = useNewWebhooks ? new StripeWebhookVerifier(whSecret) : new MercadoPagoVerifier(mpSecret)
+// En Argentina con useNewWebhooks = true: cobras con MP y verificas como Stripe.
+```
+
+Abstract Factory convierte "elegir proveedor" en **una sola decisión**: eliges la fábrica una vez y todo lo que sale de ella es coherente.
+
+<UmlDiagram
+  wide
+  caption="Abstract Factory: el checkout solo conoce interfaces; elegir la fábrica concreta elige toda la familia."
+  classes={[
+    { id: 'client', name: 'Checkout', methods: ['pay(order)', 'handleWebhook(req)'], x: 0, y: 0, desc: 'El cliente. Recibe una fábrica y nunca nombra a Stripe ni a MercadoPago.' },
+    { id: 'factory', name: 'PaymentProvider', kind: 'interface', methods: ['createGateway()', 'createRefunds()', 'createVerifier()'], x: 1, y: 0, desc: 'La fábrica abstracta: un método por cada producto de la familia.' },
+    { id: 'stripe', name: 'StripeProvider', x: 0.5, y: 1.3, desc: 'Fábrica concreta: crea StripeGateway, StripeRefunds y StripeWebhookVerifier, todos con las mismas credenciales.' },
+    { id: 'mp', name: 'MercadoPagoProvider', x: 1.5, y: 1.3, desc: 'Otra fábrica concreta, otra familia completa.' },
+    { id: 'gw', name: 'PaymentGateway', kind: 'interface', methods: ['charge(amount)'], x: 2, y: -0.45, desc: 'Producto abstracto 1.' },
+    { id: 'ver', name: 'WebhookVerifier', kind: 'interface', methods: ['verify(req)'], x: 2, y: 0.55, desc: 'Producto abstracto 2 (RefundService se omite para que el diagrama respire).' },
+  ]}
+  relations={[
+    { from: 'client', to: 'factory', kind: 'depends' },
+    { from: 'stripe', to: 'factory', kind: 'implements' },
+    { from: 'mp', to: 'factory', kind: 'implements' },
+    { from: 'factory', to: 'gw', kind: 'depends', label: 'crea' },
+    { from: 'factory', to: 'ver', kind: 'depends' },
+  ]}
+/>
+
+<CodeTabs>
+
+```ts title="TypeScript"
+interface PaymentProvider {
+  createGateway(): PaymentGateway
+  createRefunds(): RefundService
+  createVerifier(): WebhookVerifier
+}
+
+class StripeProvider implements PaymentProvider {
+  constructor(private readonly creds: { apiKey: string; webhookSecret: string }) {}
+  createGateway() { return new StripeGateway(this.creds.apiKey) }
+  createRefunds() { return new StripeRefunds(this.creds.apiKey) }
+  createVerifier() { return new StripeWebhookVerifier(this.creds.webhookSecret) }
+}
+
+class MercadoPagoProvider implements PaymentProvider {
+  constructor(private readonly creds: { accessToken: string; secret: string }) {}
+  createGateway() { return new MercadoPagoGateway(this.creds.accessToken) }
+  createRefunds() { return new MercadoPagoRefunds(this.creds.accessToken) }
+  createVerifier() { return new MercadoPagoVerifier(this.creds.secret) }
+}
+
+class Checkout {
+  constructor(private readonly provider: PaymentProvider) {}
+
+  async pay(order: Order) {
+    return this.provider.createGateway().charge(order.total, order.id)
+  }
+  handleWebhook(req: Request) {
+    if (!this.provider.createVerifier().verify(req)) throw new Unauthorized()
+    // ...
+  }
+}
+
+// La única decisión, en el punto de arranque de la app:
+const provider = country === 'AR' ? new MercadoPagoProvider(mpCreds) : new StripeProvider(stripeCreds)
+const checkout = new Checkout(provider)
+```
+
+```python title="Python"
+from typing import Protocol
+
+class PaymentProvider(Protocol):
+    def create_gateway(self) -> "PaymentGateway": ...
+    def create_refunds(self) -> "RefundService": ...
+    def create_verifier(self) -> "WebhookVerifier": ...
+
+class StripeProvider:
+    def __init__(self, api_key: str, webhook_secret: str) -> None:
+        self._api_key = api_key
+        self._webhook_secret = webhook_secret
+
+    def create_gateway(self): return StripeGateway(self._api_key)
+    def create_refunds(self): return StripeRefunds(self._api_key)
+    def create_verifier(self): return StripeWebhookVerifier(self._webhook_secret)
+
+class MercadoPagoProvider:
+    def __init__(self, access_token: str, secret: str) -> None:
+        self._token = access_token
+        self._secret = secret
+
+    def create_gateway(self): return MercadoPagoGateway(self._token)
+    def create_refunds(self): return MercadoPagoRefunds(self._token)
+    def create_verifier(self): return MercadoPagoVerifier(self._secret)
+
+class Checkout:
+    def __init__(self, provider: PaymentProvider) -> None:
+        self._provider = provider
+
+    def pay(self, order: "Order"):
+        return self._provider.create_gateway().charge(order.total, order.id)
+```
+
+</CodeTabs>
+
+**Dónde aparece:** `java.awt.Toolkit` es el ejemplo histórico (crea los componentes nativos de cada sistema operativo). JDBC funciona con la misma idea: un `Connection` de un driver crea `Statement` y `PreparedStatement` compatibles con ese mismo driver. Los kits de UI con temas (claro/oscuro, Material/Cupertino en Flutter) y los "proveedores" intercambiables para tests (una fábrica en memoria contra una fábrica real) son variantes cotidianas.
+
+**Cuándo no usarlo:** si hay una sola familia, es ceremonia pura. Y conoce su costo estructural: **agregar un producto nuevo a la familia obliga a tocar todas las fábricas** (si mañana necesitas `createPayoutService()`, cambias la interfaz y cada implementación). El libro GoF lo admite explícitamente. Es fácil agregar familias, difícil agregar productos.
+
+**Relacionados:** se implementa con factory methods. Una fábrica concreta suele existir una sola vez en la app, y la tentación es hacerla Singleton; mejor créala una vez y pásala por [inyección de dependencias](/patrones/patrones-aplicacion). En arquitectura, este mismo movimiento (elegir implementaciones en el borde) es lo que hacen los adaptadores de la [arquitectura hexagonal](/arquitectura/hexagonal).
+
+<Quiz
+  question="Tu app soporta temas claro y oscuro. Cada tema define colores de botón, de tarjeta y de gráfico, y mezclar piezas de temas distintos se ve roto. ¿Qué patrón encaja mejor?"
+  options={[
+    { text: 'Factory Method en cada componente', why: 'Resuelve la creación de un producto a la vez, pero no garantiza que el botón y la tarjeta salgan del mismo tema.' },
+    { text: 'Abstract Factory: una fábrica por tema', correct: true, why: 'El problema es la coherencia de una familia. Elegir la fábrica una vez asegura que todos los componentes vienen del mismo tema.' },
+    { text: 'Builder', why: 'Builder ayuda a construir un objeto complejo paso a paso; aquí el problema son varios objetos que deben combinar entre sí.' },
+    { text: 'Singleton para el tema actual', why: 'Daría acceso global al tema, pero no evita mezclar piezas y agrega estado global difícil de testear.' },
+  ]}
+/>
+
+## Builder
+
+**Intención:** separar la construcción de un objeto complejo de su representación, para construirlo paso a paso y validar el resultado completo.<Sidenote>En el libro GoF, Builder incluye un *Director* que conoce la secuencia de pasos y la reutiliza con distintos builders (por ejemplo, el mismo documento exportado a RTF o a HTML). La versión fluida que domina hoy viene de Joshua Bloch, *Effective Java*, ítem 2.</Sidenote>
+
+El síntoma que resuelve tiene nombre propio: el **constructor telescópico**. Empiezas con `new HttpRequest(url)`, luego agregas método, luego headers, luego timeout... y terminas con esto:
+
+```ts title="Antes: ¿qué es cada argumento?"
+const req = new HttpRequest('https://api.tienda.com/pedidos', 'POST', token, undefined, body, 5000, 3)
+// ¿5000 es el timeout o los reintentos? ¿undefined era el content-type o el body?
+```
+
+Los parámetros posicionales del mismo tipo son una trampa: intercambiar `5000` y `3` compila sin una sola advertencia. Builder reemplaza la lista por **llamadas con nombre**, acumula estado en un objeto intermedio y concentra la validación en `build()`, que entrega un objeto final **inmutable**.
+
+<BuilderSteps />
+
+Fíjate en dos detalles del widget. Primero, los pasos opcionales tienen defaults razonables y el orden no importa. Segundo, hay reglas que **cruzan campos** (un POST necesita cuerpo, un GET no debería tenerlo). Un constructor solo puede validar cada argumento aislado; `build()` ve el conjunto.
+
+<UmlDiagram
+  caption="Builder moderno (estilo Bloch): métodos encadenables que devuelven el propio builder y un build() que valida y crea el producto inmutable."
+  classes={[
+    { id: 'client', name: 'OrderClient', methods: ['createOrder()'], x: 0, y: 0, desc: 'Usa el builder; nunca llama al constructor de HttpRequest.' },
+    { id: 'builder', name: 'HttpRequestBuilder', fields: ['-method, -headers, -body'], methods: ['url(u): this', 'header(k, v): this', 'body(b): this', 'build(): HttpRequest'], x: 1, y: 0, w: 1.1, desc: 'Acumula configuración mutable. build() valida todo junto y crea el producto.' },
+    { id: 'product', name: 'HttpRequest', fields: ['+readonly url', '+readonly headers'], x: 2, y: 0, desc: 'El producto: inmutable, siempre válido una vez creado.' },
+  ]}
+  relations={[
+    { from: 'client', to: 'builder', kind: 'uses' },
+    { from: 'builder', to: 'product', kind: 'depends', label: 'crea' },
+  ]}
+/>
+
+En Java es donde Builder más brilla, porque el lenguaje no tiene argumentos con nombre ni valores por defecto. En TypeScript y Python, muchas veces un **objeto de opciones** o **argumentos con nombre** resuelven el 80% del problema sin una clase extra:
+
+<CodeTabs>
+
+```ts title="TypeScript"
+export class HttpRequestBuilder {
+  private _url?: string
+  private _method: 'GET' | 'POST' = 'GET'
+  private _headers: Record<string, string> = {}
+  private _body?: unknown
+  private _timeoutMs = 30_000
+  private _retries = 0
+
+  url(url: string) { this._url = url; return this }
+  method(m: 'GET' | 'POST') { this._method = m; return this }
+  header(name: string, value: string) { this._headers[name] = value; return this }
+  bearer(token: string) { return this.header('Authorization', `Bearer ${token}`) }
+  body(body: unknown) { this._body = body; return this }
+  timeout(ms: number) { this._timeoutMs = ms; return this }
+  retries(n: number) { this._retries = n; return this }
+
+  build(): HttpRequest {
+    if (!this._url) throw new Error('url es obligatoria')
+    if (this._method === 'POST' && this._body === undefined) throw new Error('POST requiere body')
+    if (this._method === 'GET' && this._body !== undefined) throw new Error('GET no lleva body')
+    return Object.freeze({
+      url: this._url, method: this._method, headers: { ...this._headers },
+      body: this._body, timeoutMs: this._timeoutMs, retries: this._retries,
+    })
+  }
+}
+
+const req = new HttpRequestBuilder()
+  .url('https://api.tienda.com/pedidos')
+  .method('POST')
+  .bearer(token)
+  .body({ sku: 'LAP-15', qty: 1 })
+  .timeout(5_000)
+  .build()
+```
+
+```java title="Java"
+public final class HttpRequest {
+    private final String url;
+    private final String method;
+    private final Map<String, String> headers;
+    private final Duration timeout;
+
+    private HttpRequest(Builder b) {
+        this.url = b.url;
+        this.method = b.method;
+        this.headers = Map.copyOf(b.headers);
+        this.timeout = b.timeout;
+    }
+
+    public static Builder builder(String url) { return new Builder(url); }
+
+    public static final class Builder {
+        private final String url;                 // obligatorio: va en el constructor
+        private String method = "GET";
+        private final Map<String, String> headers = new HashMap<>();
+        private Duration timeout = Duration.ofSeconds(30);
+
+        private Builder(String url) { this.url = Objects.requireNonNull(url); }
+
+        public Builder method(String m) { this.method = m; return this; }
+        public Builder header(String k, String v) { headers.put(k, v); return this; }
+        public Builder timeout(Duration t) { this.timeout = t; return this; }
+
+        public HttpRequest build() {
+            if (timeout.isNegative()) throw new IllegalStateException("timeout negativo");
+            return new HttpRequest(this);
+        }
+    }
+}
+
+var req = HttpRequest.builder("https://api.tienda.com/pedidos")
+        .method("POST")
+        .header("Authorization", "Bearer " + token)
+        .timeout(Duration.ofSeconds(5))
+        .build();
+```
+
+```python title="Python"
+from dataclasses import dataclass, field
+from typing import Any, Literal
+
+# En Python, argumentos con nombre + defaults + dataclass inmutable
+# cubren casi todo lo que Builder resuelve en Java.
+@dataclass(frozen=True, kw_only=True)
+class HttpRequest:
+    url: str
+    method: Literal["GET", "POST"] = "GET"
+    headers: dict[str, str] = field(default_factory=dict)
+    body: Any = None
+    timeout_s: float = 30.0
+    retries: int = 0
+
+    def __post_init__(self) -> None:          # validación de reglas cruzadas
+        if self.method == "POST" and self.body is None:
+            raise ValueError("POST requiere body")
+
+req = HttpRequest(
+    url="https://api.tienda.com/pedidos",
+    method="POST",
+    headers={"Authorization": f"Bearer {token}"},
+    body={"sku": "LAP-15", "qty": 1},
+    timeout_s=5,
+)
+```
+
+</CodeTabs>
+
+
+**Dónde aparece:** `java.net.http.HttpRequest.newBuilder()` en el JDK, `Request.Builder` de OkHttp, los mensajes de Protocol Buffers en Java, `@Builder` de Lombok, y los *query builders* como Knex o Kysely (`db.selectFrom('orders').where(...).limit(10)`), que construyen SQL paso a paso. Los tests también lo aman: un `OrderBuilder` con defaults válidos permite escribir `anOrder().withStatus('paid').build()` y declarar solo lo que importa en cada caso.
+
+**Cuándo no usarlo:** con tres o cuatro campos, un constructor o un objeto de opciones es más simple. En Kotlin, Python o C# con argumentos con nombre, escribir un builder a mano suele ser ceremonia de Java trasplantada. Úsalo cuando haya muchos opcionales, reglas de validación cruzadas o construcción en varias etapas.
+
+**Relacionados:** Abstract Factory devuelve el producto de inmediato; Builder lo arma por partes. Builder suele construir [Composites](/patrones/estructurales) (árboles de UI, documentos). Y un builder fluido es una *fluent interface*, término que acuñaron Martin Fowler y Eric Evans.
+
+## Prototype
+
+**Intención:** crear objetos nuevos copiando una instancia existente (el prototipo) en lugar de construirlos desde cero.
+
+Sirve cuando construir es caro o cuando la configuración se decide en tiempo de ejecución. Piensa en un editor de facturas: el usuario arma una plantilla con logo, estilos, secciones y textos legales. Cada factura nueva parte de esa plantilla. Reconstruirla llamando a veinte setters es frágil; **clonarla** es directo. Lo mismo pasa con los *prefabs* de un motor de juego o con el botón "Duplicar" de cualquier herramienta de diseño.
+
+El patrón tiene una sola trampa, y es enorme: **¿copia superficial o profunda?** Si clonas un pedido copiando solo el primer nivel, el clon y el original **comparten** los objetos anidados. Pruébalo:
+
+<PrototypeClone />
+
+Con copia superficial, cambiar el `id` del clon es seguro (es un valor primitivo), pero cambiar el cliente o agregar un ítem modifica también el original, porque ambos apuntan al mismo objeto en memoria. Ese bug suele aparecer meses después, como "a veces las facturas viejas cambian solas".
+
+<UmlDiagram
+  caption="Prototype: el cliente pide copias a un registro de prototipos sin conocer sus clases concretas."
+  classes={[
+    { id: 'client', name: 'InvoiceEditor', methods: ['newInvoice(kind)'], x: 0, y: 0, desc: 'Pide una copia al registro; no sabe qué clase concreta recibe.' },
+    { id: 'reg', name: 'TemplateRegistry', fields: ['-templates: Map'], methods: ['get(kind): Template'], x: 1, y: 0, desc: 'Guarda prototipos ya configurados y entrega clones.' },
+    { id: 'proto', name: 'Template', kind: 'interface', methods: ['clone(): Template'], x: 2, y: 0, desc: 'Todo prototipo sabe copiarse a sí mismo, incluyendo su estado privado.' },
+    { id: 'inv', name: 'InvoiceTemplate', fields: ['-sections, -styles'], methods: ['clone()'], x: 2, y: 1.2, desc: 'Implementa clone() con copia profunda de sus partes mutables.' },
+  ]}
+  relations={[
+    { from: 'client', to: 'reg', kind: 'uses' },
+    { from: 'reg', to: 'proto', kind: 'aggregates' },
+    { from: 'inv', to: 'proto', kind: 'implements' },
+  ]}
+/>
+
+<CodeTabs>
+
+```ts title="TypeScript"
+interface Template {
+  clone(): Template
+}
+
+class InvoiceTemplate implements Template {
+  constructor(
+    public header: { logoUrl: string; company: string },
+    public sections: Section[],
+    public legalText: string,
+  ) {}
+
+  clone(): InvoiceTemplate {
+    // structuredClone hace copia profunda de datos planos, pero NO conserva
+    // la clase (devuelve objetos planos). Por eso reconstruimos la instancia.
+    return new InvoiceTemplate(structuredClone(this.header), structuredClone(this.sections), this.legalText)
+  }
+}
+
+class TemplateRegistry {
+  private templates = new Map<string, Template>()
+  register(kind: string, t: Template) { this.templates.set(kind, t) }
+  get(kind: string): Template {
+    const t = this.templates.get(kind)
+    if (!t) throw new Error(`Plantilla desconocida: ${kind}`)
+    return t.clone() // nunca entregues el prototipo original
+  }
+}
+
+const invoice = registry.get('factura-exportacion') as InvoiceTemplate
+invoice.sections.push(new Section('Aduana')) // la plantilla queda intacta
+```
+
+```python title="Python"
+import copy
+from dataclasses import dataclass, field
+
+@dataclass
+class InvoiceTemplate:
+    header: dict[str, str]
+    sections: list["Section"] = field(default_factory=list)
+    legal_text: str = ""
+
+    def clone(self) -> "InvoiceTemplate":
+        # copy.copy  -> superficial: comparte header y sections
+        # copy.deepcopy -> profunda: recorre todo el grafo (y maneja ciclos)
+        return copy.deepcopy(self)
+
+class TemplateRegistry:
+    def __init__(self) -> None:
+        self._templates: dict[str, InvoiceTemplate] = {}
+
+    def register(self, kind: str, template: InvoiceTemplate) -> None:
+        self._templates[kind] = template
+
+    def get(self, kind: str) -> InvoiceTemplate:
+        return self._templates[kind].clone()
+
+invoice = registry.get("factura-exportacion")
+invoice.sections.append(Section("Aduana"))  # la plantilla original no cambia
+```
+
+</CodeTabs>
+
+<Callout type="warn" title="Copias profundas que no deberían serlo">
+
+Copiar en profundidad tampoco es gratis ni siempre correcto. Un prototipo que contiene una conexión a base de datos, un socket o un cliente HTTP **no** debe clonar esos recursos: dos objetos compartiendo (o duplicando) una conexión abierta es otra clase de bug. En `structuredClone`, además, las funciones y los nodos del DOM lanzan `DataCloneError`. Decide campo por campo qué se copia y qué se comparte; en Python puedes controlarlo con `__deepcopy__`.
+
+</Callout>
+
+**Dónde aparece:** JavaScript mismo está construido sobre prototipos (`Object.create(proto)` crea un objeto que delega en otro, aunque eso es delegación, no copia). Java tiene `Object.clone()` y la interfaz `Cloneable`, un diseño tan problemático que Bloch recomienda preferir constructores de copia (*Effective Java*, ítem 13). Unity instancia *prefabs* con `Instantiate`, y casi todo editor (Figma, Google Docs, Notion) tiene un "Duplicar" que conceptualmente es Prototype.
+
+**Cuándo no usarlo:** si construir el objeto es barato y simple, un constructor o una fábrica se leen mejor. Si el grafo de objetos tiene ciclos, recursos externos o identidad importante (entidades con `id` de base de datos), clonar exige tantas decisiones que suele ser mejor una fábrica explícita.
+
+**Relacionados:** compite con Factory Method (copiar vs. construir). Comparte mecánica con [Memento](/patrones/comportamiento-2), que también guarda copias del estado, aunque para restaurarlo. Y combina bien con Composite: clonar un árbol completo con un solo `clone()` en la raíz.
+
+<Quiz
+  question={<>Haces <code>const copia = {'{'} ...pedido {'}'}</code> y luego <code>copia.items.push(nuevoItem)</code>. ¿Qué le pasa a <code>pedido.items</code>?</>}
+  options={[
+    { text: 'Nada: el spread crea un objeto nuevo', why: 'Crea un objeto nuevo solo en el primer nivel. La propiedad items del nuevo objeto apunta al mismo array que la del original.' },
+    { text: 'También recibe el nuevo ítem, porque ambos comparten el mismo array', correct: true, why: 'El spread es una copia superficial: copia referencias, no los objetos anidados. Para aislarlos necesitas structuredClone o copiar items explícitamente.' },
+    { text: 'Lanza un error porque el array es de solo lectura', why: 'El spread no congela nada; el array sigue siendo mutable y compartido.' },
+    { text: 'Depende de si items tiene más de un elemento', why: 'La cantidad de elementos no cambia la semántica: siempre se copia la referencia al array.' },
+  ]}
+/>
+
+## Singleton
+
+**Intención:** asegurar que una clase tenga una sola instancia y ofrecer un punto de acceso global a ella.
+
+Es el patrón más fácil de explicar, el más usado por quien recién aprende patrones y, probablemente, el más criticado. Veamos primero cómo se escribe bien en cada lenguaje, y después por qué conviene desconfiar.
+
+<CodeTabs>
+
+```ts title="TypeScript"
+// Versión clásica: constructor privado + acceso estático.
+export class AppConfig {
+  private static instance: AppConfig | undefined
+  private constructor(readonly databaseUrl: string, readonly stripeKey: string) {}
+
+  static get(): AppConfig {
+    AppConfig.instance ??= new AppConfig(process.env.DATABASE_URL!, process.env.STRIPE_KEY!)
+    return AppConfig.instance
+  }
+}
+
+// Versión idiomática: un módulo ES se evalúa una vez, así que
+// exportar una instancia ya es un singleton por proceso.
+export const config = Object.freeze({
+  databaseUrl: process.env.DATABASE_URL!,
+  stripeKey: process.env.STRIPE_KEY!,
+})
+```
+
+```java title="Java"
+// Effective Java (ítem 3): un enum de un solo elemento es a menudo
+// la mejor forma de implementar un singleton. La JVM garantiza
+// una única instancia, inicialización thread-safe y serialización correcta.
+public enum AppConfig {
+    INSTANCE;
+
+    private final String databaseUrl = System.getenv("DATABASE_URL");
+
+    public String databaseUrl() { return databaseUrl; }
+}
+
+// Uso: AppConfig.INSTANCE.databaseUrl()
+
+// Si necesitas carga diferida sin enum: holder idiom (también thread-safe).
+public final class Metrics {
+    private Metrics() {}
+    private static class Holder { static final Metrics INSTANCE = new Metrics(); }
+    public static Metrics get() { return Holder.INSTANCE; }
+}
+```
+
+```python title="Python"
+# config.py
+# Un módulo de Python se importa una sola vez por proceso:
+# sus variables globales ya son "singletons". No necesitas una clase.
+import os
+from dataclasses import dataclass
+
+@dataclass(frozen=True)
+class AppConfig:
+    database_url: str
+    stripe_key: str
+
+config = AppConfig(
+    database_url=os.environ["DATABASE_URL"],
+    stripe_key=os.environ["STRIPE_KEY"],
+)
+
+# en otro archivo:
+# from config import config
+```
+
+</CodeTabs>
+
+### Por qué el Singleton tiene mala fama
+
+El problema no es tener **una instancia**; eso es normal (un pool de conexiones, un logger). El problema es el **acceso global**, que es la otra mitad del patrón:
+
+1. **Dependencias ocultas.** La firma `class InvoiceService { constructor() }` dice que no necesita nada. Mentira: adentro llama a `AppConfig.get()`, `Database.getInstance()` y `Mailer.getInstance()`. Misko Hevery lo resumió con un título difícil de olvidar: *Singletons are Pathological Liars*. Para saber qué necesita una clase tienes que leer todo su código.
+2. **Tests acoplados entre sí.** El estado del singleton sobrevive de un test a otro. Un test modifica la config, el siguiente falla solo si corre después. No puedes reemplazarlo por un doble sin hacks (resetear campos estáticos, *monkey patching*).
+3. **Estado global mutable.** Cualquier parte del sistema puede leerlo y cambiarlo. Es una variable global con mejor reputación.
+4. **Dos responsabilidades.** La clase hace su trabajo **y además** controla su propio ciclo de vida. Eso choca con el principio de responsabilidad única que viste en la [introducción](/patrones/introduccion).
+5. **Concurrencia en la inicialización perezosa.** En lenguajes con hilos, `if (instance == null) instance = new X()` es una carrera: dos hilos pueden crear dos instancias. El *double-checked locking* en Java necesita `volatile` para ser correcto; por eso el enum y el *holder idiom* son preferibles.
+6. **"Único" es una ilusión en sistemas distribuidos.** Un singleton es único **por proceso** (y en Java, por classloader). Con 12 pods detrás de un load balancer tienes 12 "instancias únicas". Si usas un singleton como contador de rate limiting o como "el único worker que procesa la cola", funcionará en tu laptop y fallará en producción. En Node, dos copias del mismo paquete en `node_modules` también producen dos singletons.
+
+<UmlDiagram
+  caption="El costo real del Singleton: nada en las firmas de OrderService o InvoiceService revela que dependen de AppConfig. Toca cada clase para ver la relación oculta."
+  classes={[
+    { id: 'cfg', name: 'AppConfig', fields: ['-static instance'], methods: ['-constructor()', '+static get()'], x: 1, y: 1.15, tone: 'line', desc: 'Una instancia, accesible desde cualquier parte. Ese acceso global es lo que acopla todo.' },
+    { id: 'order', name: 'OrderService', methods: ['constructor()'], x: 0, y: 0, desc: 'Su constructor no recibe nada, pero adentro llama AppConfig.get().' },
+    { id: 'inv', name: 'InvoiceService', methods: ['constructor()'], x: 1, y: 0, desc: 'Mismo caso: dependencia invisible desde afuera.' },
+    { id: 'mail', name: 'Mailer', methods: ['constructor()'], x: 2, y: 0, desc: 'Y otra más. En un test, las tres comparten el mismo estado.' },
+  ]}
+  relations={[
+    { from: 'order', to: 'cfg', kind: 'depends', label: 'oculta' },
+    { from: 'inv', to: 'cfg', kind: 'depends' },
+    { from: 'mail', to: 'cfg', kind: 'depends' },
+  ]}
+/>
+
+### La alternativa: una instancia, inyectada
+
+La solución no es tener varias configuraciones. Es **separar "existe una sola" de "cualquiera puede ir a buscarla"**. Creas la instancia una vez en el punto de arranque de la aplicación (la *composition root*) y se la pasas a quien la necesite:
+
+```ts title="Antes y después" {4,11,21}
+// Antes: dependencia oculta
+class InvoiceService {
+  async issue(order: Order) {
+    const cfg = AppConfig.get()
+    // ...
+  }
+}
+
+// Después: dependencia explícita, mismo objeto único
+class InvoiceService {
+  constructor(private readonly cfg: AppConfig, private readonly mailer: Mailer) {}
+  async issue(order: Order) { /* usa this.cfg */ }
+}
+
+// main.ts: el único lugar que decide cuántas instancias hay
+const cfg = loadConfig(process.env)
+const mailer = new SmtpMailer(cfg.smtpHost)
+const invoices = new InvoiceService(cfg, mailer)
+
+// test: sin hacks
+const service = new InvoiceService(testConfig, new FakeMailer())
+```
+
+Los contenedores de inyección de dependencias (NestJS, Spring, .NET) formalizan esto con *lifetimes*: registras un servicio como `singleton` y el contenedor garantiza una instancia por proceso, sin que tus clases lo sepan. Lo verás en detalle en [patrones de aplicación](/patrones/patrones-aplicacion).
+
+<Callout type="interview" title="¿Por qué el Singleton es controversial?">
+
+Respuesta corta y completa: "El patrón mezcla dos cosas: garantizar una instancia y dar acceso global. La primera suele ser legítima; la segunda crea dependencias ocultas, estado global mutable y tests acoplados. Además solo garantiza unicidad por proceso, lo que en un sistema con varias réplicas no sirve para coordinar nada. Prefiero crear una sola instancia en la composition root e inyectarla, o registrarla como singleton en el contenedor de DI." Si quieres sumar puntos, menciona el enum de Java (ítem 3 de *Effective Java*) y que en Python un módulo ya es un singleton.
+
+</Callout>
+
+**Cuándo es razonable:** objetos **inmutables o sin estado** que de verdad son únicos por proceso (la config cargada al arrancar, un registro de métricas), o recursos que el runtime exige compartir (un pool de conexiones). Incluso ahí, prefiere que un contenedor o el `main` lo cree y lo inyecte.
+
+**Relacionados:** Abstract Factory y Builder a veces se implementan como singletons. Facade también tiende a existir una sola vez. El reemplazo moderno es la [inyección de dependencias](/patrones/patrones-aplicacion); su versión degenerada, el *service locator*, repite muchos de los problemas del Singleton.
+
+<Quiz
+  question="Tu API corre en 8 réplicas. Un desarrollador propone un Singleton RateLimiter con un contador en memoria para limitar a 100 peticiones por minuto por cliente. ¿Cuál es el problema principal?"
+  options={[
+    { text: 'Los singletons son lentos en lenguajes con recolector de basura', why: 'El rendimiento no es el problema; acceder a un objeto en memoria es muy rápido.' },
+    { text: 'Cada réplica tiene su propio singleton, así que el límite real sería hasta 800 por minuto', correct: true, why: 'Un singleton es único por proceso. Con 8 procesos hay 8 contadores independientes. Un límite global necesita estado compartido (por ejemplo Redis) o un gateway.' },
+    { text: 'Falta usar double-checked locking', why: 'Eso evita crear dos instancias dentro de un mismo proceso con hilos; no resuelve que haya 8 procesos.' },
+    { text: 'Debería ser un Prototype para que cada petición tenga su copia', why: 'Una copia por petición haría que el contador nunca acumule nada; el límite desaparecería por completo.' },
+  ]}
+/>
+
+## Cómo elegir entre ellos
+
+Los cinco se mezclan en la práctica, y algunos compiten entre sí. Esta guía rápida resume las decisiones:
+
+<Compare>
+<Option title="Varía QUÉ clase se crea" verdict="Factory Method / Abstract Factory">
+
+Si es **un** producto con varias implementaciones, empieza por una función fábrica (Simple Factory) o Factory Method. Si son **varios** productos que deben combinar, Abstract Factory.
+
+</Option>
+<Option title="Varía CÓMO se arma" verdict="Builder">
+
+Muchos opcionales, validaciones cruzadas, construcción por etapas o resultado inmutable. En lenguajes con argumentos con nombre, prueba primero un objeto de opciones.
+
+</Option>
+<Option title="Ya tienes un ejemplar configurado" verdict="Prototype">
+
+Plantillas, duplicados, prefabs, objetos caros de inicializar. Define con cuidado qué es copia profunda y qué se comparte.
+
+</Option>
+<Option title="Necesitas UNA instancia" verdict="DI con lifetime singleton">
+
+Créala una vez en la composition root e inyéctala. El patrón Singleton clásico solo si no hay alternativa razonable.
+
+</Option>
+</Compare>
+
+Y una regla general que aplica a todo este tema: **no introduzcas una fábrica antes de tener el segundo caso**. Con un solo `EmailSender`, `new EmailSender()` es perfecto. Cuando aparezca el SMS, la refactorización hacia una fábrica toma minutos y ya sabrás qué varía de verdad.
+
+<Takeaways>
+
+- Los patrones creacionales concentran la decisión de **qué clase concreta se instancia** en un solo lugar, para que el resto del código dependa de interfaces.
+- **Factory Method** delega la creación de un producto; en lenguajes con funciones, un registro de fábricas suele bastar. **Abstract Factory** garantiza familias coherentes, a cambio de que agregar un producto nuevo toque todas las fábricas.
+- **Builder** reemplaza constructores telescópicos por pasos con nombre y valida reglas cruzadas en `build()`. En Python o TS, argumentos con nombre y objetos de opciones resuelven gran parte del problema.
+- **Prototype** crea por copia; la decisión crítica es superficial vs. profunda. `structuredClone` y `copy.deepcopy` copian en profundidad, pero no clones recursos como conexiones.
+- **Singleton** mezcla "una instancia" (legítimo) con "acceso global" (problemático): dependencias ocultas, estado compartido entre tests y unicidad solo por proceso.
+- La alternativa al Singleton es crear la instancia en la composition root e **inyectarla**, o dejar que un contenedor de DI maneje el lifetime.
+
+</Takeaways>
+
+## Fuentes y lecturas
+
+- Gamma, Helm, Johnson y Vlissides, *Design Patterns: Elements of Reusable Object-Oriented Software* (1994). [Ficha en O'Reilly](https://www.oreilly.com/library/view/design-patterns-elements/0201633612/)
+- Eric Freeman y Elisabeth Robson, *Head First Design Patterns*, 2.ª ed. (2020), capítulos de Factory y Singleton. [O'Reilly](https://www.oreilly.com/library/view/head-first-design/9781492077992/)
+- Joshua Bloch, *Effective Java*, 3.ª ed., ítems 1 (static factory methods), 2 (Builder), 3 (Singleton con enum) y 13 (`clone`). [O'Reilly](https://www.oreilly.com/library/view/effective-java-3rd/9780134686097/)
+- Refactoring.Guru, catálogo de patrones creacionales: [Factory Method](https://refactoring.guru/design-patterns/factory-method), [Abstract Factory](https://refactoring.guru/design-patterns/abstract-factory), [Builder](https://refactoring.guru/design-patterns/builder), [Prototype](https://refactoring.guru/design-patterns/prototype), [Singleton](https://refactoring.guru/design-patterns/singleton).
+- Misko Hevery, [Singletons are Pathological Liars](https://testing.googleblog.com/2008/08/by-miko-hevery-so-you-join-new-project.html), Google Testing Blog (2008).
+- Mark Seemann, [Service Locator is an Anti-Pattern](https://blog.ploeh.dk/2010/02/03/ServiceLocatorisanAnti-Pattern/) (2010).
+- MDN, [The structured clone algorithm](https://developer.mozilla.org/en-US/docs/Web/API/Web_Workers_API/Structured_clone_algorithm) y [`structuredClone()`](https://developer.mozilla.org/en-US/docs/Web/API/Window/structuredClone).
+- Documentación de Python, [módulo `copy`](https://docs.python.org/3/library/copy.html).
+- Documentación del JDK, [`HttpRequest.Builder`](https://docs.oracle.com/en/java/javase/21/docs/api/java.net.http/java/net/http/HttpRequest.Builder.html).
+- Martin Fowler, [Fluent Interface](https://martinfowler.com/bliki/FluentInterface.html) (2005).

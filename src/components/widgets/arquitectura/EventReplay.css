@@ -1,0 +1,135 @@
+.er-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
+  gap: var(--s-4);
+  align-items: start;
+}
+@media (max-width: 640px) {
+  .er-layout {
+    grid-template-columns: 1fr;
+  }
+}
+.er-events {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 0 4px;
+  display: grid;
+  gap: 0;
+  position: relative;
+}
+.er-ev {
+  position: relative;
+  display: grid;
+  grid-template-columns: 26px auto 1fr;
+  align-items: baseline;
+  gap: 8px;
+  padding: 5px 0 5px 4px;
+  font-size: var(--step--1);
+}
+.er-ev::before {
+  content: '';
+  position: absolute;
+  left: 15px;
+  top: 0;
+  bottom: 0;
+  border-left: 4px solid var(--rule-strong);
+}
+.er-ev.is-applied::before {
+  border-left-color: var(--line);
+}
+.er-ev__n {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  margin-left: -1px;
+  border-radius: 50%;
+  border: 3px solid var(--rule-strong);
+  background: var(--paper);
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--ink-3);
+  align-self: center;
+}
+.er-ev.is-applied .er-ev__n {
+  border-color: var(--line);
+  color: var(--ink);
+}
+.er-ev.is-last .er-ev__n {
+  background: var(--line);
+  color: var(--line-on);
+}
+.er-ev__type {
+  font-family: var(--font-code);
+  font-size: 0.76rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+.er-ev__d {
+  font-size: 0.8rem;
+  color: var(--ink-3);
+  overflow-wrap: anywhere;
+}
+.er-view {
+  display: grid;
+  gap: var(--s-2);
+  padding: var(--s-3);
+  border: 2px solid var(--rule);
+  border-radius: var(--radius-lg);
+  background: var(--card);
+}
+.er-view__title {
+  font-weight: 700;
+  font-size: 0.78rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--line-ink);
+}
+.er-dl {
+  display: grid;
+  grid-template-columns: 5.5rem 1fr;
+  gap: 3px var(--s-3);
+  margin: 0;
+  font-size: var(--step--1);
+}
+.er-dl dt {
+  font-family: var(--font-code);
+  font-size: 0.76rem;
+  color: var(--ink-3);
+}
+.er-dl dd {
+  margin: 0;
+  font-weight: 600;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.er-proj {
+  margin: 0;
+  padding-left: 1.1rem;
+  font-size: var(--step--1);
+  color: var(--ink);
+}
+.er-muted {
+  margin: 0;
+  color: var(--ink-3);
+  font-style: italic;
+}
+.er-note {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--ink-2);
+  line-height: 1.45;
+}
+.er-row {
+  margin: 0;
+  padding: var(--s-2) var(--s-3);
+  border-radius: var(--radius);
+  background: var(--code-bg);
+  color: var(--code-ink);
+  font-family: var(--font-code);
+  font-size: 0.76rem;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}

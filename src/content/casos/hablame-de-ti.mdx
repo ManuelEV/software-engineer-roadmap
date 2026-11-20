@@ -1,0 +1,384 @@
+import { PitchBuilder } from '../../components/widgets/entrevistas/PitchBuilder'
+import { QuestionDeck } from '../../components/widgets/entrevistas/QuestionDeck'
+
+Casi todas las entrevistas empiezan igual: "Bueno, cuéntame un poco de ti". Es la pregunta más predecible de todo el proceso y, aun así, una de las peor respondidas. La mayoría improvisa: recita el CV en orden cronológico, se pierde en la universidad y llega a lo interesante cuando el entrevistador ya está mirando el reloj. Son los primeros dos minutos de la conversación y fijan el tono de todo lo demás.
+
+Este tema cubre esa presentación y la familia de preguntas personales que la rodean: por qué esta empresa, por qué te vas, tus debilidades, dónde te ves en cinco años, los vacíos en el CV. También las preguntas que **tú** haces al final, que son una herramienta de evaluación en las dos direcciones, y cómo manejar todo esto cuando la entrevista es en inglés. Las historias de "cuéntame de una vez que…" están en [la entrevista conductual](/casos/entrevista-conductual), y la pregunta del sueldo, en [expectativas, oferta y negociación](/casos/oferta-y-negociacion).
+
+<Sketch
+  width={640}
+  height={300}
+  caption="El pitch empieza por el medio: primero lo que haces hoy, después el hilo que te trajo y al final por qué esta vacante."
+  items={[
+    { type: 'text', x: 24, y: 34, text: 'háblame de ti: empieza por el medio', size: 22, tone: 'pencil' },
+    { type: 'line', points: [[24, 150], [616, 150]], arrow: true, tone: 'muted' },
+    { type: 'circle', x: 320, y: 150, r: 28, label: '1', size: 24, tone: 'line', fill: true },
+    { type: 'text', x: 320, y: 210, text: 'presente', size: 22, anchor: 'middle', tone: 'line' },
+    { type: 'text', x: 320, y: 238, text: 'rol + un logro', size: 18, anchor: 'middle', tone: 'pencil' },
+    { type: 'arrow', from: [298, 126], to: [152, 126], bend: 50, tone: 'pencil' },
+    { type: 'circle', x: 130, y: 150, r: 24, label: '2', size: 22 },
+    { type: 'text', x: 130, y: 210, text: 'pasado', size: 22, anchor: 'middle' },
+    { type: 'text', x: 130, y: 238, text: 'el hilo', size: 18, anchor: 'middle', tone: 'pencil' },
+    { type: 'arrow', from: [146, 126], to: [494, 126], bend: -76, tone: 'pencil' },
+    { type: 'circle', x: 510, y: 150, r: 24, label: '3', size: 22 },
+    { type: 'text', x: 510, y: 210, text: 'futuro', size: 22, anchor: 'middle' },
+    { type: 'text', x: 510, y: 238, text: 'por qué aquí', size: 18, anchor: 'middle', tone: 'pencil' },
+    { type: 'highlight', x: 20, y: 268, w: 190, h: 28 },
+    { type: 'text', x: 24, y: 290, text: 'de 60 a 120 segundos', size: 20, with: true },
+  ]}
+/>
+
+## "Háblame de ti": la respuesta que abre todo
+
+Detrás de "háblame de ti" no hay curiosidad por tu vida. El entrevistador quiere saber, en poco tiempo, tres cosas: **qué haces hoy y a qué nivel**, **cómo llegaste ahí** y **por qué estás en esta conversación**. También está evaluando, sin decirlo, si te comunicas con claridad y si puedes resumir.
+
+### La estructura: presente, pasado, futuro
+
+La estructura que mejor funciona tiene tres bloques, en este orden:
+
+1. **Presente**: tu rol actual, el dominio y un logro concreto. "Soy desarrollador backend, hoy trabajo en el servicio de pagos de una fintech, y el último trimestre…".
+2. **Pasado**: el hilo que explica cómo llegaste ahí. No cada empleo: el recorrido que da sentido al presente. "Llegué al backend desde soporte técnico…".
+3. **Futuro**: qué buscas ahora y por qué **esta** vacante encaja. Es el puente hacia la conversación.
+
+¿Por qué empezar por el presente y no por el principio? Porque es lo que más le importa al entrevistador y porque, si te cortan a los 40 segundos, ya dijiste lo esencial. Contar desde la universidad pone lo menos relevante primero.
+
+### Cuánto debe durar
+
+Apunta a **entre 60 y 120 segundos**. Menos de un minuto suele quedar en un título y una lista de tecnologías; más de dos, el entrevistador deja de escuchar y empieza a buscar dónde interrumpirte. A un ritmo de conversación tranquilo (supongamos unas 140 palabras por minuto), eso es entre 140 y 280 palabras: menos de lo que parece. Cronométrate.
+
+Si te piden explícitamente "recórreme tu CV" (*walk me through your resume*), puedes extenderte un poco y mencionar cada experiencia, pero el principio es el mismo: rápido en lo viejo, más detalle en lo reciente.
+
+### Adáptala a cada vacante
+
+El bloque de presente cambia poco entre procesos, pero el de futuro debe cambiar siempre, y el logro que eliges en el presente también. Para una vacante de pagos, menciona el trabajo de consistencia o de reintentos; para una de alto tráfico, el de rendimiento. Es la misma persona con los mismos hechos, contada desde el ángulo que le importa a quien escucha.
+
+<Compare>
+<Option title="Débil" verdict="Recita el CV, genérico">
+
+"Bueno, estudié ingeniería de sistemas entre 2013 y 2018, hice mi práctica en un banco, después trabajé en soporte, después en una agencia… Soy una persona muy proactiva, apasionada por la tecnología, trabajo bien en equipo. Manejo Node, TypeScript, Express, NestJS, Postgres, Mongo, Redis, Docker, Kubernetes, AWS… Y bueno, busco nuevos desafíos."
+
+</Option>
+<Option title="Fuerte" verdict="Concreto, con hilo y cierre">
+
+"Soy desarrollador backend, con cuatro años de experiencia. Hoy trabajo en una empresa de logística, en el servicio que asigna pedidos a repartidores, con Node y Postgres; el último trimestre bajé la asignación de unos dos segundos a 300 ms. Llegué al desarrollo desde soporte técnico, automatizando diagnósticos, y pasé dos años en una agencia aprendiendo a entregar rápido. Ahora busco un equipo donde la confiabilidad sea parte del producto, y por eso me interesa pagos."
+
+</Option>
+</Compare>
+
+La versión fuerte dura menos de un minuto, tiene un dato verificable y le da al entrevistador tres ganchos para repreguntar: la optimización, el paso desde soporte y el interés por pagos. Eso es lo que quieres: que la conversación siga por donde tú tienes buenas historias.
+
+<PitchBuilder />
+
+<Callout type="interview" title="Lo que el entrevistador está evaluando aquí">
+
+Si puedes resumir, si sabes qué es relevante para esta vacante y si hiciste la tarea sobre la empresa. Muchos entrevistadores usan algo de tu presentación para la siguiente pregunta ("mencionaste que bajaste la latencia, ¿cómo lo hiciste?"). Un logro concreto en tu pitch es una invitación a hablar de lo que mejor conoces.
+
+</Callout>
+
+### Casos especiales
+
+- **Junior o primer empleo.** El presente puede ser lo que estás construyendo y aprendiendo: un proyecto propio con usuarios reales, una práctica, un bootcamp con un proyecto final serio. Un logro sigue siendo mejor que un adjetivo: "hice una app de turnos para la peluquería de mi barrio que usan desde hace seis meses".
+- **Cambio de carrera.** Trata tu carrera anterior como un activo, no como algo que hay que explicar. Una persona que viene de contabilidad entiende de conciliaciones mejor que muchos desarrolladores; alguien que viene de atención al cliente sabe lo que es un usuario frustrado. Conéctalo con la vacante.
+- **Senior.** Menos tecnologías y más alcance: qué decisiones tomas, a cuántos equipos afectan, qué cambió gracias a ti.
+
+## Las preguntas personales
+
+Después del pitch vienen preguntas que parecen charla pero también se evalúan. Para cada una hay una respuesta débil muy común y una forma mejor de pensarla.
+
+### ¿Por qué esta empresa?
+
+Lo que buscan es saber si **investigaste** y si tu interés es específico o te da igual cualquier empresa que pague. "Porque es una empresa grande y con buen ambiente" vale para cualquier empresa. Mejor: conecta algo concreto de la empresa (su producto, un problema técnico que publicaron en su blog de ingeniería, su mercado) con algo concreto tuyo.
+
+> "Uso la app para pagar servicios y me llamó la atención que el pago se confirma incluso cuando estoy sin señal. Leí en su blog cómo manejan los reintentos con claves de idempotencia, y es justo el tipo de problema en el que trabajé el último año."
+
+Diez minutos leyendo su blog técnico, su página de carreras y las notas de lanzamiento de su producto te dan material para esta respuesta.
+
+### ¿Por qué te vas (o te fuiste)?
+
+La regla: **habla de lo que buscas, no de lo que huyes**, y nunca hables mal del empleador anterior, aunque haya sido terrible. Quien te entrevista se imagina cómo hablarás de su empresa dentro de dos años.
+
+<Sketch
+  width={640}
+  height={240}
+  caption="Por qué te vas: cuenta hacia dónde vas, no de qué huyes."
+  items={[
+    { type: 'text', x: 24, y: 34, text: 'por qué te vas', size: 22, tone: 'pencil' },
+    { type: 'box', x: 240, y: 80, w: 160, h: 60, label: 'hoy', size: 22 },
+    { type: 'arrow', from: [238, 110], to: [60, 110], tone: 'bad', label: 'huir de…', labelAt: [150, 98] },
+    { type: 'text', x: 24, y: 172, text: ['"mi jefe era', 'un desastre"'], size: 18, tone: 'bad' },
+    { type: 'cross', x: 196, y: 186, size: 22 },
+    { type: 'arrow', from: [402, 110], to: [590, 110], tone: 'ok', label: 'ir hacia…', labelAt: [496, 98] },
+    { type: 'text', x: 420, y: 172, text: ['"busco más escala', 'y sistemas nuevos"'], size: 18, tone: 'ok' },
+    { type: 'check', x: 600, y: 186, size: 24 },
+    { type: 'text', x: 320, y: 222, text: 'lo que buscas, no lo que huyes', size: 20, anchor: 'middle', tone: 'line' },
+  ]}
+/>
+
+- Débil: "Mi jefe era un desastre y no me valoraban."
+- Mejor: "Aprendí mucho, pero el producto se estabilizó y el trabajo es sobre todo mantenimiento. Quiero volver a construir sistemas nuevos con más escala."
+
+Si te despidieron o hubo un recorte, dilo con naturalidad y en una frase: "La empresa recortó el 30 % del equipo de ingeniería en marzo y mi equipo completo quedó fuera". Los despidos masivos son comunes en tecnología y nadie se sorprende. No mientas: es fácil de verificar.
+
+### ¿Cuál es tu mayor debilidad?
+
+La respuesta "soy perfeccionista" o "trabajo demasiado" es tan común que se lee como evasiva. Lo que buscan es **autoconocimiento**: que puedas nombrar algo real y qué estás haciendo al respecto.
+
+Elige una debilidad **real** pero **no central** para el puesto (para un puesto de backend, "me cuesta programar" no; "me cuesta hablar en reuniones grandes" sí), y cuenta el plan:
+
+> "Tiendo a quedarme demasiado tiempo trabado antes de pedir ayuda: una vez perdí dos días en un problema que un compañero resolvió en media hora. Ahora me pongo un límite: si en una hora no avancé, escribo en el canal del equipo con lo que ya probé. Me ha funcionado, aunque todavía tengo que recordármelo."
+
+Cerrar con un "todavía me cuesta" es honesto y creíble. Nadie espera que estés curado.
+
+### ¿Dónde te ves en cinco años?
+
+Buscan saber si tus planes son compatibles con lo que la empresa puede ofrecer y si vas a quedarte un tiempo razonable. No hace falta un plan exacto; hace falta una dirección que tenga sentido con el puesto:
+
+> "Me veo con más alcance técnico: liderando el diseño de sistemas que cruzan varios equipos. No sé todavía si por el camino de staff engineer o de gestión, y una de las cosas que me gustaría entender es cómo funcionan esos dos caminos aquí."
+
+Evita lo que suena a salida rápida ("tener mi propia startup") y lo que no tiene relación con el puesto.
+
+### Vacíos en el CV
+
+Un vacío de meses o años no es un problema; un vacío que parece escondido sí. Explícalo en una frase, sin pedir perdón, y vuelve al presente: "Me tomé un año para cuidar a un familiar. En los últimos meses retomé con un curso de AWS y un proyecto que puedo mostrarte". Si estudiaste, viajaste o tuviste un emprendimiento que no funcionó, cuéntalo como lo que es. No tienes que dar detalles personales (de salud, por ejemplo) si no quieres: "por motivos personales que ya están resueltos" es suficiente.
+
+### ¿Por qué cambiaste de stack o de carrera?
+
+Buscan que el cambio tenga una lógica y que no sea huir de algo. Cuenta qué te atrajo, qué hiciste para cambiar (no solo qué querías) y qué traes de antes: "Trabajé cinco años con PHP en ecommerce. Empecé a usar Go para un servicio de colas porque necesitábamos concurrencia y me gustó tanto que lo usé en todo lo nuevo durante el último año. Lo que traigo de PHP es mucho oficio con bases de datos y con sistemas que llevan diez años en producción."
+
+<Quiz
+  question="Te preguntan por qué quieres dejar tu trabajo actual. Es verdad que tu manager es desorganizado y que el ambiente es malo. ¿Qué respuesta es mejor?"
+  options={[
+    { text: 'Contar con detalle los problemas de gestión, porque la honestidad se valora.', why: 'La honestidad sí, pero hablar mal del empleador actual es una de las señales de alerta más fuertes: quien te entrevista se imagina cómo hablarás de su empresa.' },
+    { text: 'Hablar de lo que buscas y que hoy no tienes, en términos positivos y concretos.', correct: true, why: 'Puedes ser honesto sin atacar a nadie: «busco un equipo con procesos de ingeniería más maduros, con revisiones de código y planificación» dice lo mismo sin que suene a queja.' },
+    { text: 'Decir que no te quieres ir, que solo estás explorando.', why: 'Suena poco comprometido con el proceso y genera dudas sobre si aceptarías una oferta.' },
+  ]}
+/>
+
+## Tus preguntas al final
+
+"¿Tienes alguna pregunta para nosotros?" no es una cortesía. Es tu turno de evaluar la empresa, y también es una señal para ellos: quien no pregunta nada parece poco interesado o poco preparado. Lleva **tres o cuatro preguntas escritas** y elige según con quién hablas. Evita preguntar lo que está en la primera página de su sitio web.
+
+### Buenas preguntas por categoría
+
+**Equipo**
+- ¿Cómo está compuesto el equipo y cuánto tiempo lleva junto?
+- ¿Cómo se reparte el trabajo: quién decide qué se construye y quién decide cómo?
+- ¿Cómo es un día típico de alguien en este puesto?
+
+**Proceso**
+- ¿Cómo llega un cambio desde un pull request hasta producción? ¿Cuántas veces por semana despliegan?
+- ¿Cómo funcionan las guardias? ¿Cuántas alertas fuera de horario hubo el último mes?
+- ¿Qué pasa después de un incidente? ¿Hacen postmortems?
+
+**Producto**
+- ¿Cuál es el problema técnico más difícil que tiene el equipo hoy?
+- ¿Qué haría que esta persona sea un éxito en sus primeros seis meses?
+
+**Cultura**
+- ¿Cómo se toman las decisiones técnicas cuando hay desacuerdo?
+- ¿Cómo se trabaja entre zonas horarias? ¿Qué se espera de disponibilidad sincrónica? (clave en empresas remotas)
+
+**Crecimiento**
+- ¿Cómo funciona la carrera técnica aquí? ¿Hay camino de staff, o crecer implica gestionar?
+- ¿Cómo y cada cuánto se evalúa el desempeño?
+
+### Para el manager y para el ingeniero
+
+No le preguntes lo mismo a todos. **Al manager**: cómo mide el éxito del equipo, cómo da feedback, qué cambiaría del equipo si pudiera, por qué está abierta la vacante (¿crecimiento o reemplazo?). **Al ingeniero**: qué le gusta y qué le frustra de trabajar ahí, cuánto tiempo dedica a reuniones, cómo es la deuda técnica, la última vez que aprendió algo nuevo en el trabajo. La respuesta del ingeniero suele ser más franca.
+
+### Señales de alerta en las respuestas
+
+Escucha más allá de las palabras. Algunas respuestas que merecen otra pregunta:
+
+- **Nadie sabe decirte qué harías** en tus primeros meses, o cada entrevistador dice algo distinto.
+- "**Somos como una familia**" junto con "aquí todos se ponen la camiseta cuando hace falta": suele significar horas extra no reconocidas.
+- **"No tenemos tiempo para tests"** o "los postmortems no son lo nuestro".
+- **Todo el equipo es nuevo**, o la vacante es el tercer reemplazo del año. Pregunta por qué.
+- **Vaguedad sobre las guardias**: "a veces hay que estar disponible".
+- El manager **habla mal de su propio equipo** o de quien tenía el puesto antes.
+- **Evaden la pregunta** del sueldo o del tipo de contrato hasta el final, cuando ya invertiste semanas.
+
+Una señal sola no descarta una empresa. Pero si varias aparecen juntas, tómalas en serio: la entrevista es el momento en que la empresa se muestra en su mejor versión.
+
+<Quiz
+  question="Al final de una entrevista con tu futuro manager te queda tiempo para una sola pregunta. ¿Cuál te da más información?"
+  options={[
+    { text: '¿Cuántos días de vacaciones tienen?', why: 'Es información útil, pero se resuelve con recursos humanos o en la oferta. Con el manager aprovecha para lo que solo él sabe.' },
+    { text: '¿Qué haría que la persona en este puesto sea un éxito en los primeros seis meses?', correct: true, why: 'Te dice qué esperan de verdad, si lo tienen claro y te da material para mostrar en la oferta y en el onboarding. Si el manager no sabe responderla, eso también es información.' },
+    { text: '¿Qué hace la empresa?', why: 'Muestra que no investigaste. Es lo primero que tienes que saber antes de la entrevista.' },
+  ]}
+/>
+
+## Entrevistas en inglés
+
+Muchos desarrolladores de Latinoamérica postulan a empresas remotas de EE. UU. o Europa, donde todo el proceso es en inglés. La buena noticia: casi nunca evalúan un inglés perfecto, sino uno **suficiente para trabajar**: entender, hacerte entender y pedir aclaraciones. Los equipos remotos están llenos de personas que no son nativas, y los entrevistadores lo saben.
+
+### Cómo prepararte
+
+- **Escribe y practica tu pitch en inglés** hasta que lo digas sin leer. Es lo que más vas a repetir.
+- **Prepara tus historias en inglés**, aunque sea en viñetas. El vocabulario de tus propios proyectos ("rollback", "on-call", "migration", "throughput") es el que más vas a necesitar y el que menos se practica en un curso general.
+- **Practica en voz alta resolviendo problemas** mientras narras en inglés. Narrar código en otro idioma es una habilidad aparte: requiere práctica específica.
+- **Grábate.** Escucharte es incómodo y muy efectivo: vas a notar las muletillas ("eh", "so", "basically") y las palabras que pronuncias distinto cada vez.
+- **Haz al menos una simulación** con alguien, idealmente alguien que trabaje en inglés.
+
+### Frases útiles
+
+Estas frases te sacan de los momentos más difíciles. Apréndelas de memoria: en el momento de nervios no vas a querer construirlas.
+
+| Frase | Cuándo usarla |
+|---|---|
+| *Sorry, could you repeat the question?* | No entendiste. Es completamente normal pedirlo; mejor que responder otra cosa. |
+| *Could you say that a bit more slowly?* | El acento o la velocidad te cuestan. Nadie se ofende. |
+| *Just to make sure I understood: you're asking about…, right?* | Para confirmar que entendiste bien antes de responder. Ganas tiempo y evitas responder otra pregunta. |
+| *That's a good question. Let me think about it for a moment.* | Necesitas unos segundos. El silencio con aviso no se lee como bloqueo. |
+| *Let me think out loud.* | En live coding o system design, para que el entrevistador siga tu razonamiento. |
+| *Can I ask a few clarifying questions before I start?* | Antes de resolver un problema. Es exactamente lo que quieren que hagas. |
+| *Can I assume the input fits in memory?* / *Should I optimize for time or for space?* | Aclarar supuestos concretos en live coding. |
+| *I'll start with a brute-force approach and then optimize.* | Anunciar el plan antes de escribir código. |
+| *Here I'm using a hash map to keep track of what I've seen.* | Narrar lo que hace cada parte del código. |
+| *This runs in big O of n time and O of one extra space.* | Explicar la complejidad. "O(n)" se dice *big O of n* o *O of n*. |
+| *Let me walk through an example to check it.* | Probar la solución a mano con un caso. |
+| *I haven't worked with that directly, but here's how I'd approach it.* | No sabes algo. Es mucho mejor que inventar. |
+| *Sorry, let me rephrase that.* / *What I meant was…* | Te enredaste. Corregirte es normal; seguir enredado, no. |
+| *Let me give you a specific example.* | Para pasar de lo general a una historia en una pregunta conductual. |
+
+### Si el acento o el nivel te ponen nervioso
+
+- **Habla más lento de lo que crees necesario.** Con nervios todos aceleramos, y la velocidad empeora la pronunciación más que cualquier otra cosa.
+- **Frases cortas.** Sujeto, verbo, objeto. No necesitas construcciones complejas para explicar un algoritmo.
+- **Si no entiendes, pregunta.** Dos veces si hace falta. Responder a una pregunta que no te hicieron es mucho peor que pedir que la repitan.
+- **No pidas disculpas por tu inglés** al principio de la entrevista. Predispone al entrevistador a buscar errores. Si en algún momento te trabas, sigue.
+- **Si te piden elegir idioma** y la empresa trabaja en inglés, usa inglés al menos en la parte técnica: es lo que vas a hacer en el trabajo.
+
+<QuestionDeck
+  title="Practica"
+  caption="Preguntas personales y de cierre. Respóndelas en voz alta (la de «Tell me about yourself», en inglés) y recién ahí revela la respuesta modelo. Los modelos son de un desarrollador ficticio: tu respuesta tiene que ser tuya."
+  cards={[
+    {
+      q: 'Cuéntame un poco de ti.',
+      checks: 'Que resumas qué haces, cómo llegaste y por qué estás aquí, en uno o dos minutos.',
+      level: 'junior',
+      answer: <><p>"Soy desarrolladora frontend junior; hace un año terminé un bootcamp y desde entonces trabajo en una agencia haciendo sitios con React para clientes de retail. Mi proyecto más grande fue el carrito de compras de una tienda de ropa, donde aprendí a medir el rendimiento y bajamos el tiempo de carga a la mitad. Antes trabajé tres años en atención al cliente, y eso me dejó la costumbre de pensar en quien usa lo que construyo. Me interesa este puesto porque quiero trabajar en un producto propio, no en proyectos que se entregan y se olvidan."</p></>,
+      strong: ['Presente, pasado y futuro en ese orden', 'Un logro concreto', 'Un cierre que conecta con la vacante'],
+      weak: ['Empezar por la universidad', 'Lista de tecnologías', 'Adjetivos sobre ti mismo'],
+      followups: ['¿Cómo mediste el tiempo de carga?', '¿Qué te llevas de atención al cliente?'],
+    },
+    {
+      q: 'Tell me about yourself.',
+      checks: 'Lo mismo que en español, más si puedes comunicarte con claridad en inglés.',
+      level: 'semi',
+      answer: <><p>"I'm a backend developer with four years of experience. Right now I work at a logistics company on the service that assigns orders to drivers, mostly with Node and Postgres. Last quarter I brought the assignment time down from about two seconds to three hundred milliseconds. I started out in tech support, automating diagnostics, and then spent two years at an agency building APIs. Now I'm looking for a team where reliability is part of the product, and that's why payments caught my attention."</p></>,
+      strong: ['Frases cortas y simples', 'Números dichos con calma', 'El mismo esqueleto que en español'],
+      weak: ['Traducir mentalmente palabra por palabra', 'Pedir disculpas por el inglés al empezar'],
+      followups: ['How did you reduce the latency?', 'Why are you leaving your current job?'],
+    },
+    {
+      q: '¿Por qué quieres trabajar aquí?',
+      checks: 'Que investigaste y que tu interés es específico.',
+      level: 'junior',
+      answer: <><p>"Uso su app para pagar servicios y me llamó la atención que funciona bien incluso con mala señal. Leí en su blog de ingeniería cómo manejan los reintentos de pago, y es el tipo de problema que más disfruto: el año pasado trabajé en hacer idempotente el envío de notificaciones. Además, buscan a alguien para el equipo de conciliación, y vengo de una empresa donde la conciliación manual era un dolor diario."</p></>,
+      strong: ['Algo concreto de la empresa', 'Conectado con algo concreto tuyo'],
+      weak: ['"Es una empresa grande con buen ambiente"', 'Hablar solo de beneficios o sueldo'],
+      followups: ['¿Qué cambiarías de nuestra app?'],
+    },
+    {
+      q: '¿Por qué te vas de tu trabajo actual?',
+      checks: 'Que hables de lo que buscas sin atacar a tu empleador.',
+      level: 'semi',
+      answer: <><p>"Aprendí muchísimo, sobre todo de operar sistemas en producción. Pero el producto se estabilizó y hoy el trabajo es casi todo mantenimiento. Quiero volver a construir algo con más escala y más decisiones de diseño, y este puesto tiene justo eso."</p></>,
+      strong: ['Agradecer lo aprendido', 'Hablar de lo que buscas', 'Conectar con el puesto'],
+      weak: ['Quejas sobre el jefe o el sueldo', 'Respuestas que suenan a huida'],
+      followups: ['¿Lo hablaste con tu manager actual?'],
+    },
+    {
+      q: '¿Cuál es tu mayor debilidad?',
+      checks: 'Autoconocimiento: algo real y un plan concreto.',
+      level: 'semi',
+      answer: <><p>"Me cuesta delegar: cuando algo es importante tiendo a hacerlo yo. El año pasado eso me hizo cuello de botella en un release, porque todas las revisiones pasaban por mí. Desde entonces reparto las revisiones con una rotación y, cuando tomo una tarea, me pregunto si alguien del equipo podría aprender haciéndola. Todavía me cuesta, pero ya no soy el cuello de botella."</p></>,
+      strong: ['Una debilidad real y no central para el puesto', 'Un ejemplo de su costo', 'Un plan en marcha'],
+      weak: ['"Soy perfeccionista" o "trabajo demasiado"', 'Una debilidad que descalifica para el puesto'],
+      followups: ['¿Cómo sabes que estás mejorando?'],
+    },
+    {
+      q: '¿Dónde te ves en cinco años?',
+      checks: 'Que tu dirección sea compatible con lo que la empresa ofrece.',
+      level: 'junior',
+      answer: <><p>"Me veo con bastante más autonomía técnica: tomando funcionalidades completas desde el diseño hasta producción y ayudando a quienes entren después de mí. Todavía no sé si me interesa más el camino técnico o el de gestión, y me gustaría saber cómo funcionan aquí."</p></>,
+      strong: ['Una dirección, no un plan rígido', 'Compatible con el puesto', 'Termina con una pregunta'],
+      weak: ['"Tener mi propia empresa"', '"En tu puesto" dicho al entrevistador'],
+      followups: ['¿Qué te atrae de cada camino?'],
+    },
+    {
+      q: 'Veo un espacio de un año en tu CV. ¿Qué pasó?',
+      checks: 'Que lo expliques con naturalidad y vuelvas al presente.',
+      level: 'semi',
+      answer: <><p>"Me tomé un año para cuidar a mi padre después de una operación. Ya está bien. En los últimos cuatro meses retomé con un curso de AWS y un proyecto personal, una API de reservas que tengo desplegada y puedo mostrarte."</p></>,
+      strong: ['Una frase de explicación, sin pedir perdón', 'Qué hiciste para retomar'],
+      weak: ['Esconderlo o mentir', 'Dar más detalles personales de los necesarios'],
+      followups: ['¿Qué te costó más al volver?'],
+    },
+    {
+      q: 'Vienes de otra carrera. ¿Por qué cambiaste a desarrollo?',
+      checks: 'Que el cambio tenga lógica y que valores lo que traes.',
+      level: 'semi',
+      answer: <><p>"Fui contador cinco años. Empecé a automatizar conciliaciones con macros y después con Python, y me di cuenta de que disfrutaba más eso que la contabilidad. Estudié dos años por las noches y hace uno trabajo como desarrollador. Lo que traigo de antes es entender el dominio financiero: sé por qué una conciliación que no cuadra por un centavo es un problema grave."</p></>,
+      strong: ['Un origen concreto del cambio', 'Esfuerzo propio para cambiar', 'La carrera anterior como ventaja'],
+      weak: ['"Porque en tecnología se gana más" como única razón', 'Esconder la carrera anterior'],
+      followups: ['¿Qué te falta todavía?'],
+    },
+    {
+      q: '¿Por qué deberíamos contratarte a ti?',
+      checks: 'Que conectes tus fortalezas con lo que la vacante necesita, con evidencia.',
+      level: 'senior',
+      answer: <><p>"Por lo que hablamos, el equipo necesita estabilizar un sistema de pagos que creció rápido y bajar los incidentes. En mis últimos dos trabajos hice justamente eso: en el último, los incidentes graves bajaron de varios al mes a uno en un trimestre, con idempotencia en los reintentos y mejores alertas. Además he liderado la adopción de prácticas en equipos que no me reportaban, que es lo que hará falta aquí."</p></>,
+      strong: ['Retomar lo que dijeron en la entrevista', 'Evidencia, no adjetivos', 'Breve'],
+      weak: ['Compararte con otros candidatos', 'Una lista de virtudes'],
+    },
+    {
+      q: '¿Tienes alguna pregunta para nosotros?',
+      checks: 'Interés real, preparación y tu propia evaluación de la empresa.',
+      level: 'senior',
+      answer: <><p>"Sí, tengo algunas. ¿Qué haría que la persona en este puesto sea un éxito en los primeros seis meses? ¿Cómo funcionan las guardias y cuántas alertas fuera de horario tuvo el equipo el último mes? Y, en general, cuando hay un desacuerdo técnico fuerte, ¿cómo se decide?"</p></>,
+      strong: ['Preguntas preparadas y específicas', 'Adaptadas a quien entrevista', 'Escuchar y repreguntar'],
+      weak: ['"No, todo claro"', 'Preguntar lo que está en el sitio web'],
+    },
+    {
+      q: '¿Estás en otros procesos?',
+      checks: 'Tus plazos, y cuánto interés tienes en ellos.',
+      level: 'senior',
+      answer: <><p>"Sí, estoy en etapas finales con otra empresa y espero una respuesta en unas dos semanas. Ustedes son mi primera opción por el tipo de problemas del equipo, así que si podemos coordinar los tiempos, me encantaría."</p></>,
+      strong: ['Honesto y sin detalles de más', 'Plazos claros', 'Mostrar interés real'],
+      weak: ['Inventar ofertas para presionar', 'Revelar el sueldo de la otra oferta sin necesidad'],
+      followups: ['¿Qué empresa es?', '¿Cuál es tu expectativa salarial?'],
+    },
+  ]}
+/>
+
+<Quiz
+  question="En una entrevista en inglés no entiendes la segunda mitad de una pregunta de system design por el acento del entrevistador. ¿Qué haces?"
+  options={[
+    { text: 'Respondes lo que crees que preguntó para no interrumpir el ritmo.', why: 'Responder otra pregunta es el peor resultado: pierdes tiempo y el entrevistador concluye que no entendiste el problema.' },
+    { text: 'Dices «Just to make sure I understood: you are asking about…, right?» con lo que sí entendiste, o pides que la repita.', correct: true, why: 'Confirmar o pedir que repita es completamente normal en equipos internacionales y además muestra la conducta de aclarar antes de resolver.' },
+    { text: 'Te disculpas por tu nivel de inglés y pides cambiar al español.', why: 'Si la empresa trabaja en inglés, cambiar de idioma resta. Y disculparse por el nivel predispone al entrevistador.' },
+  ]}
+/>
+
+<Takeaways>
+
+- "Háblame de ti" se responde en **presente, pasado y futuro**, en **60 a 120 segundos**, con un logro concreto y un cierre que conecta con esta vacante.
+- Adapta el ángulo a cada proceso: los mismos hechos, contados desde lo que le importa a quien escucha.
+- Por qué te vas: **lo que buscas, no lo que huyes**. Nunca hables mal de un empleador anterior.
+- Debilidades: una **real**, no central para el puesto, con un plan en marcha. "Soy perfeccionista" se lee como evasiva.
+- Lleva **tres o cuatro preguntas** escritas, distintas para el manager y para el ingeniero, y escucha las señales de alerta en las respuestas.
+- En inglés no evalúan perfección, sino que te hagas entender y pidas aclaraciones. Memoriza las frases para pedir que repitan, ganar tiempo y narrar el código, y habla más lento.
+
+</Takeaways>
+
+## Fuentes y lecturas
+
+- Tech Interview Handbook, [Self introduction](https://www.techinterviewhandbook.org/self-introduction/): estructura y ejemplos de la presentación para entrevistas técnicas.
+- Tech Interview Handbook, [Final questions](https://www.techinterviewhandbook.org/final-questions/): preguntas para hacer al final, separadas por tipo de entrevistador.
+- [Reverse interview](https://github.com/viraptor/reverse-interview): una lista colaborativa y extensa de preguntas para evaluar a la empresa (equipo, proceso, remoto, compensación).
+- Julia Evans, [Questions I'm asking in interviews](https://jvns.ca/blog/2013/12/30/questions-im-asking-in-interviews/).
+- Joel Spolsky, [The Joel Test: 12 Steps to Better Code](https://www.joelonsoftware.com/2000/08/09/the-joel-test-12-steps-to-better-code/): un clásico para hacer preguntas sobre el proceso de ingeniería.
+- Gayle Laakmann McDowell, *Cracking the Coding Interview*, capítulo "Behavioral Questions": la sección sobre cómo presentarte y qué preguntar al final.

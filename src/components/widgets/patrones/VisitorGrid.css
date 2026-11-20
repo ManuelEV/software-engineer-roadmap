@@ -1,0 +1,107 @@
+.vg-scroll {
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}
+.vg-table {
+  width: 100%;
+  min-width: 420px;
+  border-collapse: separate;
+  border-spacing: 4px;
+  font-family: var(--font-sign);
+}
+.vg-table th {
+  padding: 6px 8px;
+  border-radius: var(--radius);
+  background: var(--paper-2);
+  border: 1.5px solid transparent;
+  text-align: left;
+  vertical-align: middle;
+  font-weight: 700;
+  color: var(--ink);
+  transition:
+    border-color 220ms var(--ease-out),
+    background-color 220ms var(--ease-out);
+}
+.vg-table th.is-touched {
+  border-color: var(--warn);
+  background: color-mix(in oklab, var(--warn) 12%, var(--card));
+}
+.vg-corner {
+  background: transparent !important;
+}
+.vg-corner span {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--ink-3);
+}
+.vg-h {
+  display: block;
+  font-size: var(--step--1);
+  line-height: 1.2;
+}
+.vg-sub {
+  display: block;
+  font-family: var(--font-code);
+  font-size: 0.68rem;
+  font-weight: 500;
+  color: var(--ink-3);
+}
+.vg-table td {
+  padding: 0;
+}
+.vg-cell {
+  display: grid;
+  gap: 1px;
+  width: 100%;
+  min-height: 48px;
+  padding: 6px 8px;
+  border: 1.5px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--card);
+  text-align: left;
+  font-family: var(--font-sign);
+  cursor: pointer;
+  transition:
+    border-color 220ms var(--ease-out),
+    background-color 220ms var(--ease-out);
+}
+.vg-cell:hover {
+  border-color: var(--ink-3);
+}
+.vg-cell:focus-visible {
+  outline: 2px solid var(--line-ink);
+  outline-offset: 1px;
+}
+.vg-cell.is-touched {
+  border-color: var(--line);
+  background: var(--line-tint);
+}
+.vg-cell.is-sel {
+  border-color: var(--line);
+  border-width: 2.5px;
+}
+.vg-cell__owner {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--ink-3);
+}
+.vg-cell__m {
+  font-family: var(--font-code);
+  font-size: 0.74rem;
+  color: var(--ink);
+  word-break: break-all;
+}
+.vg-readout {
+  display: grid;
+  gap: var(--s-2);
+}
+.vg-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-5);
+}
+.vg-trace {
+  font-size: 0.86rem;
+  color: var(--ink-3);
+  word-break: break-word;
+}

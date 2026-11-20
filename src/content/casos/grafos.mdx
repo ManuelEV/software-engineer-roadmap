@@ -1,0 +1,1022 @@
+import { GridSearch } from '../../components/widgets/entrevistas/GridSearch'
+import { TopoSort } from '../../components/widgets/entrevistas/TopoSort'
+
+Muchos problemas de entrevista son grafos disfrazados. Una grilla de agua y tierra, un plan de estudios con prerrequisitos, una red de computadoras, las palabras que se transforman cambiando una letra: en todos hay **cosas** (nodos) y **relaciones entre ellas** (aristas), y te preguntan si algo es alcanzable, a qué distancia está o en qué orden recorrerlo.
+
+La buena noticia es que con dos recorridos, **BFS** y **DFS**, más dos o tres ideas encima (orden topológico, Dijkstra, Union-Find), resuelves casi todo lo que aparece. La dificultad real casi nunca está en el algoritmo, sino en **ver el grafo**: decidir qué es un nodo, qué es una arista y si hace falta construir algo o el grafo ya está implícito en la entrada. Este tema recorre esa traducción y los problemas clásicos, con la misma receta de siempre.
+
+<Sketch
+  width={640}
+  height={350}
+  caption="Las dos formas de recorrer: BFS se expande en anillos de distancia desde el origen; DFS sigue un camino hasta el fondo y después retrocede."
+  items={[
+    { type: 'text', x: 24, y: 32, text: 'BFS: por anillos', size: 22, tone: 'line' },
+    { type: 'circle', x: 150, y: 180, r: 12, tone: 'line', fill: true },
+    { type: 'circle', x: 150, y: 180, r: 40, tone: 'line' },
+    { type: 'text', x: 198, y: 186, text: '1', size: 20, font: 'code', tone: 'line', with: true },
+    { type: 'circle', x: 150, y: 180, r: 74, tone: 'line' },
+    { type: 'text', x: 232, y: 186, text: '2', size: 20, font: 'code', tone: 'line', with: true },
+    { type: 'circle', x: 150, y: 180, r: 108, tone: 'pencil' },
+    { type: 'text', x: 266, y: 186, text: '3', size: 20, font: 'code', tone: 'pencil', with: true },
+    { type: 'line', points: [[318, 24], [318, 330]], dashed: true, tone: 'muted' },
+    { type: 'text', x: 340, y: 32, text: 'DFS: hasta el fondo', size: 22, tone: 'line' },
+    { type: 'circle', x: 362, y: 84, r: 12, tone: 'line', fill: true },
+    { type: 'line', points: [[376, 84], [590, 84], [590, 150], [370, 150], [370, 214], [590, 214], [590, 262]], arrow: true },
+    { type: 'arrow', from: [574, 276], to: [392, 276], bend: 22, dashed: true, tone: 'pencil', label: 'vuelve atrás', labelAt: [484, 318] },
+    { type: 'highlight', x: 20, y: 316, w: 188, h: 28, tone: 'ok' },
+    { type: 'text', x: 24, y: 337, text: 'el camino más corto', size: 20, tone: 'ok', with: true },
+  ]}
+/>
+
+## Representar un grafo
+
+Un grafo tiene **vértices** (nodos) y **aristas**. Las aristas pueden ser **dirigidas** (A → B no implica B → A, como "Prog I es prerrequisito de Prog II") o **no dirigidas** (una amistad, un cable de red), y pueden tener **peso** (la latencia de un enlace, el precio de un vuelo) o no tenerlo.
+
+En entrevistas casi siempre recibes una **lista de aristas**, como `[[0, 1], [1, 2]]`, y la conviertes en una de dos representaciones:
+
+| | Lista de adyacencia | Matriz de adyacencia |
+|---|---|---|
+| Qué es | Para cada nodo, la lista de sus vecinos | Una tabla V × V con 1 donde hay arista |
+| Memoria | O(V + E) | O(V²) |
+| ¿Existe la arista u–v? | O(grado de u) | O(1) |
+| Recorrer los vecinos de u | O(grado de u) | O(V) |
+| Cuándo usarla | Casi siempre: los grafos reales son dispersos | Grafos chicos y densos, o cuando consultas aristas al azar |
+
+<Sketch
+  width={640}
+  height={270}
+  caption="El mismo grafo de 4 nodos, dos veces: como lista de adyacencia (solo las aristas que existen) y como matriz (una casilla por cada par posible)."
+  items={[
+    { type: 'circle', x: 50, y: 70, r: 20, label: '0', font: 'code' },
+    { type: 'circle', x: 150, y: 70, r: 20, label: '1', font: 'code', with: true },
+    { type: 'circle', x: 50, y: 170, r: 20, label: '2', font: 'code', with: true },
+    { type: 'circle', x: 150, y: 170, r: 20, label: '3', font: 'code', with: true },
+    { type: 'path', d: 'M70 70 L130 70 M50 90 L50 150 M136 84 L64 156 M70 170 L130 170', len: 320 },
+    { type: 'text', x: 214, y: 30, text: 'lista: O(V + E)', size: 20, tone: 'ok' },
+    { type: 'text', x: 214, y: 70, text: ['0 → 1, 2', '1 → 0, 2', '2 → 0, 1, 3', '3 → 2'], size: 20, font: 'code' },
+    { type: 'text', x: 440, y: 30, text: 'matriz: O(V²)', size: 20, tone: 'bad' },
+    { type: 'cells', x: 440, y: 50, values: [0, 1, 1, 0], size: 34, states: [null, 'line', 'line', null] },
+    { type: 'cells', x: 440, y: 84, values: [1, 0, 1, 0], size: 34, states: ['line', null, 'line', null] },
+    { type: 'cells', x: 440, y: 118, values: [1, 1, 0, 1], size: 34, states: ['line', 'line', null, 'line'] },
+    { type: 'cells', x: 440, y: 152, values: [0, 0, 1, 0], size: 34, states: [null, null, 'line', null] },
+    { type: 'text', x: 440, y: 216, text: 'muchos ceros', size: 18, tone: 'pencil' },
+    { type: 'text', x: 24, y: 252, text: 'casi siempre conviene la lista', size: 22, tone: 'line' },
+  ]}
+/>
+
+Con V nodos y E aristas, recorrer un grafo con lista de adyacencia cuesta **O(V + E)**. Con matriz cuesta O(V²) aunque haya pocas aristas, porque para cada nodo revisas toda su fila. Por eso, salvo que te den la matriz hecha, construye la lista:
+
+<CodeTabs>
+
+```java title="Java"
+class Grafos {
+    static List<List<Integer>> buildGraph(int n, int[][] edges, boolean directed) {
+        List<List<Integer>> graph = new ArrayList<>();
+        for (int i = 0; i < n; i++) graph.add(new ArrayList<>());
+        for (int[] e : edges) {
+            graph.get(e[0]).add(e[1]);
+            if (!directed) graph.get(e[1]).add(e[0]); // no dirigido: la arista va en los dos sentidos
+        }
+        return graph;
+    }
+
+    // si los nodos no son 0..n-1 (strings, ids), usa un HashMap
+    static Map<String, List<String>> amigos = new HashMap<>();
+}
+```
+
+```python title="Python"
+from collections import defaultdict
+
+def build_graph(n: int, edges: list[list[int]], directed: bool) -> list[list[int]]:
+    graph: list[list[int]] = [[] for _ in range(n)]
+    for u, v in edges:
+        graph[u].append(v)
+        if not directed:
+            graph[v].append(u)   # no dirigido: la arista va en los dos sentidos
+    return graph
+
+# si los nodos no son 0..n-1 (strings, ids), usa un diccionario
+amigos: defaultdict[str, list[str]] = defaultdict(list)
+```
+
+```ts title="TypeScript"
+function buildGraph(n: number, edges: number[][], directed: boolean): number[][] {
+  const graph: number[][] = Array.from({ length: n }, () => [])
+  for (const [u, v] of edges) {
+    graph[u].push(v)
+    if (!directed) graph[v].push(u) // no dirigido: la arista va en los dos sentidos
+  }
+  return graph
+}
+
+// si los nodos no son 0..n-1, usa un Map
+const amigos = new Map<string, string[]>()
+```
+
+</CodeTabs>
+
+### La grilla es un grafo implícito
+
+Cuando la entrada es una matriz (un mapa, un tablero, una imagen), no construyas nada: **cada celda es un nodo** y sus vecinos son las celdas de arriba, abajo, izquierda y derecha que estén dentro de la grilla y no sean obstáculo. Con R filas y C columnas hay R·C nodos y como mucho 4·R·C aristas, así que un recorrido cuesta O(R·C). Pregunta siempre si los vecinos diagonales cuentan: cambia el arreglo de direcciones y, a veces, la respuesta.
+
+### Visitados: lo que impide dar vueltas para siempre
+
+A diferencia de un árbol, un grafo puede tener **ciclos** y varios caminos al mismo nodo. Sin un conjunto de visitados, un recorrido entra en un bucle infinito o procesa el mismo nodo muchas veces. Dos decisiones que conviene tomar en voz alta:
+
+- **Marca al encolar, no al sacar.** Si marcas cuando sacas el nodo de la cola, el mismo nodo puede entrar varias veces antes de procesarse. El resultado suele ser correcto, pero el costo se dispara.
+- **¿Puedo modificar la entrada?** En una grilla, marcar la celda en el lugar (cambiar `"1"` por `"0"`) ahorra el conjunto. Pregúntalo: a algunos entrevistadores no les gusta que destruyas la entrada.
+
+## BFS y DFS: las dos plantillas
+
+**BFS** (*breadth-first search*, búsqueda en anchura) usa una **cola**: saca el nodo más antiguo, encola sus vecinos no visitados y repite. Avanza por **anillos de distancia**: primero todo lo que está a 1 paso, después todo lo que está a 2, y así. Por eso, en un grafo **sin pesos**, la primera vez que BFS llega a un nodo lo hace por el **camino más corto**.
+
+**DFS** (*depth-first search*, búsqueda en profundidad) usa una **pila**, explícita o la de llamadas de la recursión: sigue un camino hasta que no puede avanzar y entonces retrocede. No garantiza caminos cortos, pero es la forma natural de explorar **todo** lo alcanzable, contar componentes, detectar ciclos y calcular cosas que dependen de "lo que hay debajo" (como el tamaño de una isla).
+
+<GridSearch />
+
+Corre los dos modos sobre la grilla sin muros y mira la diferencia: BFS pinta rombos concéntricos alrededor del origen, con la distancia escrita en cada celda; DFS se va hasta un borde y serpentea. Después agrega muros con el modo "Muro" y comprueba que el camino de BFS sigue siendo el mínimo y el de DFS no.
+
+<CodeTabs>
+
+```java title="Java"
+class Recorridos {
+    static int[] bfsLevels(List<List<Integer>> graph, int start) {
+        int[] dist = new int[graph.size()];
+        Arrays.fill(dist, -1);
+        dist[start] = 0;
+        Deque<Integer> q = new ArrayDeque<>(List.of(start));
+        while (!q.isEmpty()) {
+            int u = q.poll();                    // saca del frente en O(1)
+            for (int v : graph.get(u)) {
+                if (dist[v] == -1) {             // dist hace de conjunto de visitados
+                    dist[v] = dist[u] + 1;
+                    q.offer(v);
+                }
+            }
+        }
+        return dist;
+    }
+
+    static void dfs(List<List<Integer>> graph, int u, boolean[] seen) {
+        seen[u] = true;
+        for (int v : graph.get(u)) if (!seen[v]) dfs(graph, v, seen);
+    }
+}
+```
+
+```python title="Python"
+from collections import deque
+
+def bfs_levels(graph: list[list[int]], start: int) -> list[int]:
+    """Distancia (en aristas) desde start a cada nodo; -1 si no se alcanza."""
+    dist = [-1] * len(graph)
+    dist[start] = 0
+    q = deque([start])
+    while q:
+        u = q.popleft()                  # O(1); list.pop(0) sería O(n)
+        for v in graph[u]:
+            if dist[v] == -1:            # dist hace de conjunto de visitados
+                dist[v] = dist[u] + 1
+                q.append(v)
+    return dist
+
+def dfs(graph: list[list[int]], u: int, seen: set[int]) -> None:
+    seen.add(u)
+    for v in graph[u]:
+        if v not in seen:
+            dfs(graph, v, seen)
+```
+
+```ts title="TypeScript"
+function bfsLevels(graph: number[][], start: number): number[] {
+  const dist = new Array<number>(graph.length).fill(-1)
+  dist[start] = 0
+  const q = [start]
+  // shift() es O(n) en JS: avanzamos un índice en vez de sacar del arreglo
+  for (let head = 0; head < q.length; head++) {
+    const u = q[head]
+    for (const v of graph[u]) {
+      if (dist[v] === -1) {
+        dist[v] = dist[u] + 1
+        q.push(v)
+      }
+    }
+  }
+  return dist
+}
+
+function dfs(graph: number[][], u: number, seen: Set<number>): void {
+  seen.add(u)
+  for (const v of graph[u]) if (!seen.has(v)) dfs(graph, v, seen)
+}
+```
+
+</CodeTabs>
+
+Los dos cuestan **O(V + E)** de tiempo y O(V) de memoria. Dos trampas de implementación que se ven en vivo: en Python, `list.pop(0)` es O(n) (usa `collections.deque`); en JavaScript, `Array.prototype.shift()` también lo es en general (avanza un índice `head`); en Java, usa `ArrayDeque`, que saca del frente en O(1). Y el DFS recursivo en Python choca con el límite de recursión, que en CPython es de 1000 llamadas por defecto: en una grilla de 300 × 300 llena de tierra, el DFS recursivo revienta. Usa una pila explícita o BFS, y dilo. En Java pasa lo mismo: un DFS recursivo muy profundo termina en `StackOverflowError`.
+
+<Callout type="tip" title="En Java">
+
+- `ArrayDeque` sirve de cola (`offer` y `poll`) y de pila (`push` y `pop`). No uses `Stack`: es una clase heredada y sincronizada.
+- Un `int[]` no sirve como clave de `HashSet` o `HashMap`, porque compara por referencia: dos `new int[] {1, 2}` son claves distintas. Codifica la celda como `r * cols + c`, o usa un `record Celda(int r, int c)`, que trae `equals` y `hashCode` por valor.
+- Por lo mismo, `cur == goal` entre dos arreglos compara referencias: usa `Arrays.equals(cur, goal)`.
+- La lista de adyacencia típica es `List<List<Integer>>`; si los nodos no son 0..n-1, `Map<String, List<String>>`.
+
+</Callout>
+
+<Compare>
+<Option title="BFS" verdict="Distancias y niveles">
+
+Cola. Recorre por capas. Da el **camino más corto** en grafos sin pesos y sirve para "en cuántos pasos", "por niveles" o "el más cercano". Su memoria puede crecer con el ancho del grafo.
+
+</Option>
+<Option title="DFS" verdict="Explorar todo y estructura">
+
+Pila o recursión. Llega hondo antes de volver. Bueno para **componentes**, **ciclos**, orden topológico, *backtracking* y para agregar información de los hijos al volver. No da caminos mínimos.
+
+</Option>
+</Compare>
+
+<Quiz
+  question="En una grilla sin pesos, te piden la menor cantidad de pasos desde la entrada hasta la salida. ¿Qué recorrido usas?"
+  options={[
+    { text: 'DFS, porque es más simple de escribir recursivamente.', why: 'DFS encuentra un camino, no necesariamente el más corto. Para garantizar el mínimo tendrías que explorar todos los caminos, que es exponencial.' },
+    { text: 'BFS, deteniéndote la primera vez que sacas la salida de la cola.', correct: true, why: 'BFS visita las celdas en orden de distancia; la primera vez que llega a la salida lo hace por un camino mínimo. Cuesta O(R·C).' },
+    { text: 'Dijkstra, porque es el algoritmo de caminos más cortos.', why: 'Funciona, pero con todos los pesos iguales a 1 el heap no aporta nada: BFS es Dijkstra con una cola común, en O(R·C) en vez de O(R·C log(R·C)).' },
+  ]}
+/>
+
+## Grillas: Number of Islands y Rotting Oranges
+
+### Number of Islands
+
+**Enunciado.** Recibes una grilla de `"1"` (tierra) y `"0"` (agua). Una isla es un grupo de tierra conectado en horizontal o vertical. Devuelve cuántas islas hay.
+
+```text
+1 1 0 0 0
+1 1 0 0 0      →  3 islas
+0 0 1 0 0
+0 0 0 1 1
+```
+
+**Qué preguntar.** ¿Las diagonales conectan? (En LeetCode, no.) ¿Puedo modificar la grilla? ¿La grilla puede estar vacía? ¿Qué tamaño máximo tiene? (Esto decide si un DFS recursivo es seguro.)
+
+**Fuerza bruta.** Es difícil pensar en algo peor que el recorrido: una alternativa ingenua sería, para cada par de celdas de tierra, preguntar si están conectadas, lo que cuesta O((R·C)²) o más. Dilo en una frase y pasa a la idea.
+
+**La idea.** Recorre la grilla. Cada vez que encuentras tierra **sin visitar**, encontraste una isla nueva: súmala y **húndela entera** con un BFS o DFS que marque todas sus celdas. Así, cuando el recorrido externo vuelva a pasar por esa isla, ya no la contará. Es contar **componentes conexas**.
+
+<Callout type="tip" title="Señal para reconocer el patrón">
+
+Si ves "cuántos grupos", "regiones conectadas", "islas" o "provincias", es **contar componentes**: un bucle externo sobre todos los nodos y un recorrido (BFS, DFS o Union-Find) que marca cada componente completa la primera vez que la tocas.
+
+</Callout>
+
+<CodeTabs>
+
+```java title="Java"
+class Solution {
+    private static final int[][] DIRS = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+
+    public int numIslands(char[][] grid) {
+        int rows = grid.length, cols = grid[0].length, islands = 0;
+        for (int r = 0; r < rows; r++) {
+            for (int c = 0; c < cols; c++) {
+                if (grid[r][c] != '1') continue;
+                islands++;                       // tierra sin visitar: isla nueva
+                grid[r][c] = '0';                // marcar al encolar
+                Deque<int[]> q = new ArrayDeque<>();
+                q.offer(new int[] {r, c});
+                while (!q.isEmpty()) {
+                    int[] cur = q.poll();
+                    for (int[] d : DIRS) {
+                        int nr = cur[0] + d[0], nc = cur[1] + d[1];
+                        if (nr >= 0 && nr < rows && nc >= 0 && nc < cols && grid[nr][nc] == '1') {
+                            grid[nr][nc] = '0';
+                            q.offer(new int[] {nr, nc});
+                        }
+                    }
+                }
+            }
+        }
+        return islands;
+    }
+}
+```
+
+```python title="Python"
+from collections import deque
+
+DIRS = ((1, 0), (-1, 0), (0, 1), (0, -1))
+
+def num_islands(grid: list[list[str]]) -> int:
+    if not grid:
+        return 0
+    rows, cols = len(grid), len(grid[0])
+    islands = 0
+    for r in range(rows):
+        for c in range(cols):
+            if grid[r][c] != "1":
+                continue
+            islands += 1                  # tierra sin visitar: isla nueva
+            grid[r][c] = "0"              # marcar al encolar
+            q = deque([(r, c)])
+            while q:
+                cr, cc = q.popleft()
+                for dr, dc in DIRS:
+                    nr, nc = cr + dr, cc + dc
+                    if 0 <= nr < rows and 0 <= nc < cols and grid[nr][nc] == "1":
+                        grid[nr][nc] = "0"
+                        q.append((nr, nc))
+    return islands
+```
+
+```ts title="TypeScript"
+const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]]
+
+function numIslands(grid: string[][]): number {
+  const rows = grid.length
+  const cols = rows ? grid[0].length : 0
+  let islands = 0
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      if (grid[r][c] !== '1') continue
+      islands++ // tierra sin visitar: isla nueva
+      grid[r][c] = '0' // marcar al apilar
+      const stack: [number, number][] = [[r, c]]
+      while (stack.length) {
+        const [cr, cc] = stack.pop()!
+        for (const [dr, dc] of DIRS) {
+          const nr = cr + dr
+          const nc = cc + dc
+          if (nr >= 0 && nr < rows && nc >= 0 && nc < cols && grid[nr][nc] === '1') {
+            grid[nr][nc] = '0'
+            stack.push([nr, nc])
+          }
+        }
+      }
+    }
+  }
+  return islands
+}
+```
+
+</CodeTabs>
+
+La versión en Python usa BFS y la de TypeScript un DFS con pila: para contar componentes da igual, y vale la pena decirlo.
+
+**Complejidad.** Cada celda se marca y se procesa una vez: **O(R·C)** de tiempo. Memoria: O(R·C) en el peor caso para la cola o la pila (si no puedes modificar la grilla, suma un conjunto de visitados del mismo tamaño).
+
+**Casos borde y errores típicos.** Grilla vacía o de una sola fila. Todo agua (0) o todo tierra (1). Comparar contra el número `1` cuando la grilla tiene strings `"1"` (el error más tonto y más frecuente; en Java la grilla es `char[][]` y `grid[r][c] == 1` compila, pero siempre da `false`: compara con `'1'`). Revisar los límites **antes** de indexar. Marcar al sacar en vez de al encolar.
+
+**Variantes y repreguntas.**
+
+- **Max Area of Island**: el mismo recorrido, pero cuenta las celdas de cada isla y quédate con el máximo.
+- *"¿Y si no puedes modificar la grilla?"* Un conjunto o una matriz de booleanos de visitados.
+- *"¿Y si la grilla es enorme y llegan actualizaciones de tierra?"* (*Number of Islands II*.) Recorrer todo tras cada cambio es caro; **Union-Find** une la celda nueva con sus vecinas en tiempo casi constante.
+- **Pacific Atlantic Water Flow**: en vez de preguntar desde cada celda si llega al océano, haz BFS **desde los bordes hacia adentro**, subiendo por celdas de altura mayor o igual, una vez por océano, y cruza los dos conjuntos. Invertir la dirección convierte R·C búsquedas en dos.
+
+### Rotting Oranges: BFS multi-origen
+
+**Enunciado.** En una grilla, `0` es vacío, `1` una naranja fresca y `2` una podrida. Cada minuto, las naranjas podridas pudren a sus vecinas frescas (arriba, abajo, izquierda y derecha). Devuelve cuántos minutos pasan hasta que no quede ninguna fresca, o `-1` si alguna nunca se pudre.
+
+**Qué preguntar.** ¿Qué devuelvo si no hay frescas desde el principio? (0.) ¿Y si no hay podridas pero sí frescas? (−1.)
+
+**Fuerza bruta.** Simular minuto a minuto recorriendo toda la grilla cada vez: O((R·C)²) en el peor caso, cuando el contagio avanza una celda por minuto.
+
+**La idea.** El tiempo en que se pudre una naranja es su **distancia a la podrida más cercana**. Eso es un BFS, pero con **varios orígenes a la vez**: mete todas las podridas en la cola al principio, como si fueran un solo origen virtual. Procesar la cola **nivel por nivel** (todo lo que había al empezar la vuelta) equivale a avanzar un minuto.
+
+<Callout type="tip" title="Señal para reconocer el patrón">
+
+"Se propaga a la vez desde varios puntos", "distancia a la X más cercana" (fuego, contagio, la puerta más cercana, la celda 0 más cercana): **BFS multi-origen**, con todos los orígenes en la cola desde el inicio.
+
+</Callout>
+
+<CodeTabs>
+
+```java title="Java"
+class Solution {
+    public int orangesRotting(int[][] grid) {
+        int rows = grid.length, cols = grid[0].length, fresh = 0;
+        Deque<int[]> q = new ArrayDeque<>();
+        for (int r = 0; r < rows; r++)
+            for (int c = 0; c < cols; c++) {
+                if (grid[r][c] == 2) q.offer(new int[] {r, c}); // todos los orígenes de una vez
+                else if (grid[r][c] == 1) fresh++;
+            }
+        int[][] dirs = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+        int minutes = 0;
+        while (!q.isEmpty() && fresh > 0) {
+            for (int size = q.size(); size > 0; size--) { // un nivel completo = un minuto
+                int[] cur = q.poll();
+                for (int[] d : dirs) {
+                    int nr = cur[0] + d[0], nc = cur[1] + d[1];
+                    if (nr >= 0 && nr < rows && nc >= 0 && nc < cols && grid[nr][nc] == 1) {
+                        grid[nr][nc] = 2;
+                        fresh--;
+                        q.offer(new int[] {nr, nc});
+                    }
+                }
+            }
+            minutes++;
+        }
+        return fresh == 0 ? minutes : -1;
+    }
+}
+```
+
+```python title="Python"
+from collections import deque
+
+def oranges_rotting(grid: list[list[int]]) -> int:
+    rows, cols = len(grid), len(grid[0])
+    q: deque[tuple[int, int]] = deque()
+    fresh = 0
+    for r in range(rows):
+        for c in range(cols):
+            if grid[r][c] == 2:
+                q.append((r, c))          # todos los orígenes de una vez
+            elif grid[r][c] == 1:
+                fresh += 1
+    minutes = 0
+    while q and fresh > 0:
+        for _ in range(len(q)):           # un nivel completo = un minuto
+            r, c = q.popleft()
+            for dr, dc in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                nr, nc = r + dr, c + dc
+                if 0 <= nr < rows and 0 <= nc < cols and grid[nr][nc] == 1:
+                    grid[nr][nc] = 2
+                    fresh -= 1
+                    q.append((nr, nc))
+        minutes += 1
+    return minutes if fresh == 0 else -1
+```
+
+```ts title="TypeScript"
+function orangesRotting(grid: number[][]): number {
+  const rows = grid.length
+  const cols = grid[0].length
+  let q: [number, number][] = []
+  let fresh = 0
+  for (let r = 0; r < rows; r++)
+    for (let c = 0; c < cols; c++) {
+      if (grid[r][c] === 2) q.push([r, c]) // todos los orígenes de una vez
+      else if (grid[r][c] === 1) fresh++
+    }
+  let minutes = 0
+  while (q.length && fresh > 0) {
+    const next: [number, number][] = [] // el siguiente nivel = el siguiente minuto
+    for (const [r, c] of q) {
+      for (const [dr, dc] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const nr = r + dr
+        const nc = c + dc
+        if (nr >= 0 && nr < rows && nc >= 0 && nc < cols && grid[nr][nc] === 1) {
+          grid[nr][nc] = 2
+          fresh--
+          next.push([nr, nc])
+        }
+      }
+    }
+    q = next
+    minutes++
+  }
+  return fresh === 0 ? minutes : -1
+}
+```
+
+</CodeTabs>
+
+**Complejidad.** O(R·C) de tiempo y memoria. **Errores típicos:** contar un minuto extra al final (la condición `fresh > 0` en el `while` lo evita), lanzar un BFS por cada naranja podrida (O((R·C)²) y además mal: cada naranja se pudre por la más cercana, no por una en particular), y olvidar el `-1` cuando quedan frescas aisladas. **Variantes:** *01 Matrix* (distancia de cada celda al 0 más cercano) y *Walls and Gates* son exactamente esta idea.
+
+## Clone Graph
+
+**Enunciado.** Recibes un nodo de un grafo conexo no dirigido; cada nodo tiene un valor y una lista de vecinos. Devuelve una **copia profunda** del grafo: nodos nuevos con las mismas conexiones.
+
+**Qué preguntar.** ¿Puede venir vacío (`None`)? ¿Hay ciclos? (Sí: en un grafo no dirigido, A tiene a B como vecino y B tiene a A, así que un recorrido sin visitados da vueltas para siempre.) ¿Los valores son únicos? (No dependas de eso.)
+
+**La idea.** El problema no es copiar un nodo, sino **no copiarlo dos veces** y no entrar en un bucle. Un diccionario `original → copia` resuelve las dos cosas: es a la vez el conjunto de visitados y la forma de encontrar la copia de un vecino que ya creaste. Recorre con BFS o DFS; al ver un vecino sin copia, créala y encólalo; siempre conecta la copia del actual con la copia del vecino.
+
+<CodeTabs>
+
+```java title="Java"
+class Node {
+    public int val;
+    public List<Node> neighbors = new ArrayList<>();
+    public Node(int val) { this.val = val; }
+}
+
+class Solution {
+    public Node cloneGraph(Node node) {
+        if (node == null) return null;
+        Map<Node, Node> copies = new HashMap<>();   // original -> copia; también es "visitados"
+        copies.put(node, new Node(node.val));
+        Deque<Node> q = new ArrayDeque<>(List.of(node));
+        while (!q.isEmpty()) {
+            Node cur = q.poll();
+            for (Node nb : cur.neighbors) {
+                if (!copies.containsKey(nb)) {
+                    copies.put(nb, new Node(nb.val));
+                    q.offer(nb);
+                }
+                copies.get(cur).neighbors.add(copies.get(nb));
+            }
+        }
+        return copies.get(node);
+    }
+}
+```
+
+```python title="Python"
+from collections import deque
+
+def clone_graph(node: "Node | None") -> "Node | None":
+    if node is None:
+        return None
+    copies = {node: Node(node.val)}       # original -> copia; también es "visitados"
+    q = deque([node])
+    while q:
+        cur = q.popleft()
+        for nb in cur.neighbors:
+            if nb not in copies:
+                copies[nb] = Node(nb.val)
+                q.append(nb)
+            copies[cur].neighbors.append(copies[nb])
+    return copies[node]
+```
+
+```ts title="TypeScript"
+// LeetCode define la clase como _Node en TypeScript
+function cloneGraph(node: _Node | null): _Node | null {
+  if (!node) return null
+  const copies = new Map<_Node, _Node>([[node, new _Node(node.val)]])
+  const q = [node]
+  for (let head = 0; head < q.length; head++) {
+    const cur = q[head]
+    for (const nb of cur.neighbors) {
+      if (!copies.has(nb)) {
+        copies.set(nb, new _Node(nb.val))
+        q.push(nb)
+      }
+      copies.get(cur)!.neighbors.push(copies.get(nb)!)
+    }
+  }
+  return copies.get(node)!
+}
+```
+
+</CodeTabs>
+
+**Complejidad.** O(V + E) de tiempo y O(V) de memoria. En Java, `HashMap<Node, Node>` funciona porque `Node` no redefine `equals` ni `hashCode`: cada nodo es una clave distinta aunque dos tengan el mismo `val`. **Error típico:** crear la copia del vecino y conectarla, pero agregarla al mapa solo cuando se procesa; con un ciclo, el mismo nodo se copia dos veces y el grafo clonado queda partido. **Variante:** *Copy List with Random Pointer* es el mismo truco del diccionario sobre una lista enlazada.
+
+## Orden topológico: Course Schedule I y II
+
+**Enunciado.** Hay `numCourses` cursos y una lista de pares `[a, b]` que significa "para tomar `a` tienes que haber aprobado `b`". *Course Schedule* pregunta si es posible terminar todos los cursos; *Course Schedule II* pide un orden válido para tomarlos, o `[]` si no existe. Con 4 cursos y `[[1, 0], [2, 0], [3, 1], [3, 2]]`, un orden válido es `[0, 1, 2, 3]` (y también `[0, 2, 1, 3]`).
+
+**Qué preguntar.** ¿El par es `[curso, prerrequisito]` o al revés? (Es el error número uno: dibújalo como flecha `b → a` antes de codificar.) ¿Puede haber pares repetidos? ¿Cursos sin ningún prerrequisito?
+
+**Fuerza bruta.** Probar órdenes: hay n! permutaciones. O, algo menos absurdo, buscar repetidamente un curso cuyos prerrequisitos ya estén tomados recorriendo toda la lista cada vez: O(V · (V + E)).
+
+**La idea.** Es un **grafo dirigido** y te piden un **orden topológico**: un orden de los nodos en el que toda arista va de un nodo anterior a uno posterior. Existe si y solo si el grafo **no tiene ciclos** (es un DAG). El **algoritmo de Kahn** lo construye así: cuenta cuántos prerrequisitos le faltan a cada curso (su **grado de entrada**), mete en una cola los que tienen 0, y cada vez que sacas uno, "lo dictas": restas 1 al grado de los cursos que dependen de él y encolas los que llegan a 0. Si al final procesaste todos, el orden es válido; si no, los que quedaron están en un ciclo o dependen de uno.
+
+<TopoSort />
+
+El preset "Con un ciclo" muestra la conclusión clave: `Backend`, `APIs` y `Auth` se esperan entre sí, y `Deploy`, que no está en el ciclo, también queda bloqueado porque depende de él. La cola se vacía antes de procesar todo y por eso la respuesta es "imposible".
+
+<Callout type="tip" title="Señal para reconocer el patrón">
+
+"Prerrequisitos", "dependencias", "qué compilar primero", "orden de tareas", "¿hay una dependencia circular?": **orden topológico** sobre un grafo dirigido. Si solo preguntan si es posible, la pregunta real es "¿hay un ciclo?".
+
+</Callout>
+
+<CodeTabs>
+
+```java title="Java"
+class Solution {
+    public int[] findOrder(int numCourses, int[][] prerequisites) {
+        List<List<Integer>> graph = new ArrayList<>();
+        for (int i = 0; i < numCourses; i++) graph.add(new ArrayList<>());
+        int[] indeg = new int[numCourses];
+        for (int[] p : prerequisites) {         // p = {curso, prerrequisito}
+            graph.get(p[1]).add(p[0]);          // pre -> curso
+            indeg[p[0]]++;
+        }
+        Deque<Integer> q = new ArrayDeque<>();
+        for (int i = 0; i < numCourses; i++) if (indeg[i] == 0) q.offer(i);
+        int[] order = new int[numCourses];
+        int taken = 0;
+        while (!q.isEmpty()) {
+            int u = q.poll();
+            order[taken++] = u;
+            for (int v : graph.get(u)) if (--indeg[v] == 0) q.offer(v);
+        }
+        return taken == numCourses ? order : new int[0];
+    }
+
+    public boolean canFinish(int numCourses, int[][] prerequisites) {
+        return findOrder(numCourses, prerequisites).length == numCourses;
+    }
+}
+```
+
+```python title="Python"
+from collections import deque
+
+def find_order(num_courses: int, prerequisites: list[list[int]]) -> list[int]:
+    graph: list[list[int]] = [[] for _ in range(num_courses)]
+    indeg = [0] * num_courses
+    for course, pre in prerequisites:
+        graph[pre].append(course)        # pre -> course
+        indeg[course] += 1
+    q = deque(i for i in range(num_courses) if indeg[i] == 0)
+    order: list[int] = []
+    while q:
+        u = q.popleft()
+        order.append(u)
+        for v in graph[u]:
+            indeg[v] -= 1
+            if indeg[v] == 0:
+                q.append(v)
+    return order if len(order) == num_courses else []
+
+def can_finish(num_courses: int, prerequisites: list[list[int]]) -> bool:
+    return len(find_order(num_courses, prerequisites)) == num_courses
+```
+
+```ts title="TypeScript"
+function findOrder(numCourses: number, prerequisites: number[][]): number[] {
+  const graph: number[][] = Array.from({ length: numCourses }, () => [])
+  const indeg = new Array<number>(numCourses).fill(0)
+  for (const [course, pre] of prerequisites) {
+    graph[pre].push(course) // pre -> course
+    indeg[course]++
+  }
+  const q: number[] = []
+  for (let i = 0; i < numCourses; i++) if (indeg[i] === 0) q.push(i)
+  for (let head = 0; head < q.length; head++) {
+    for (const v of graph[q[head]]) {
+      if (--indeg[v] === 0) q.push(v)
+    }
+  }
+  // la cola terminó siendo el orden: si no están todos, hay un ciclo
+  return q.length === numCourses ? q : []
+}
+
+function canFinish(numCourses: number, prerequisites: number[][]): boolean {
+  return findOrder(numCourses, prerequisites).length === numCourses
+}
+```
+
+</CodeTabs>
+
+**Complejidad.** O(V + E) de tiempo y memoria.
+
+### La alternativa con DFS: tres colores
+
+También puedes detectar ciclos con DFS si distingues tres estados: **blanco** (sin visitar), **gris** (en la pila de llamadas actual) y **negro** (terminado). Si desde un nodo gris llegas a otro nodo **gris**, encontraste una arista hacia atrás: hay un ciclo. Un simple conjunto de visitados no alcanza en grafos dirigidos: llegar a un nodo **negro** por otro camino no es un ciclo (dos cursos pueden compartir un prerrequisito). El orden inverso en que los nodos se vuelven negros es, además, un orden topológico.
+
+<Sketch
+  width={640}
+  height={280}
+  caption="Detección de ciclos con tres colores: llegar a un nodo gris (todavía en la pila de llamadas) es un ciclo; llegar a uno negro (ya terminado) no lo es."
+  items={[
+    { type: 'text', x: 24, y: 30, text: 'gris = en la pila', size: 20, tone: 'warn' },
+    { type: 'circle', x: 70, y: 100, r: 22, label: 'A', tone: 'warn', fill: true },
+    { type: 'arrow', from: [94, 100], to: [166, 100] },
+    { type: 'circle', x: 190, y: 100, r: 22, label: 'B', tone: 'warn', fill: true },
+    { type: 'arrow', from: [178, 122], to: [144, 172] },
+    { type: 'circle', x: 130, y: 192, r: 22, label: 'C', tone: 'warn', fill: true },
+    { type: 'arrow', from: [114, 174], to: [82, 124], tone: 'bad' },
+    { type: 'text', x: 24, y: 262, text: 'a un gris: ciclo', size: 20, tone: 'bad' },
+    { type: 'line', points: [[318, 20], [318, 270]], dashed: true, tone: 'muted' },
+    { type: 'text', x: 340, y: 30, text: 'negro = terminado', size: 20 },
+    { type: 'circle', x: 400, y: 100, r: 22, label: 'D', fill: true },
+    { type: 'circle', x: 540, y: 100, r: 22, label: 'E', tone: 'warn', fill: true },
+    { type: 'arrow', from: [528, 122], to: [494, 172] },
+    { type: 'circle', x: 470, y: 192, r: 22, label: 'F', tone: 'warn', fill: true },
+    { type: 'arrow', from: [454, 174], to: [416, 124], tone: 'ok' },
+    { type: 'text', x: 340, y: 262, text: 'a un negro: no es ciclo', size: 20, tone: 'ok' },
+  ]}
+/>
+
+<CodeTabs>
+
+```java title="Java"
+class Solution {
+    private static final int WHITE = 0, GRAY = 1, BLACK = 2;
+
+    public boolean canFinish(int numCourses, int[][] prerequisites) {
+        List<List<Integer>> graph = new ArrayList<>();
+        for (int i = 0; i < numCourses; i++) graph.add(new ArrayList<>());
+        for (int[] p : prerequisites) graph.get(p[1]).add(p[0]);
+        int[] color = new int[numCourses];        // todos empiezan en WHITE
+        for (int u = 0; u < numCourses; u++)
+            if (color[u] == WHITE && hasCycle(graph, u, color)) return false;
+        return true;
+    }
+
+    private boolean hasCycle(List<List<Integer>> graph, int u, int[] color) {
+        color[u] = GRAY;                          // u está en la pila de llamadas
+        for (int v : graph.get(u)) {
+            if (color[v] == GRAY) return true;    // arista hacia atrás: ciclo
+            if (color[v] == WHITE && hasCycle(graph, v, color)) return true;
+        }
+        color[u] = BLACK;                         // terminado: desde u no hay ciclo
+        return false;
+    }
+}
+```
+
+```python title="Python"
+def can_finish_dfs(num_courses: int, prerequisites: list[list[int]]) -> bool:
+    graph: list[list[int]] = [[] for _ in range(num_courses)]
+    for course, pre in prerequisites:
+        graph[pre].append(course)
+    WHITE, GRAY, BLACK = 0, 1, 2
+    color = [WHITE] * num_courses
+
+    def has_cycle(u: int) -> bool:
+        color[u] = GRAY                   # u está en la pila de llamadas
+        for v in graph[u]:
+            if color[v] == GRAY:          # arista hacia atrás: ciclo
+                return True
+            if color[v] == WHITE and has_cycle(v):
+                return True
+        color[u] = BLACK                  # terminado: desde u no hay ciclo
+        return False
+
+    return not any(color[u] == WHITE and has_cycle(u) for u in range(num_courses))
+```
+
+```ts title="TypeScript"
+function canFinishDfs(numCourses: number, prerequisites: number[][]): boolean {
+  const graph: number[][] = Array.from({ length: numCourses }, () => [])
+  for (const [course, pre] of prerequisites) graph[pre].push(course)
+  const WHITE = 0, GRAY = 1, BLACK = 2
+  const color = new Array<number>(numCourses).fill(WHITE)
+
+  const hasCycle = (u: number): boolean => {
+    color[u] = GRAY // u está en la pila de llamadas
+    for (const v of graph[u]) {
+      if (color[v] === GRAY) return true // arista hacia atrás: ciclo
+      if (color[v] === WHITE && hasCycle(v)) return true
+    }
+    color[u] = BLACK // terminado: desde u no hay ciclo
+    return false
+  }
+
+  for (let u = 0; u < numCourses; u++) if (color[u] === WHITE && hasCycle(u)) return false
+  return true
+}
+```
+
+</CodeTabs>
+
+**Casos borde y errores típicos.** Invertir la dirección de la arista (con Kahn el error se nota porque el orden sale al revés; con la detección de ciclos puede pasar inadvertido). Un curso que es su propio prerrequisito (`[0, 0]`): Kahn lo maneja solo, porque su grado nunca llega a 0. Cursos sin aristas: deben aparecer en el orden. En DFS, usar un solo conjunto de visitados y declarar ciclo al reencontrar un nodo terminado.
+
+**Variantes y repreguntas.** *"¿Cuántos semestres como mínimo?"* (*Parallel Courses*): Kahn por niveles, como el BFS de las naranjas. *Alien Dictionary*: deducir las aristas comparando palabras consecutivas y luego ordenar topológicamente. *"¿El orden es único?"*: lo es solo si en cada paso hay exactamente un nodo en la cola.
+
+<Quiz
+  question="Corres Kahn sobre 6 cursos y la cola se vacía con 4 cursos en el orden. ¿Qué puedes concluir de los 2 que faltan?"
+  options={[
+    { text: 'Que son cursos sin prerrequisitos que se te olvidó encolar.', why: 'Los cursos con grado 0 entran a la cola al principio; si faltan, su grado nunca llegó a 0.' },
+    { text: 'Que hay un ciclo, y cada uno de esos 2 está en el ciclo o depende de un curso que está en él.', correct: true, why: 'Un nodo solo queda fuera si siempre le faltó algún prerrequisito, y eso solo pasa si hay una cadena de dependencias que vuelve sobre sí misma antes de llegar a él.' },
+    { text: 'Que los dos forman el ciclo, exactamente.', why: 'No necesariamente: en el preset del widget, Deploy queda bloqueado sin formar parte del ciclo Backend → APIs → Auth.' },
+  ]}
+/>
+
+## Caminos con pesos y conectividad: Dijkstra y Union-Find
+
+### Dijkstra, en breve
+
+Cuando las aristas tienen **pesos distintos**, BFS ya no da el camino más corto: un camino de tres aristas baratas puede costar menos que uno de una arista cara. **Dijkstra** generaliza BFS cambiando la cola por un **min-heap ordenado por distancia** (repásalo en [heaps](/casos/heaps-y-top-k)): siempre expande el nodo no cerrado más cercano al origen. Requiere **pesos no negativos**: con un peso negativo, un nodo "cerrado" podría mejorar después y el algoritmo daría respuestas incorrectas (para eso existe Bellman-Ford).
+
+El problema típico es **Network Delay Time**: una señal sale del nodo k; ¿cuánto tarda en llegar a todos? Es la mayor de las distancias mínimas desde k.
+
+<CodeTabs>
+
+```java title="Java"
+class Solution {
+    public int networkDelayTime(int[][] times, int n, int k) {
+        List<List<int[]>> graph = new ArrayList<>();
+        for (int i = 0; i <= n; i++) graph.add(new ArrayList<>());   // nodos 1..n
+        for (int[] t : times) graph.get(t[0]).add(new int[] {t[1], t[2]});
+        int[] dist = new int[n + 1];
+        Arrays.fill(dist, -1);                                       // -1 = todavía no cerrado
+        PriorityQueue<int[]> heap = new PriorityQueue<>(Comparator.comparingInt(a -> a[0]));
+        heap.offer(new int[] {0, k});                                // {distancia tentativa, nodo}
+        int closed = 0, last = 0;
+        while (!heap.isEmpty()) {
+            int[] top = heap.poll();
+            int d = top[0], u = top[1];
+            if (dist[u] != -1) continue;         // ya se cerró con una distancia menor
+            dist[u] = d;
+            closed++;
+            last = d;                            // se cierran en orden creciente de distancia
+            for (int[] e : graph.get(u))
+                if (dist[e[0]] == -1) heap.offer(new int[] {d + e[1], e[0]});
+        }
+        return closed == n ? last : -1;
+    }
+}
+```
+
+```python title="Python"
+import heapq
+from collections import defaultdict
+
+def network_delay_time(times: list[list[int]], n: int, k: int) -> int:
+    graph: defaultdict[int, list[tuple[int, int]]] = defaultdict(list)
+    for u, v, w in times:
+        graph[u].append((v, w))
+    dist: dict[int, int] = {}
+    heap = [(0, k)]                       # (distancia tentativa, nodo)
+    while heap:
+        d, u = heapq.heappop(heap)
+        if u in dist:
+            continue                      # ya se cerró con una distancia menor
+        dist[u] = d
+        for v, w in graph[u]:
+            if v not in dist:
+                heapq.heappush(heap, (d + w, v))
+    return max(dist.values()) if len(dist) == n else -1
+```
+
+```ts title="TypeScript"
+// MinHeap: la clase del tema de heaps
+function networkDelayTime(times: number[][], n: number, k: number): number {
+  const graph = new Map<number, [number, number][]>()
+  for (const [u, v, w] of times) {
+    if (!graph.has(u)) graph.set(u, [])
+    graph.get(u)!.push([v, w])
+  }
+  const dist = new Map<number, number>()
+  const heap = new MinHeap<[number, number]>((a, b) => a[0] < b[0]) // [distancia, nodo]
+  heap.push([0, k])
+  while (heap.size) {
+    const [d, u] = heap.pop()!
+    if (dist.has(u)) continue // ya se cerró con una distancia menor
+    dist.set(u, d)
+    for (const [v, w] of graph.get(u) ?? []) if (!dist.has(v)) heap.push([d + w, v])
+  }
+  return dist.size === n ? Math.max(...dist.values()) : -1
+}
+```
+
+</CodeTabs>
+
+Con esta versión "perezosa" (se meten duplicados y se descartan al sacarlos), el costo es **O(E log E)**, que es O(E log V). En Java, ordena la `PriorityQueue<int[]>` con `Comparator.comparingInt(a -> a[0])` y no con `(a, b) -> a[0] - b[0]`, que desborda si las distancias son grandes. Repreguntas típicas: *"¿por qué no sirve con pesos negativos?"*, *"¿y si los pesos son solo 0 y 1?"* (BFS con una deque: los de peso 0 van al frente) y *Cheapest Flights Within K Stops*, donde el límite de escalas obliga a modificar el algoritmo o a usar Bellman-Ford limitado a k + 1 rondas.
+
+### Union-Find
+
+**Union-Find** (o *disjoint set union*) mantiene una partición de elementos en grupos con dos operaciones: `find(x)` devuelve el representante del grupo de x, y `union(a, b)` junta dos grupos. Es ideal cuando las aristas **llegan de a una** y preguntas "¿estos dos ya estaban conectados?".
+
+Con dos optimizaciones, **path compression** (al buscar el representante, cada nodo del camino queda apuntando directo a la raíz) y **unión por rango** (colgar el árbol más bajo del más alto), cada operación cuesta O(α(n)) amortizado, donde α es la inversa de la función de Ackermann: menos de 5 para cualquier n que vayas a ver. En la práctica, constante.
+
+**Redundant Connection**: a un árbol de n nodos le agregaron una arista y se formó un ciclo; devuelve la arista que sobra (la última en la entrada, si hay varias). Procesa las aristas en orden: la primera cuyos extremos **ya estaban en el mismo grupo** es la que cierra el ciclo.
+
+<CodeTabs>
+
+```java title="Java"
+class Solution {
+    private int[] parent, rank;
+
+    public int[] findRedundantConnection(int[][] edges) {
+        int n = edges.length;
+        parent = new int[n + 1];                 // nodos 1..n
+        rank = new int[n + 1];
+        for (int i = 0; i <= n; i++) parent[i] = i;
+        for (int[] e : edges) if (!union(e[0], e[1])) return e;
+        return new int[0];
+    }
+
+    private int find(int x) {
+        if (parent[x] != x) parent[x] = find(parent[x]); // path compression
+        return parent[x];
+    }
+
+    private boolean union(int a, int b) {
+        int ra = find(a), rb = find(b);
+        if (ra == rb) return false;              // ya estaban conectados
+        if (rank[ra] < rank[rb]) { int t = ra; ra = rb; rb = t; }
+        parent[rb] = ra;                         // el árbol bajo cuelga del alto
+        if (rank[ra] == rank[rb]) rank[ra]++;
+        return true;
+    }
+}
+```
+
+```python title="Python"
+def find_redundant_connection(edges: list[list[int]]) -> list[int]:
+    parent = list(range(len(edges) + 1))   # nodos 1..n
+    rank = [0] * (len(edges) + 1)
+
+    def find(x: int) -> int:
+        if parent[x] != x:
+            parent[x] = find(parent[x])    # path compression
+        return parent[x]
+
+    def union(a: int, b: int) -> bool:
+        ra, rb = find(a), find(b)
+        if ra == rb:
+            return False                   # ya estaban conectados
+        if rank[ra] < rank[rb]:
+            ra, rb = rb, ra
+        parent[rb] = ra                    # el árbol bajo cuelga del alto
+        if rank[ra] == rank[rb]:
+            rank[ra] += 1
+        return True
+
+    for a, b in edges:
+        if not union(a, b):
+            return [a, b]
+    return []
+```
+
+```ts title="TypeScript"
+function findRedundantConnection(edges: number[][]): number[] {
+  const parent = Array.from({ length: edges.length + 1 }, (_, i) => i) // nodos 1..n
+  const rank = new Array<number>(edges.length + 1).fill(0)
+
+  const find = (x: number): number => {
+    if (parent[x] !== x) parent[x] = find(parent[x]) // path compression
+    return parent[x]
+  }
+  const union = (a: number, b: number): boolean => {
+    let ra = find(a)
+    let rb = find(b)
+    if (ra === rb) return false // ya estaban conectados
+    if (rank[ra] < rank[rb]) [ra, rb] = [rb, ra]
+    parent[rb] = ra // el árbol bajo cuelga del alto
+    if (rank[ra] === rank[rb]) rank[ra]++
+    return true
+  }
+
+  for (const [a, b] of edges) if (!union(a, b)) return [a, b]
+  return []
+}
+```
+
+</CodeTabs>
+
+**Number of Connected Components in an Undirected Graph** es la otra aplicación directa: empieza con n grupos y resta 1 cada vez que `union` devuelve `True`. Se puede resolver igual de bien con BFS o DFS; Union-Find brilla cuando las aristas se agregan en línea o cuando el problema es literalmente "¿esta arista forma un ciclo?" (también es el corazón del algoritmo de Kruskal para árboles de expansión mínima).
+
+<Quiz
+  question="Te dan un grafo con pesos positivos y quieres el camino más barato de A a B. Un compañero propone BFS 'porque es O(V + E)'. ¿Qué le respondes?"
+  options={[
+    { text: 'Que está bien: BFS siempre da el camino más corto.', why: 'BFS minimiza la cantidad de aristas, no la suma de pesos. A → C → B con pesos 1 + 1 es más barato que A → B con peso 5, aunque tenga más aristas.' },
+    { text: 'Que hace falta Dijkstra con un min-heap por distancia, O(E log V).', correct: true, why: 'Con pesos no negativos y distintos, Dijkstra es la herramienta estándar. BFS solo sirve si todos los pesos son iguales (o con la variante 0-1 BFS si los pesos son 0 y 1).' },
+    { text: 'Que hace falta DFS probando todos los caminos.', why: 'Es exponencial en el peor caso. Dijkstra resuelve lo mismo en tiempo polinomial.' },
+  ]}
+/>
+
+## Problemas típicos y señales
+
+| Problema (LeetCode) | Patrón | Costo |
+|---|---|---|
+| [Number of Islands](https://leetcode.com/problems/number-of-islands/) | Contar componentes en una grilla | O(R·C) |
+| [Max Area of Island](https://leetcode.com/problems/max-area-of-island/) | Componentes + tamaño | O(R·C) |
+| [Rotting Oranges](https://leetcode.com/problems/rotting-oranges/) | BFS multi-origen por niveles | O(R·C) |
+| [Pacific Atlantic Water Flow](https://leetcode.com/problems/pacific-atlantic-water-flow/) | BFS inverso desde los bordes | O(R·C) |
+| [Clone Graph](https://leetcode.com/problems/clone-graph/) | Recorrido + mapa original → copia | O(V + E) |
+| [Course Schedule](https://leetcode.com/problems/course-schedule/) | ¿Hay ciclo? Kahn o DFS con colores | O(V + E) |
+| [Course Schedule II](https://leetcode.com/problems/course-schedule-ii/) | Orden topológico (Kahn) | O(V + E) |
+| [Word Ladder](https://leetcode.com/problems/word-ladder/) | BFS sobre estados (palabras) | O(N · L²) aprox. |
+| [Network Delay Time](https://leetcode.com/problems/network-delay-time/) | Dijkstra | O(E log V) |
+| [Redundant Connection](https://leetcode.com/problems/redundant-connection/) | Union-Find | O(E · α(V)) |
+
+**Word Ladder** merece una mención aparte porque enseña a **ver el grafo**: cada palabra es un nodo y hay arista entre dos palabras que difieren en una letra. Te piden la transformación más corta de `hit` a `cog`, así que es BFS. Comparar cada par de palabras cuesta O(N²·L); el truco es generar los vecinos de cada palabra con patrones comodín (`h*t`, `*it`, `hi*`) agrupados en un diccionario. Esa idea, **BFS sobre estados** que no son celdas ni nodos explícitos, vuelve en puzzles como *Open the Lock*.
+
+Las señales, resumidas:
+
+- "Mínimo número de pasos o movimientos" sin pesos: **BFS**.
+- "Cuántos grupos o regiones": **componentes** con BFS, DFS o Union-Find.
+- "Desde varios puntos a la vez" o "a la X más cercana": **BFS multi-origen**.
+- "Dependencias, prerrequisitos, orden": **orden topológico**; "¿es posible?" es "¿hay ciclo?".
+- "Camino más barato" con pesos no negativos: **Dijkstra**.
+- "Las conexiones llegan de a una" o "¿esta arista cierra un ciclo?": **Union-Find**.
+
+<Callout type="interview">
+
+En grafos, el entrevistador mira tres cosas antes que el código: si **modelas** bien (qué es nodo, qué es arista, dirigido o no), si eliges el recorrido **por una razón** ("BFS porque quiero el mínimo de pasos") y si manejas los **visitados** sin pensarlo dos veces. Di la complejidad como O(V + E) o, en una grilla, O(R·C), y menciona el límite de recursión si escribes DFS recursivo en Python.
+
+</Callout>
+
+<Takeaways>
+
+- La mitad del trabajo es **modelar**: qué es un nodo, qué es una arista, si es dirigido y si la grilla ya es el grafo. Usa **lista de adyacencia**: O(V + E).
+- **BFS** (cola) recorre por niveles y da el **camino más corto sin pesos**. **DFS** (pila o recursión) explora todo: componentes, ciclos, orden topológico.
+- **Marca al encolar.** Usa `deque` en Python e índice de cabeza en JavaScript; cuidado con el límite de recursión de Python en grillas grandes.
+- **BFS multi-origen**: todos los orígenes en la cola desde el principio, y un nivel por unidad de tiempo.
+- **Orden topológico** con Kahn (grados de entrada y una cola): si no procesas todos los nodos, hay un ciclo. Con DFS, tres colores.
+- **Dijkstra** cambia la cola por un min-heap y exige pesos no negativos. **Union-Find** con path compression y unión por rango responde "¿ya estaban conectados?" en tiempo casi constante.
+
+</Takeaways>
+
+## Fuentes y lecturas
+
+- Robert Sedgewick y Kevin Wayne, *Algorithms*, 4.ª ed.: [4.1 Undirected Graphs](https://algs4.cs.princeton.edu/41graph/), [4.2 Directed Graphs](https://algs4.cs.princeton.edu/42digraph/) (orden topológico y ciclos), [4.4 Shortest Paths](https://algs4.cs.princeton.edu/44sp/) y [1.5 Union-Find](https://algs4.cs.princeton.edu/15uf/).
+- Cormen, Leiserson, Rivest y Stein, [*Introduction to Algorithms*](https://mitpress.mit.edu/9780262046305/introduction-to-algorithms/), 4.ª ed., caps. 19 a 22: conjuntos disjuntos, BFS, DFS, orden topológico y Dijkstra.
+- Tech Interview Handbook, [Graph cheatsheet](https://www.techinterviewhandbook.org/algorithms/graph/) y [Matrix cheatsheet](https://www.techinterviewhandbook.org/algorithms/matrix/).
+- Python, [collections.deque](https://docs.python.org/3/library/collections.html#collections.deque) y [sys.getrecursionlimit](https://docs.python.org/3/library/sys.html#sys.getrecursionlimit).
+- Wikipedia, [Topological sorting](https://en.wikipedia.org/wiki/Topological_sorting) (algoritmo de Kahn) y [Disjoint-set data structure](https://en.wikipedia.org/wiki/Disjoint-set_data_structure).
+- LeetCode: [Number of Islands](https://leetcode.com/problems/number-of-islands/), [Course Schedule II](https://leetcode.com/problems/course-schedule-ii/), [Network Delay Time](https://leetcode.com/problems/network-delay-time/).

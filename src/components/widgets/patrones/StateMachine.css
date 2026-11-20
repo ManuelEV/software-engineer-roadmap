@@ -1,0 +1,91 @@
+.sm-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  align-items: center;
+}
+.sm-blocked {
+  color: var(--ink-3);
+  border-style: dashed;
+}
+.sm-svg {
+  display: block;
+  width: 100%;
+  max-width: 720px;
+  height: auto;
+  margin: 0 auto;
+}
+.sm-edge__casing {
+  fill: none;
+  stroke: var(--card);
+  stroke-width: 10;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+.sm-edge__line {
+  fill: none;
+  stroke: var(--rule-strong);
+  stroke-width: 4;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+  transition: stroke 260ms var(--ease-out);
+}
+.sm-edge.is-next .sm-edge__line {
+  stroke: var(--line);
+  stroke-dasharray: 3 9;
+}
+.sm-edge.is-done .sm-edge__line {
+  stroke: var(--line);
+  stroke-width: 5;
+  stroke-dasharray: none;
+}
+.sm-edge__label {
+  font-family: var(--font-code);
+  font-size: 13px;
+  fill: var(--ink-3);
+  paint-order: stroke;
+  stroke: var(--card);
+  stroke-width: 5px;
+  stroke-linejoin: round;
+}
+.sm-edge.is-next .sm-edge__label {
+  fill: var(--line-ink);
+  font-weight: 700;
+}
+.sm-station__dot {
+  fill: var(--paper);
+  stroke: var(--rule-strong);
+  stroke-width: 3;
+  transition:
+    stroke 260ms var(--ease-out),
+    fill 260ms var(--ease-out);
+}
+.sm-station.is-visited .sm-station__dot {
+  stroke: var(--line);
+}
+.sm-station.is-on .sm-station__dot {
+  stroke: var(--line);
+  stroke-width: 4;
+}
+.sm-station__label {
+  font-family: var(--font-sign);
+  font-size: 15px;
+  font-weight: 600;
+  fill: var(--ink-2);
+}
+.sm-station.is-on .sm-station__label {
+  fill: var(--ink);
+  font-weight: 700;
+}
+.sm-train {
+  fill: var(--line);
+}
+.sm-cur {
+  color: var(--line-ink);
+  font-family: var(--font-code);
+  font-size: 0.9em;
+}
+.sm-readout {
+  display: grid;
+  gap: var(--s-2);
+}
